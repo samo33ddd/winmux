@@ -63,6 +63,7 @@ h1, h2, h3, p { margin: 0; }
 .rail-agent-state.activity-waiting, .rail-agent-state.activity-starting { background: var(--attention); }
 .rail-agent-state.activity-failed { background: var(--error); }
 .rail-agent-state.activity-unknown, .rail-agent-state.activity-completed { background: transparent; box-shadow: inset 0 0 0 1px var(--muted); }
+.rail-agent-state.activity-idle { background: transparent; box-shadow: inset 0 0 0 1px var(--muted); }
 .workspace-name { display: flex; align-items: center; gap: 8px; padding-right: 15px; font-weight: 550; line-height: 20px; }
 .workspace-name > span:not(.unread-dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-name svg { color: var(--muted); width: 15px; height: 15px; }

@@ -196,12 +196,14 @@ async function main() {
   await page.getByTestId('sidebar-resize').focus(); await page.keyboard.press('ArrowRight');
   assert.equal(await page.locator('.sidebar').evaluate(el=>el.getBoundingClientRect().width),beforeSidebar+20);
   await page.getByTestId('launch-agent').selectOption('codex');
-  await page.waitForFunction(()=>document.querySelector('[data-testid="terminal-tab"][aria-selected="true"]')?.textContent?.toLowerCase().includes('codex'));
+  await page.locator('.header-agent [data-testid="agent-metadata"][data-agent-id="codex"]').waitFor();
   const agentState=await rpc('state'), agentWorkspace=agentState.workspaces.find(item=>item.id===workspace.id);
   assert.equal(agentState.workspaces.length,beforeTabs.workspaces.length,'Launching an agent stays in the selected workspace');
   const agentPane=agentWorkspace.panes.find(item=>item.agentId==='codex');
   assert(agentPane); await waitScreen(agentPane.id,'WINMUX_AGENT_FIXTURE_OK');
   await page.locator('[data-testid="agent-metadata"][data-agent-id="codex"][data-agent-state="completed"]').first().waitFor();
+  await rpc('pane.input',{paneId:agentPane.id,data:"[Console]::Write(([char]27 + ']2;Codex fixture task' + [char]7))\r"});
+  await page.waitForFunction(()=>document.querySelector('[data-testid="terminal-tab"][aria-selected="true"]')?.textContent?.includes('Codex fixture task'));
   await page.screenshot({path:path.join(artifacts,'terminal-tabs-agent.png')});
   await desktop.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(960,640));
   await page.waitForTimeout(250);

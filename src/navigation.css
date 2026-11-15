@@ -36,6 +36,7 @@
 .activity-waiting, .activity-starting { background:var(--attention); }
 .activity-failed { background:var(--error); }
 .activity-unknown, .activity-exited, .activity-completed { background:transparent; border:1px solid var(--muted); }
+.activity-idle { background:transparent; border:1px solid var(--muted); }
 .workspace-agents { display:flex; flex-direction:column; gap:1px; padding-left:23px; margin-top:2px; }
 .workspace-agent { display:flex; min-width:0; }
 .workspace-agent .agent-metadata { flex-wrap:nowrap; column-gap:5px; row-gap:0; font-size:10px; }
@@ -68,3 +69,7 @@
 }
 .form-fields label.agent-hooks-control { display:flex; align-items:center; font-weight:400; }
 .form-fields .agent-hooks-control input { margin:0; width:13px; }
+.sidebar-brand { display:flex; align-items:center; min-width:0; gap:4px; }
+.sidebar-expand { width:22px; height:22px; }
+.sidebar-expand svg { width:15px; height:15px; }
+.sidebar.rail .sidebar-heading { gap:0; }

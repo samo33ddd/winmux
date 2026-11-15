@@ -2,6 +2,22 @@
 
 User-visible changes are recorded here. Release availability and downloadable assets are authoritative on the [releases page](https://github.com/samo33ddd/winmux/releases).
 
+## 0.2.1 — Agent integration fixes
+
+### Added
+
+- Connect to the existing native Codex daemon and show process-verified agent identity, activity, waits, and completed turns; select a thread explicitly when automatic binding is ambiguous (Issues #6 and #10).
+- Install project-local Codex status hooks from Settings with config merging, backups, stable helper files, and an explicit Codex trust-review step (Issue #10).
+
+### Fixed
+
+- Automatic terminal tab titles follow the selected pane's live title while explicitly named tabs retain their names (Issue #6).
+- Settings installs only the bundled `winmux-terminal` and `winmux-browser` skills, preserving existing conflicting skill folders (Issue #7).
+- Installed skills include a client usable from unrelated projects and packaged builds, including Windows Node.js interop from WSL (Issue #11).
+- Moved the sidebar collapse and expand control beside the logo at the top of the workspace rail and expanded list (Issue #8).
+- Remove inherited terminal color overrides so Codex can render its selected `/theme` with ANSI and truecolor support (Issue #9).
+- Wait for a newly created release draft to become visible before publishing, with bounded retries and the existing tag, artifact, and checksum validation (Issue #12).
+
 ## 0.2.0 — Dark workspace redesign
 
 ### Changed

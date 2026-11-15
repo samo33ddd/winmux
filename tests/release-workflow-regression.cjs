@@ -37,7 +37,7 @@ function sha256(filename) {
   return crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
 }
 
-function createFixture(scenario) {
+function createFixture(scenario, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'winmux-release-test-'));
   const assetsRoot = path.join(root, 'release-assets');
   const binRoot = path.join(root, 'bin');
@@ -56,13 +56,20 @@ function createFixture(scenario) {
 
   const scriptPath = path.join(root, 'publish.ps1');
   const yaml = fs.readFileSync(workflowPath, 'utf8');
-  fs.writeFileSync(scriptPath, extractRunScript(yaml, 'Verify assets, upload to draft, and publish'));
+  const sleepStub = options.noSleep
+    ? 'function Start-Sleep { param([int]$Milliseconds) }\n'
+    : '';
+  fs.writeFileSync(
+    scriptPath,
+    sleepStub + extractRunScript(yaml, 'Verify assets, upload to draft, and publish'),
+  );
 
   const statePath = path.join(root, 'gh-state.json');
   fs.writeFileSync(statePath, JSON.stringify({
     created: scenario === 'existing-draft',
     existingDraft: scenario === 'existing-draft',
     published: false,
+    postCreateListCount: 0,
   }));
   const callsPath = path.join(root, 'gh-calls.jsonl');
   fs.writeFileSync(callsPath, '');
@@ -114,7 +121,35 @@ if (args[0] === 'api') {
   if (endpoint.endsWith('/commits/' + tag)) {
     console.log(JSON.stringify({ sha: process.env.RELEASE_COMMIT }));
   } else if (endpoint.includes('/releases?per_page=100')) {
-    const releases = state.existingDraft || state.created ? [release(true)] : [];
+    let releases = [];
+    if (state.existingDraft) {
+      releases = [release(true)];
+    } else if (state.created) {
+      if (process.env.FAKE_SCENARIO === 'new-draft-delayed') {
+        state.postCreateListCount += 1;
+        save();
+        releases = state.postCreateListCount === 1 ? [] : [release(true)];
+      } else if (process.env.FAKE_SCENARIO === 'list-exhausted') {
+        state.postCreateListCount += 1;
+        save();
+      } else if (process.env.FAKE_SCENARIO === 'list-api-error') {
+        state.postCreateListCount += 1;
+        save();
+        fail('simulated release list failure');
+      } else if (process.env.FAKE_SCENARIO === 'duplicate-drafts') {
+        state.postCreateListCount += 1;
+        save();
+        releases = [release(true), { ...release(true), id: releaseId + 1 }];
+      } else if (process.env.FAKE_SCENARIO === 'published-after-create') {
+        state.postCreateListCount += 1;
+        save();
+        releases = [release(false)];
+      } else {
+        state.postCreateListCount += 1;
+        save();
+        releases = [release(true)];
+      }
+    }
     console.log(JSON.stringify([releases]));
   } else if (endpoint.endsWith('/releases/' + releaseId)) {
     console.log(JSON.stringify(release(true)));
@@ -163,8 +198,8 @@ if (args[0] === 'api') {
   };
 }
 
-function runPublisher(scenario) {
-  const fixture = createFixture(scenario);
+function runPublisher(scenario, options) {
+  const fixture = createFixture(scenario, options);
   try {
     const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', fixture.scriptPath], {
       cwd: fixture.root,
@@ -199,6 +234,41 @@ for (const scenario of ['new-draft', 'existing-draft']) {
     const taggedIndex = calls.findIndex(args => args.join(' ').endsWith('/releases/tags/v1.2.3'));
     assert.ok(draftIndex !== -1 && draftIndex < editIndex && editIndex < taggedIndex);
     assert.equal(calls.filter(args => args[0] === 'release' && args[1] === 'create').length, scenario === 'new-draft' ? 1 : 0);
+  });
+}
+
+test('retries an empty post-create list until the new draft becomes visible', () => {
+  const { result, calls, state } = runPublisher('new-draft-delayed', { noSleep: true });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.equal(state.published, true);
+  assert.equal(state.postCreateListCount, 2);
+  assert.equal(calls.filter(args => args.some(arg => arg.endsWith('/releases?per_page=100'))).length, 3);
+  assert.equal(calls.filter(args => args[0] === 'release' && args[1] === 'create').length, 1);
+  assert.equal(calls.filter(args => args[0] === 'release' && args[1] === 'upload').length, 1);
+});
+
+test('bounds an invisible draft before upload', () => {
+  const { result, calls, state } = runPublisher('list-exhausted', { noSleep: true });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /did not become visible within 15 seconds/);
+  assert.equal(state.postCreateListCount, 10);
+  assert.equal(calls.filter(args => args.some(arg => arg.endsWith('/releases?per_page=100'))).length, 11);
+  assert.equal(state.uploaded, undefined);
+  assert.equal(calls.some(args => args[0] === 'release' && (args[1] === 'upload' || args[1] === 'edit')), false);
+});
+
+for (const [scenario, message] of [
+  ['list-api-error', /simulated release list failure/],
+  ['duplicate-drafts', /Duplicate draft releases appeared for tag/],
+  ['published-after-create', /Expected an unpublished draft with a valid release ID/],
+]) {
+  test(`fails fast after create without upload (${scenario})`, () => {
+    const { result, calls, state } = runPublisher(scenario, { noSleep: true });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, message);
+    assert.equal(state.postCreateListCount, 1);
+    assert.equal(state.uploaded, undefined);
+    assert.equal(calls.some(args => args[0] === 'release' && (args[1] === 'upload' || args[1] === 'edit')), false);
   });
 }
 

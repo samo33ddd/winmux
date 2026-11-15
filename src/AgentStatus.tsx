@@ -11,6 +11,7 @@ export function activityLabel(pane: Pane): string {
     case 'starting': return t('Запускается');
     case 'running': return t('Работает');
     case 'waiting': return t('Ожидает ввода');
+    case 'idle': return t('Ожидает');
     case 'completed': return t('Завершено');
     case 'failed': return t('Ошибка');
     default: return t('Активность неизвестна');

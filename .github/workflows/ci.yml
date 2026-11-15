@@ -23,6 +23,7 @@ jobs:
       - run: npm run test:cwd-agent
       - run: npm run test:profile
       - run: npm run test:skills
+      - run: npm run test:integrations
       - run: npm run test:cookies
       - run: npm run test:file-preview
       - run: npm run test:desktop

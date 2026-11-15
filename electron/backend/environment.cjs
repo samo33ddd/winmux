@@ -56,7 +56,7 @@ async function discover() {
     } catch { /* Availability remains false when a distribution cannot be queried. */ }
     for (const name of agentNames) agents.push({ id: `${profile.id}:${name}`, label: name, environment: 'wsl', profileId: profile.id, distro: profile.distro, available: Boolean(discovered.get(name)), command: discovered.get(name) || null, ...(['claude', 'codex'].includes(name) ? { hookAdapter: name } : {}) });
   }
-  return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, protocolVersion: 2 } };
+  return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, nativeCodex: true, protocolVersion: 3 } };
 }
 async function validateLaunch(environment, profileId, requestedCwd, agentId, agentHooks) {
   const profile = environment.profiles.find(p => p.id === profileId);

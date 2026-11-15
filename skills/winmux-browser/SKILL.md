@@ -4,7 +4,7 @@ description: Inspect and automate embedded browser pages.
 version: 0.1.0
 author: samo33ddd, Hermes Agent
 license: UNLICENSED
-platforms: [windows]
+platforms: [windows, linux]
 metadata:
   hermes:
     tags: [winmux, browser, windows, automation]
@@ -13,7 +13,7 @@ metadata:
 
 # Winmux Browser Skill
 
-Operate the real browser pages embedded in the open Winmux desktop. This repository-shipped skill uses the browser CLI; it does not add MCP support or install itself in a local agent profile.
+Operate the real browser pages embedded in the open Winmux desktop. A skill installed from Winmux uses the client runtime selected by that Winmux instance; a source checkout can still invoke `scripts/browser.cjs` directly.
 
 ## When to Use
 
@@ -23,36 +23,36 @@ Operate the real browser pages embedded in the open Winmux desktop. This reposit
 
 ## Prerequisites
 
-Use Windows and a source checkout with dependencies installed. Build and open the desktop with `npm run build` and `npm start`, and create a workspace. Run a development server separately before opening its URL.
+Open an installed Winmux desktop and create a workspace. The browser service belongs to the desktop; starting only the terminal daemon is insufficient. Installing both Winmux skills is required because the browser wrapper resolves shared code from its installed `winmux-terminal` sibling.
 
-Run commands through `terminal` with the Winmux repository root as `workdir`. Set `WINMUX_DATA_DIR` to the same value as the desktop when using an isolated instance. Starting only the terminal daemon is insufficient. The CLI reads its endpoint and token from `ui-control.json`; do not print or share that file.
+Node.js 22.12+ must be available. In WSL, the wrapper invokes Windows `node.exe` via interop; set `WINMUX_WINDOWS_NODE` if it is not on the interop PATH. The wrapper uses the token-free connection metadata written by Winmux, reads the UI capability at runtime, and never prints or embeds it. If the desktop is closed, it reports that the desktop must be opened.
 
 ## How to Run
 
-Use the `terminal` tool, substituting the actual checkout directory:
+Use the `terminal` tool with this skill's directory as `workdir`:
 
 ```text
-terminal(command="node scripts/browser.cjs list", workdir="REPO_ROOT")
-terminal(command="node scripts/browser.cjs --help", workdir="REPO_ROOT")
+terminal(command="node scripts/winmux-client.cjs list", workdir="WINMUX_SKILL_DIR")
+terminal(command="node scripts/winmux-client.cjs --help", workdir="WINMUX_SKILL_DIR")
 ```
 
-The commands below use Git Bash on Windows or PowerShell 7.3+ with standard native argument passing. Older Windows PowerShell may strip embedded JSON quotes. In that case use `write_file` to create a small `.cjs` script that calls `require('./scripts/browser.cjs').request(method, params)` with JavaScript objects, then execute it through `terminal`. See [the agent guide](../../docs/agents.md) for an example; do not repeatedly retry malformed mutation commands.
+`WINMUX_SKILL_DIR` is the absolute path to the installed `winmux-browser` skill. The relative command works when `workdir` is that directory, independent of the selected project's location. The commands below use standard native argument passing. Older Windows PowerShell may strip embedded JSON quotes; in that case pass the same JSON through an argument vector from a small Node script instead of retrying malformed mutations.
 
 ## Quick Reference
 
-Invoke through `terminal` from the repository root. Replace `WORKSPACE_ID`, numeric browser ID `123`, and element references with actual returned values. The sample action targets are illustrative, not guaranteed to exist on a page.
+Invoke through `terminal` from `WINMUX_SKILL_DIR`. Replace `WORKSPACE_ID`, numeric browser ID `123`, and element references with actual returned values. The sample action targets are illustrative, not guaranteed to exist on a page.
 
 ```sh
-node scripts/browser.cjs open '{"url":"http://localhost:3000","workspaceId":"WORKSPACE_ID"}'
-node scripts/browser.cjs list '{}'
-node scripts/browser.cjs snapshot '{"id":123}'
-node scripts/browser.cjs click '{"id":123,"ref":"e0"}'
-node scripts/browser.cjs fill '{"id":123,"ref":"e1","value":"Hello"}'
-node scripts/browser.cjs evaluate '{"id":123,"expression":"document.title"}'
-node scripts/browser.cjs screenshot '{"id":123}'
+node scripts/winmux-client.cjs open '{"url":"http://localhost:3000","workspaceId":"WORKSPACE_ID"}'
+node scripts/winmux-client.cjs list '{}'
+node scripts/winmux-client.cjs snapshot '{"id":123}'
+node scripts/winmux-client.cjs click '{"id":123,"ref":"e0"}'
+node scripts/winmux-client.cjs fill '{"id":123,"ref":"e1","value":"Hello"}'
+node scripts/winmux-client.cjs evaluate '{"id":123,"expression":"document.title"}'
+node scripts/winmux-client.cjs screenshot '{"id":123}'
 ```
 
-`click` and `fill` accept a `selector` instead of `ref`; it must match exactly one visible, enabled element. For example, click accepts `{"id":123,"selector":"#save"}`. Fill also requires `value` and an editable element. Use `id`, not `paneId` or `browserId`. Pass the operations directly to `scripts/browser.cjs`, never as daemon `rpc browser.*` calls.
+`click` and `fill` accept a `selector` instead of `ref`; it must match exactly one visible, enabled element. For example, click accepts `{"id":123,"selector":"#save"}`. Fill also requires `value` and an editable element. Use `id`, not `paneId` or `browserId`. Pass the operations through the installed wrapper, never as daemon `rpc browser.*` calls.
 
 ## Procedure
 
@@ -76,3 +76,5 @@ node scripts/browser.cjs screenshot '{"id":123}'
 ## Verification
 
 Confirm the final URL and task-specific page state for the observed browser ID. Inspect any screenshot you cite. Report the action, observed result, and uncertainty; if the desktop service is unavailable, report that blocker rather than inventing page content or a completed action.
+
+For source-checkout development only, use `node scripts/browser.cjs METHOD JSON` from the Winmux repository root after `npm ci`. The packaged installation does not require that checkout or its dependencies.

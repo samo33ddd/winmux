@@ -6,7 +6,7 @@ For developers who live with AI agents, 24/7 on Windows.
 
 Keep your agents, shells, project files, Git changes, and browser previews in one Windows workspace. Winmux is an independent terminal multiplexer inspired by [cmux](https://cmux.com), built with Electron, TypeScript, xterm.js, and ConPTY.
 
-This source tree prepares **0.2.0**, a dark workspace redesign for the existing Windows terminal workspace. The interface supports English and Russian, and all earlier workspace, terminal, process, project-tool, browser, hook, and file-preview capabilities remain available. See [verification notes](docs/verification.md) for recorded runtime evidence and the limits of agent integration.
+This source tree prepares **0.2.1**, with fixes for agent integration, terminal titles, Codex colors, and bundled skill installation. The interface supports English and Russian. See [verification notes](docs/verification.md) for runtime evidence and the limits of agent integration.
 
 ![Winmux dark workspace with its collapsed project rail, unified header, and split terminals](docs/screenshots/workspace-dark.png)
 
@@ -23,7 +23,7 @@ This source tree prepares **0.2.0**, a dark workspace redesign for the existing 
 
 ## Workspace layout
 
-Projects live in a compact 60-pixel workspace rail. The rail keeps every workspace one click away and uses unread markers plus confirmed agent state without taking terminal space. Use the **Show workspace names** button at the bottom of the rail to expand it to 240 pixels; the expanded list can be resized with the pointer or keyboard, and the same button collapses it again.
+Projects live in a compact 60-pixel workspace rail. The rail keeps every workspace one click away and uses unread markers plus confirmed agent state without taking terminal space. Use the **Show workspace names** button at the top of the rail, beside the logo, to expand it to 240 pixels; the expanded list can be resized with the pointer or keyboard, and the same button collapses it again.
 
 The project switcher in the top header opens the current workspace list directly. The unified header also contains terminal tabs, new-tab and agent-launch controls, the active shell or agent state, and the Files, Git, and Browser tools. The former separate tab strip and status footer are gone, while the inspector still opens beside the terminals when needed.
 
@@ -31,12 +31,12 @@ The project switcher in the top header opens the current workspace list directly
 
 ## Download
 
-Use the [latest release page](https://github.com/samo33ddd/winmux/releases/latest) for published Windows builds. When the 0.2.0 release is available, its generated Windows x64 assets will be:
+Use the [latest release page](https://github.com/samo33ddd/winmux/releases/latest) for published Windows builds. The Windows x64 assets prepared for 0.2.1 are:
 
 | Asset | Purpose |
 | --- | --- |
-| `Winmux-Setup-0.2.0-x64.exe` | Windows x64 installer |
-| `Winmux-Portable-0.2.0-x64.exe` | Windows x64 portable executable |
+| `Winmux-Setup-0.2.1-x64.exe` | Windows x64 installer |
+| `Winmux-Portable-0.2.1-x64.exe` | Windows x64 portable executable |
 
 A version is available only when its assets appear on the release page. These expected names do not establish publication. Portable describes how the app is launched; local state still defaults to `%LOCALAPPDATA%/Winmux/`.
 
@@ -92,7 +92,9 @@ Closing the window detaches the UI from the background terminal daemon. Closing 
 
 A daemon restart or Windows reboot restores saved layout and metadata with **fresh shells**. It cannot preserve running processes or resume agent conversations, and it never replays previous commands. The process indicator reports whether a shell is running; it does not infer whether an agent is thinking, waiting for approval, or finished.
 
-The unified header and selected workspace item show the agent and its last confirmed state; the collapsed rail uses a smaller state marker for the same event-derived information. **Agent status hooks** adds session-only hooks for supported Claude Code and modern Codex launches, reporting work, permission/input waits, and completed turns. Existing global/project configuration and Codex notification commands remain intact. Windows session hooks require PowerShell 7.3 or later; older agent versions may not support the hook options. Agents without a supported hook adapter show unknown activity until the shell confirms their exit, rather than guessing from output or silence. Commands typed manually in a shell are not automatically classified as agents.
+The unified header and selected workspace item show the agent and its last confirmed state; the collapsed rail uses a smaller state marker. Winmux can detect Codex started manually in a Windows terminal and connect to its existing native daemon. A pane is bound automatically only when its Codex process and directory identify one loaded root thread. Ambiguous threads require an explicit selection in Settings; unavailable activity stays unknown. No model prompt is sent to discover status.
+
+**Agent status hooks** adds session-only hooks for supported Claude Code and modern Codex launches. **Settings → Behavior** also installs project-local Codex hooks, preserving existing hooks and notification commands. This installer requires Windows and a stable Node.js installation; review and trust the new project hook through Codex `/hooks`. WSL project-hook installation is explicitly unsupported. Read [the agent guide](docs/agents.md) for compatibility and upgrade details.
 
 ![Winmux unified header with terminal tabs and a local fixture agent reporting completed status](docs/screenshots/terminal-tabs-agent.png)
 

@@ -49,6 +49,7 @@ jobs:
       - run: npm run test:cwd-agent
       - run: npm run test:profile
       - run: npm run test:skills
+      - run: npm run test:integrations
       - run: npm run test:cookies
       - run: npm run test:file-preview
       - run: npm run test:desktop
@@ -148,12 +149,34 @@ jobs:
           if ($existing.Count -eq 0) {
             Invoke-Gh release create $tag --verify-tag --draft --title "Winmux $tag" --notes-file $notes
           }
-          # The by-tag endpoint returns 404 for drafts, so list the tag and retain its numeric ID.
-          $draftReleases = if ($existing.Count -eq 1) { @($existing) } else { @(Get-ReleasesForTag) }
-          if ($draftReleases.Count -ne 1) { throw 'Expected exactly one draft release for tag.' }
+          # Drafts are absent from the by-tag endpoint and may not appear immediately
+          # in the release list. Poll briefly; only an exact-tag absence is retryable.
+          $draftReleases = @($existing)
+          if ($existing.Count -eq 0) {
+            $deadline = [DateTime]::UtcNow.AddSeconds(15)
+            $pollDelayMs = 100
+            $draftReleases = @()
+            for ($attempt = 1; $attempt -le 10; $attempt++) {
+              $candidates = @(Get-ReleasesForTag)
+              if ($candidates.Count -gt 1) { throw 'Duplicate draft releases appeared for tag.' }
+              if ($candidates.Count -eq 1) {
+                $draftReleases = $candidates
+                break
+              }
+              if ($attempt -eq 10 -or [DateTime]::UtcNow -ge $deadline) { break }
+              $remainingMs = [Math]::Max(0, [int][Math]::Ceiling(($deadline - [DateTime]::UtcNow).TotalMilliseconds))
+              if ($remainingMs -le 0) { break }
+              Start-Sleep -Milliseconds ([Math]::Min($pollDelayMs, $remainingMs))
+              $pollDelayMs = [Math]::Min($pollDelayMs * 2, 1000)
+            }
+          }
+          if ($draftReleases.Count -ne 1) { throw 'Newly created draft did not become visible within 15 seconds.' }
           $releaseId = [long]$draftReleases[0].id
           if ($releaseId -le 0 -or !$draftReleases[0].draft) {
             throw 'Expected an unpublished draft with a valid release ID.'
+          }
+          if ($draftReleases[0].tag_name -cne $tag) {
+            throw 'Draft release tag did not match the verified release.'
           }
           # A failed upload leaves a draft; a rerun may replace draft assets only.
           $paths = @($assets | ForEach-Object { Join-Path $root $_ })

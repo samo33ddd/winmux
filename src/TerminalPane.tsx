@@ -6,6 +6,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { classifyTerminalLink, createLocalFileLinkProvider, hideFileLinkTooltip, normalizeLocalFileLink, showFileLinkTooltip } from './localFileLinks';
+import { filePreviewErrorMessage } from './filePreviewErrors';
 import { ArrowDown, ArrowUp, Copy, Maximize2, Minimize2, Search, SplitSquareHorizontal, SplitSquareVertical, X } from 'lucide-react';
 import { bridge, errorMessage, readClipboard, writeClipboard, type BackendEvent, type Direction, type Pane, type Settings, type Snapshot } from './types';
 
@@ -36,13 +37,19 @@ export function TerminalPane(props: Props) {
 
   useEffect(() => {
     if (!mount.current) return;
-    let disposed = false, hydrated = false, failed = false, seq = -1, frame = 0;
+    let disposed = false, hydrated = false, failed = false, seq = -1, frame = 0, fileRequest = 0;
     let pending: Extract<BackendEvent, { type: 'output' }>[] = [];
     let lastSize = '';
     setReady(false); setLoadError('');
     const openLocalFile = (value: string) => {
       const target = classifyTerminalLink(value);
-      if (target?.kind === 'file') void bridge().call('file.open', { paneId:pane.id, path:target.value }).catch(error => current.current.onError(errorMessage(error)));
+      if (target?.kind === 'file') {
+        const request = ++fileRequest;
+        current.current.onError('');
+        void bridge().call('file.open', { paneId:pane.id, path:target.value }).catch(error => {
+          if (!disposed && current.current.visible && request === fileRequest) current.current.onError(filePreviewErrorMessage(error));
+        });
+      }
       else if (target?.kind === 'external') void bridge().openExternal(target.value).catch(error => current.current.onError(errorMessage(error)));
     };
     const term = new Terminal({
@@ -149,7 +156,7 @@ export function TerminalPane(props: Props) {
       });
     }).catch(error => { if (!disposed) { failed = true; setLoadError(errorMessage(error)); pending = []; } });
     return () => {
-      disposed = true; unsubscribe(); observer.disconnect(); cancelAnimationFrame(frame); input.dispose(); localLinks.dispose();
+      disposed = true; fileRequest++; unsubscribe(); observer.disconnect(); cancelAnimationFrame(frame); input.dispose(); localLinks.dispose();
       mount.current?.removeEventListener('focusin', onFocus);
       mount.current?.removeEventListener('pointerdown', selectionStart);
       document.removeEventListener('pointerup', selectionEnd);

@@ -7,9 +7,10 @@ export interface Pane {
   id: string; title: string; profileId: string; cwd: string; pid: number | null;
   status: 'running' | 'exited'; exitCode?: number; cols: number; rows: number;
   tabId?: string; agentId?: string; agentLabel?: string;
-  agentState?: 'starting' | 'running' | 'waiting' | 'completed' | 'failed' | 'unknown'; agentExitCode?: number;
+  agentState?: 'starting' | 'running' | 'waiting' | 'idle' | 'completed' | 'failed' | 'unknown'; agentExitCode?: number;
+  agentThreadId?: string; agentBinding?: 'auto' | 'explicit';
 }
-export interface TerminalTab { id: string; title: string; root: LayoutNode }
+export interface TerminalTab { id: string; title: string; titleMode?: 'auto' | 'custom'; root: LayoutNode }
 export interface Workspace { id: string; name: string; cwd: string; profileId: string; root: LayoutNode; panes: Pane[]; tabs?: TerminalTab[]; activeTabId?: string }
 export interface Notice { id: string; paneId: string; workspaceId: string; title: string; body: string; createdAt: number; read: boolean }
 export interface Settings extends Preferences { fontSize: number; theme: ThemeId; activeWorkspaceId?: string }
@@ -19,7 +20,7 @@ export interface Profile {
   cwd?: string; distro?: string; available?: boolean; unavailableReason?: string;
 }
 export interface Agent { id: string; label: string; profileId: string; environment: 'windows' | 'wsl'; available: boolean; command: string | null; distro?: string; hookAdapter?: string }
-export interface Environment { profiles: Profile[]; agents?: Agent[]; defaultCwd: string; platform: string; capabilities?: { terminalTabs?: boolean; liveCwd?: boolean; agentLaunch?: boolean; agentStatus?: boolean; sessionAgentHooks?: boolean; protocolVersion?: number } }
+export interface Environment { profiles: Profile[]; agents?: Agent[]; defaultCwd: string; platform: string; capabilities?: { terminalTabs?: boolean; liveCwd?: boolean; agentLaunch?: boolean; agentStatus?: boolean; sessionAgentHooks?: boolean; nativeCodex?: boolean; protocolVersion?: number } }
 export interface Snapshot { data: string; seq: number; cols: number; rows: number }
 export type BackendEvent = { type: 'state'; state: State }
   | { type: 'output'; paneId: string; data: string; seq: number }

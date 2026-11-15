@@ -63,6 +63,7 @@ npm run test:workspace
 npm run test:cwd-agent
 npm run test:profile
 npm run test:skills
+npm run test:integrations
 npm run test:cookies
 npm run test:file-preview
 npm run test:desktop
