@@ -7,6 +7,8 @@ const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
 const MARKER = 'winmux-codex-hook';
+const OMP_EXTENSION_MARKER = 'winmux-omp-extension';
+const OMP_HELPER_MARKER = 'winmux-omp-hook';
 const OWNED_STATUS = 'Winmux Codex activity [winmux-owned]';
 const EVENTS = Object.freeze([
   'SessionStart', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'UserPromptSubmit',
@@ -53,7 +55,9 @@ function powershellLiteral(value) {
 function stableNode(injected) {
   if (injected) {
     if (typeof injected !== 'string' || injected.includes('\0') || !path.isAbsolute(injected)) fail('NODE_UNAVAILABLE', 'The injected Node path is not an absolute executable path.');
-    const stat = fs.lstatSync(injected);
+    let stat;
+    try { stat = fs.lstatSync(injected); }
+    catch { fail('NODE_UNAVAILABLE', 'The injected Node path does not exist.'); }
     if (!stat.isFile() || stat.isSymbolicLink()) fail('NODE_UNAVAILABLE', 'The injected Node path is not a regular executable.');
     return injected;
   }
@@ -160,6 +164,57 @@ function installHelper(dataDir, helperRoot) {
   return target;
 }
 
+function installOmpHelper(dataDir, helperRoot) {
+  const root = assertContained(dataDir, path.join(dataDir, 'hooks'), 'Winmux OMP hook directory').target;
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const source = path.join(helperRoot, 'winmux-omp-hook.cjs');
+  const content = fs.readFileSync(source);
+  const target = path.join(root, 'winmux-omp-hook.cjs');
+  const existing = fs.existsSync(target) ? fs.lstatSync(target) : null;
+  if (existing && (!existing.isFile() || existing.isSymbolicLink())) fail('HELPER_UNSAFE', 'The installed Winmux OMP hook helper is not a regular file.');
+  if (existing) {
+    const current = fs.readFileSync(target);
+    if (!current.includes(OMP_HELPER_MARKER) && !current.equals(content)) fail('HELPER_UNOWNED', 'An unrelated file already occupies the Winmux OMP hook helper path.');
+  }
+  if (!existing || !fs.readFileSync(target).equals(content)) {
+    const stage = path.join(root, `.winmux-omp-hook-${process.pid}-${crypto.randomBytes(4).toString('hex')}.cjs`);
+    fs.writeFileSync(stage, content, { mode: 0o644 });
+    fs.renameSync(stage, target);
+  }
+  return target;
+}
+
+function prepareOmpExtension(projectRoot, helperRoot, helperPath, nodePath, dataDir) {
+  const extensionDir = assertContained(projectRoot, path.join(projectRoot, '.omp', 'extensions'), 'OMP extension directory').target;
+  const target = path.join(extensionDir, 'winmux-status.mjs');
+  if (fs.existsSync(target)) {
+    const stat = fs.lstatSync(target);
+    if (!stat.isFile() || stat.isSymbolicLink()) fail('EXTENSION_UNSAFE', 'The OMP Winmux extension is not a regular file.');
+    if (stat.size > 1024 * 1024) fail('CONFIG_CONFLICT', 'The OMP Winmux extension exceeds 1 MiB.');
+    const current = fs.readFileSync(target, 'utf8');
+    if (!current.includes(OMP_EXTENSION_MARKER)) fail('CONFIG_CONFLICT', 'An unrelated extension already occupies the Winmux OMP extension path.');
+  }
+  const config = Buffer.from(JSON.stringify({ dataDir, helperPath, nodePath }), 'utf8').toString('base64');
+  const template = fs.readFileSync(path.join(helperRoot, 'winmux-omp-extension.mjs'), 'utf8');
+  if (!template.includes(OMP_EXTENSION_MARKER) || !template.includes('__WINMUX_CONFIG_B64__')) {
+    fail('HELPER_INVALID', 'The bundled OMP extension template is invalid.');
+  }
+  const content = template.replace('__WINMUX_CONFIG_B64__', config);
+  return { extensionDir, target, content };
+}
+
+function installPreparedOmpExtension(prepared) {
+  fs.mkdirSync(prepared.extensionDir, { recursive: true, mode: 0o755 });
+  const existing = fs.existsSync(prepared.target);
+  if (existing && fs.readFileSync(prepared.target).equals(Buffer.from(prepared.content))) {
+    return { status: 'unchanged', configPath: prepared.target };
+  }
+  const stage = path.join(prepared.extensionDir, `.winmux-status-${process.pid}-${crypto.randomBytes(4).toString('hex')}.mjs`);
+  fs.writeFileSync(stage, prepared.content, { mode: 0o644 });
+  fs.renameSync(stage, prepared.target);
+  return { status: existing ? 'updated' : 'installed', configPath: prepared.target };
+}
+
 async function installAgentHooks(client, params, options = {}) {
   if (!params || typeof params !== 'object' || Array.isArray(params)
     || Object.keys(params).some(key => !['workspaceId', 'agent', 'paneId'].includes(key))
@@ -167,7 +222,7 @@ async function installAgentHooks(client, params, options = {}) {
     fail('INVALID_ARGUMENT', 'Expected workspaceId and agent.');
   }
   if (!validToken(params.workspaceId, /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/)) fail('INVALID_ARGUMENT', 'Invalid workspaceId.');
-  if (params.agent !== 'codex') fail('UNSUPPORTED_AGENT', 'This Winmux release installs project-local Codex hooks only.');
+  if (params.agent !== 'codex' && params.agent !== 'omp') fail('UNSUPPORTED_AGENT', 'This Winmux release installs project-local Codex or OMP hooks only.');
   if (params.paneId !== undefined && !validToken(params.paneId, /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/)) fail('INVALID_ARGUMENT', 'Invalid paneId.');
   if (!options.dataDir || typeof options.dataDir !== 'string') fail('INVALID_ARGUMENT', 'options.dataDir is required.');
 
@@ -183,6 +238,26 @@ async function installAgentHooks(client, params, options = {}) {
   if (params.paneId && !workspace.panes.some(pane => pane.id === params.paneId)) fail('NOT_FOUND', 'Pane not found in the selected workspace.');
 
   const project = assertContained(workspace.cwd, workspace.cwd, 'Workspace');
+  if (params.agent === 'omp') {
+    const data = assertContained(options.dataDir, options.dataDir, 'Winmux data directory');
+    const nodePath = stableNode(options.nodePath);
+    const helperRoot = path.resolve(options.helperRoot || path.join(__dirname, 'hooks'));
+    const helperPathTarget = path.join(data.root, 'hooks', 'winmux-omp-hook.cjs');
+    const prepared = prepareOmpExtension(project.root, helperRoot, helperPathTarget, nodePath, data.root);
+    const helperPath = installOmpHelper(data.root, helperRoot);
+    const installed = installPreparedOmpExtension(prepared);
+    return {
+      status: installed.status,
+      agent: 'omp',
+      workspaceId: workspace.id,
+      ...(params.paneId ? { paneId: params.paneId } : {}),
+      configPath: installed.configPath,
+      extensionPath: installed.configPath,
+      helperPath,
+      requiresTrustReview: false,
+      requiresRestart: true,
+    };
+  }
   const codexDir = assertContained(project.root, path.join(project.root, '.codex'), 'Codex project directory');
   const configPath = path.join(codexDir.target, 'hooks.json');
   const data = assertContained(options.dataDir, options.dataDir, 'Winmux data directory');
@@ -216,4 +291,11 @@ async function installAgentHooks(client, params, options = {}) {
   };
 }
 
-module.exports = { installAgentHooks, MARKER, OWNED_STATUS, EVENTS };
+module.exports = {
+  installAgentHooks,
+  MARKER,
+  OMP_EXTENSION_MARKER,
+  OMP_HELPER_MARKER,
+  OWNED_STATUS,
+  EVENTS,
+};
