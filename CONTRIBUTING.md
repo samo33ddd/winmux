@@ -63,13 +63,16 @@ npm run test:workspace
 npm run test:cwd-agent
 npm run test:profile
 npm run test:skills
+npm run test:integrations
 npm run test:cookies
 npm run test:file-preview
 npm run test:desktop
 node --test tests/release-workflow-regression.cjs
 ```
 
-`build` type-checks TypeScript and builds the renderer. `test:backend` exercises the terminal daemon and CLI with real PTYs. `test:workspace` creates disposable file/Git fixtures and checks file previews, path boundaries, and Git status/diffs. The focused agent, profile, skills, cookie, and file-preview checks cover their separate contracts. `test:desktop` exercises the real Electron UI and captures evidence. `release-workflow-regression.cjs` runs the embedded release publisher against an external `gh` fixture, including draft lookup and invalid release data. Build before running the desktop check.
+`build` type-checks TypeScript and builds the renderer. `test:backend` exercises the terminal daemon and CLI with real PTYs. `test:workspace` creates disposable file/Git fixtures and checks file previews, path boundaries, and Git status/diffs. The focused agent, profile, skills, cookie, and file-preview checks cover their separate contracts. `test:integrations` covers the native Codex transport, mapping/controller, terminal titles, color preservation, and project hook installer/helper. `test:desktop` exercises the real Electron UI and captures evidence. `release-workflow-regression.cjs` runs the embedded release publisher against an external `gh` fixture, including draft lookup and invalid release data. Build before running the desktop check.
+
+The skills suite always verifies Windows installation and unavailable-profile rejection. It registers real WSL installation, interop, and conflict checks only when a distribution is present; its output distinguishes that coverage. Hosted Windows CI has no distribution. Run the complete suite locally with WSL for a release candidate and record that result separately; do not describe the hosted Windows run as WSL verification.
 
 Run the checks relevant to your change locally; integration and release candidates require the full sequence above. Documentation-only changes still need command, link, and claim review. Use existing checks where they cover the behavior, and add regression coverage for meaningful behavior changes. Do not describe an unrun test as passed or a skipped WSL case as supported by evidence.
 

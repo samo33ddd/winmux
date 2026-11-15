@@ -221,7 +221,10 @@ app.whenReady().then(() => {
     const environment = await client.request('environment');
     assert.equal(environment.capabilities.liveCwd, true); assert.equal(environment.capabilities.agentLaunch, true);
     assert.equal(environment.capabilities.terminalTabs, true); assert.equal(environment.capabilities.agentStatus, true);
-    assert.equal(environment.capabilities.protocolVersion, 2);
+    assert.equal(environment.capabilities.sessionAgentHooks, true);
+    // Protocol 3 is additive. nativeCodex is the gate; a protocol 2 daemon must not pass this handshake.
+    assert.equal(environment.capabilities.protocolVersion, 3);
+    assert.equal(environment.capabilities.nativeCodex, true);
     await assert.rejects(client.request('workspace.create', { cwd: project, agentId: 'unknown' }), { code: 'AGENT_UNAVAILABLE' });
     await assert.rejects(client.request('workspace.create', { cwd: project, agentId: 'fixture:unavailable' }), { code: 'AGENT_UNAVAILABLE' });
     await assert.rejects(client.request('workspace.create', { cwd: project, agentId: 'bad\ncommand' }), { code: 'AGENT_UNAVAILABLE' });
@@ -230,6 +233,17 @@ app.whenReady().then(() => {
     await screen(pane.id, 'SAFE_AGENT_STARTED'); assert.equal(runs('windows-runs.txt'), 1);
     await eventually(async () => (await paneState(pane.id)).agentState === 'completed', 'agent completion from OSC');
     assert.equal((await paneState(pane.id)).agentExitCode, 0); assert.equal((await paneState(pane.id)).agentLabel, 'Safe fixture');
+    const launchCapture = path.join(dataDir, 'selected-launch.json');
+    await client.request('pane.input', { paneId: pane.id, data: `Set-Content -LiteralPath ${psQuote(launchCapture)} -Value $env:WINMUX_AGENT_LAUNCH_ID -NoNewline\r` });
+    await eventually(async () => fs.existsSync(launchCapture), 'selected launch identity');
+    const selectedLaunchId = fs.readFileSync(launchCapture, 'utf8').trim();
+    await assert.rejects(client.request('agent.status', { paneId: pane.id, state: 'running', launchId: selectedLaunchId }), { code: 'AGENT_NOT_ACTIVE' });
+    const manualCommand = path.join(fixture, 'manual-codex.cmd');
+    fs.writeFileSync(manualCommand, '@echo off\r\necho MANUAL_CODEX_STARTED\r\nexit /b 0\r\n');
+    await client.request('pane.input', { paneId: pane.id, data: `& ${psQuote(manualCommand)}\r` });
+    await screen(pane.id, 'MANUAL_CODEX_STARTED');
+    await eventually(async () => (await paneState(pane.id)).agentState === 'completed', 'manual command returned to shell');
+    await assert.rejects(client.request('agent.status', { paneId: pane.id, state: 'running', launchId: selectedLaunchId }), { code: 'AGENT_NOT_ACTIVE' }, 'the released launch cannot overwrite the later shell');
     await client.request('pane.input', { paneId: pane.id, data: `Set-Location -LiteralPath ${psQuote(childDir)}\r` });
     await eventually(async () => (await paneState(pane.id)).cwd === childDir, 'PowerShell Unicode cwd');
     assert(events.some(e => e.state.workspaces.flatMap(w => w.panes).some(p => p.id === pane.id && p.cwd === childDir)));

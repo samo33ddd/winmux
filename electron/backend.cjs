@@ -6,6 +6,8 @@ const { randomUUID } = require('node:crypto');
 const { LIMITS, locations, createToken, authenticated, fail, string, integer } = require('./backend/shared.cjs');
 const { discover, validateLaunch } = require('./backend/environment.cjs');
 const { cwdFromOsc } = require('./backend/shell-integration.cjs');
+const { terminalEnvironment } = require('./backend/terminal-env.cjs');
+const { createController: createCodexController } = require('./codex-integration.cjs');
 
 function replaceLeaf(node, paneId, replacement) {
   if (node.type === 'leaf') return node.paneId === paneId ? replacement : node;
@@ -23,7 +25,13 @@ function syncTabs(workspace) {
   if (!workspace.tabs.some(tab => tab.id === workspace.activeTabId)) workspace.activeTabId = workspace.tabs[0]?.id;
   workspace.root = workspace.tabs.find(tab => tab.id === workspace.activeTabId)?.root;
 }
-const AGENT_STATES = new Set(['starting', 'running', 'waiting', 'completed', 'failed', 'unknown']);
+const AGENT_STATES = new Set(['starting', 'running', 'waiting', 'idle', 'completed', 'failed', 'unknown']);
+function tabTitleMode(titleMode, hasTitle) {
+  if (titleMode === undefined) return hasTitle ? 'custom' : 'auto';
+  if (titleMode !== 'auto' && titleMode !== 'custom') fail('INVALID_ARGUMENT', 'titleMode must be auto or custom');
+  if (titleMode === 'custom' && !hasTitle) fail('INVALID_ARGUMENT', 'A custom tab title is required');
+  return titleMode;
+}
 function loadState(file) {
   const initial = { workspaces: [], notifications: [], settings: { fontSize: 14, theme: 'dark' } };
   if (!fs.existsSync(file)) return initial;
@@ -43,7 +51,7 @@ function loadState(file) {
       unique(pane.id); string(pane.title, 'title', 256); string(pane.cwd, 'cwd', 4096); string(pane.profileId, 'profileId', 256);
       integer(pane.cols, 'cols', 2, 300); integer(pane.rows, 'rows', 1, 200);
       pane.pid = null; pane.status = 'exited'; delete pane.exitCode;
-      delete pane.agentId; delete pane.agentLabel;
+      delete pane.agentId; delete pane.agentLabel; delete pane.agentThreadId; delete pane.agentSessionId; delete pane.agentBinding;
       pane.agentState = 'unknown'; delete pane.agentExitCode; delete pane.agentUpdatedAt;
     }
     const walk = (node, depth) => {
@@ -61,6 +69,7 @@ function loadState(file) {
     if (!Array.isArray(workspace.tabs) || !workspace.tabs.length || workspace.tabs.length > LIMITS.panes) fail('STATE_INVALID', 'Invalid saved tabs');
     for (const tab of workspace.tabs) {
       unique(tab.id); string(tab.title, 'tab title', 120); walk(tab.root, 0);
+      if (tab.titleMode !== undefined && tab.titleMode !== 'auto' && tab.titleMode !== 'custom') fail('STATE_INVALID', 'Invalid saved tab title mode');
       for (const id of leafIds(tab.root)) workspace.panes.find(p => p.id === id).tabId = tab.id;
     }
     syncTabs(workspace);
@@ -102,6 +111,7 @@ async function startServer(options = {}) {
     ({ SerializeAddon } = require('@xterm/addon-serialize'));
   } catch (error) { releaseLock(); throw error; }
   const clients = new Set(), runtimes = new Map();
+  let codexController;
   let stopping = false, closePromise, persistTimer, mutationTail = Promise.resolve();
   const publicState = () => structuredClone(state);
   function save() {
@@ -152,6 +162,7 @@ async function startServer(options = {}) {
         const exitCode = Number(code);
         if ((state === 'completed') !== (exitCode === 0)) return true;
         pane.agentExitCode = exitCode; runtime.agentEnded = true;
+        runtime.agentLaunchId = '';
       }
       // The shell can confirm invocation and exit, never model activity.
       if (state !== 'unknown' || !['running', 'waiting', 'completed', 'failed'].includes(pane.agentState)) pane.agentState = state;
@@ -222,10 +233,11 @@ async function startServer(options = {}) {
     try {
       // Even an unset name in WSLENV creates an empty variable in Linux.
       const forwardedEnv = (process.env.WSLENV || '').split(':').filter(entry => entry.split('/')[0].toUpperCase() !== 'ELECTRON_RUN_AS_NODE');
-      const shellEnv = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', WINMUX_PANE_ID: pane.id, WINMUX_DATA_DIR: loc.dataDir, WINMUX_PIPE_NAME: loc.pipeName,
+      const shellEnv = terminalEnvironment(process.env);
+      Object.assign(shellEnv, { WINMUX_PANE_ID: pane.id, WINMUX_DATA_DIR: loc.dataDir, WINMUX_PIPE_NAME: loc.pipeName,
         WINMUX_AGENT_LAUNCH_ID: launch.agentLaunchId || '',
         WINMUX_AGENT_NODE: process.execPath, WINMUX_AGENT_HELPER: path.join(__dirname, 'backend', 'agent-status.cjs'),
-        WSLENV: [...forwardedEnv, 'WINMUX_PANE_ID', 'WINMUX_DATA_DIR', 'WINMUX_PIPE_NAME', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER'].filter(Boolean).join(':') };
+        WSLENV: [...forwardedEnv, 'WINMUX_PANE_ID', 'WINMUX_DATA_DIR', 'WINMUX_PIPE_NAME', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER'].filter(Boolean).join(':') });
       for (const key of Object.keys(shellEnv)) {
         if ((process.platform === 'win32' ? key.toUpperCase() : key) === 'ELECTRON_RUN_AS_NODE') delete shellEnv[key];
       }
@@ -242,6 +254,7 @@ async function startServer(options = {}) {
           if (runtime.disposed || stopping) return;
           pane.status = 'exited'; pane.exitCode = exitCode; pane.pid = null;
           if (runtime.agentLaunchId && !runtime.agentEnded) { pane.agentState = 'unknown'; delete pane.agentExitCode; runtime.agentEnded = true; }
+          runtime.agentLaunchId = '';
           asyncChanged(); broadcast({ type: 'exit', paneId: pane.id, exitCode });
         }).catch(error => { if (!runtime.disposed && !stopping) console.error(error.message); });
       }));
@@ -287,6 +300,7 @@ async function startServer(options = {}) {
         const launch = await validateLaunch(environment, profileId, params.cwd, params.agentId, params.agentHooks);
         const pane = makePane(launch);
         const tab = { id: randomUUID(), title: launch.profile.label, root: { type: 'leaf', paneId: pane.id } }; pane.tabId = tab.id;
+        tab.titleMode = 'auto';
         const workspace = { id: randomUUID(), name: name || path.basename(launch.cwd) || launch.profile.label, cwd: launch.cwd, profileId, tabs: [tab], activeTabId: tab.id, root: tab.root, panes: [pane] };
         spawnPane(pane, launch); state.workspaces.push(workspace); state.settings.activeWorkspaceId = workspace.id; changed();
         return structuredClone(workspace);
@@ -306,10 +320,11 @@ async function startServer(options = {}) {
         const source = params.sourcePaneId === undefined ? workspace.panes.find(p => p.tabId === workspace.activeTabId) : workspace.panes.find(p => p.id === params.sourcePaneId);
         if (!source) fail('NOT_FOUND', 'Source pane does not belong to workspace');
         const requestedTitle = params.title === undefined ? null : string(params.title, 'title', 120).trim();
+        const titleMode = tabTitleMode(params.titleMode, Boolean(requestedTitle));
         const profileId = params.profileId ?? source.profileId;
         const launch = await validateLaunch(environment, profileId, params.cwd ?? (profileId === source.profileId ? source.cwd : undefined), params.agentId, params.agentHooks);
         const pane = makePane(launch);
-        const tab = { id: randomUUID(), title: requestedTitle || tabTitle(workspace, launch.agentLabel || launch.profile.label), root: { type: 'leaf', paneId: pane.id } }; pane.tabId = tab.id;
+        const tab = { id: randomUUID(), title: requestedTitle || tabTitle(workspace, launch.agentLabel || launch.profile.label), titleMode, root: { type: 'leaf', paneId: pane.id } }; pane.tabId = tab.id;
         spawnPane(pane, launch); workspace.panes.push(pane); workspace.tabs.push(tab); workspace.activeTabId = tab.id;
         state.settings.activeWorkspaceId = workspace.id; syncTabs(workspace); changed(); return structuredClone(tab);
       }
@@ -396,10 +411,67 @@ async function startServer(options = {}) {
         state.settings = next; changed(); return { ...next };
       }
       case 'daemon.shutdown': setTimeout(() => close().catch(error => console.error(error.message)), 30); return { ok: true };
+      case 'codex.status': return codexController.status();
+      case 'codex.bind': {
+        const threadId = string(params.threadId, 'threadId', 128);
+        paneById(params.paneId);
+        const result = await codexController.bind(params.paneId, threadId);
+        if (!result.ok) fail(result.code === 'NOT_FOUND' ? 'NOT_FOUND' : result.code, result.code === 'STALE_THREAD' ? 'Codex thread is not available for this pane' : 'A Codex process must be running in this pane');
+        return result;
+      }
+      case 'agent.hook': {
+        const agentId = string(params.agentId, 'agentId', 64);
+        const event = string(params.event, 'event', 64);
+        const sessionId = string(params.sessionId, 'sessionId', 128);
+        const cwd = params.cwd === undefined ? '' : string(params.cwd, 'cwd', 4096, true);
+        const paneId = params.paneId === undefined ? undefined : string(params.paneId, 'paneId', 128);
+        if (paneId) paneById(paneId);
+        if (agentId !== 'codex') return { applied: false, reason: 'agent' };
+        return codexController.hook({ agentId, event, sessionId, cwd, paneId });
+      }
       default: fail('METHOD_NOT_FOUND', `Unknown method: ${method}`);
     }
   }
-  const reads = new Set(['state', 'environment', 'pane.snapshot', 'pane.screen', 'pane.input']);
+  const reads = new Set(['state', 'environment', 'pane.snapshot', 'pane.screen', 'pane.input', 'codex.status']);
+  function codexPanes() {
+    return state.workspaces.flatMap(workspace => workspace.panes.map(pane => ({
+      id: pane.id, pid: pane.pid, status: pane.status, cwd: pane.cwd, agentId: pane.agentId,
+      agentState: pane.agentState, agentThreadId: pane.agentThreadId, agentSessionId: pane.agentSessionId,
+      agentBinding: pane.agentBinding, agentLaunchLocked: Boolean(runtimes.get(pane.id)?.agentLaunchId && !runtimes.get(pane.id)?.agentEnded),
+    })));
+  }
+  function applyCodexIdentity(paneId, identity) {
+    let pane;
+    try { pane = paneById(paneId).pane; } catch { return; }
+    const runtime = runtimes.get(pane.id);
+    if (runtime?.agentLaunchId && !runtime.agentEnded) return;
+    if (!identity) {
+      delete pane.agentId; delete pane.agentLabel; delete pane.agentThreadId;
+      delete pane.agentSessionId; delete pane.agentBinding;
+      pane.agentState = 'unknown';
+    } else {
+      if (identity.agentId) pane.agentId = identity.agentId;
+      if (identity.agentLabel) pane.agentLabel = identity.agentLabel;
+      if (Object.hasOwn(identity, 'agentThreadId')) {
+        if (identity.agentThreadId) pane.agentThreadId = identity.agentThreadId;
+        else delete pane.agentThreadId;
+      }
+      if (Object.hasOwn(identity, 'agentSessionId')) {
+        if (identity.agentSessionId) pane.agentSessionId = identity.agentSessionId;
+        else delete pane.agentSessionId;
+      }
+      if (Object.hasOwn(identity, 'agentBinding')) {
+        if (identity.agentBinding) pane.agentBinding = identity.agentBinding;
+        else delete pane.agentBinding;
+      }
+      if (identity.agentState && AGENT_STATES.has(identity.agentState)) pane.agentState = identity.agentState;
+    }
+    pane.agentUpdatedAt = Date.now(); asyncChanged();
+  }
+  codexController = createCodexController({
+    panes: codexPanes, apply: applyCodexIdentity,
+    ...(options.codex ? { connect: options.codex.connect, listProcesses: options.codex.listProcesses, intervalMs: options.codex.intervalMs } : {}),
+  });
   const server = net.createServer(socket => {
     if (stopping || clients.size >= LIMITS.clients) { socket.destroy(); return; }
     socket.setEncoding('utf8');
@@ -438,6 +510,7 @@ async function startServer(options = {}) {
     closePromise = (async () => {
       clearTimeout(persistTimer);
       await mutationTail;
+      await codexController?.stop();
       safeSave();
       for (const workspace of state.workspaces) workspace.panes.forEach(disposePane);
       for (const client of clients) client.socket.destroy();
@@ -462,11 +535,12 @@ async function startServer(options = {}) {
     if (process.platform !== 'win32' && fs.existsSync(loc.pipeName)) fs.unlinkSync(loc.pipeName);
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(loc.pipeName, () => { server.removeListener('error', reject); resolve(); }); });
     if (process.platform !== 'win32') fs.chmodSync(loc.pipeName, 0o600);
+    if (options.codex || (options.codex !== false && process.env.WINMUX_NO_PROFILE !== '1' && process.env.WINMUX_TEST_MODE !== '1')) codexController.start();
   } catch (error) { await close(); throw error; }
   server.on('error', error => console.error(`Winmux IPC server error: ${error.message}`));
   return { server, dataDir: loc.dataDir, pipeName: loc.pipeName, close, shutdown: close };
 }
-module.exports = { startServer };
+module.exports = { startServer, tabTitleMode };
 if (require.main === module) {
   startServer().then(daemon => {
     const stop = () => daemon.close().then(() => process.exit(0), error => { console.error(error); process.exit(1); });

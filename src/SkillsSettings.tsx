@@ -2,119 +2,139 @@ import { useId, useRef, useState, type FormEvent } from 'react';
 import { getLanguage } from './i18n';
 import { bridge, errorMessage, type Workspace } from './types';
 
-// Offered agents and flags verified against vercel-labs/skills official docs.
-// Keep this subset and validation aligned with electron/skills-install.cjs.
 const agents = [
-  ['codex', 'Codex'], ['claude-code', 'Claude Code'], ['opencode', 'OpenCode'],
-  ['cursor', 'Cursor'], ['gemini-cli', 'Gemini CLI'], ['github-copilot', 'GitHub Copilot'],
-  ['pi', 'Pi'], ['hermes-agent', 'Hermes Agent'],
+  ['codex', 'Codex', '.agents/skills'],
+  ['claude-code', 'Claude Code', '.claude/skills'],
+  ['opencode', 'OpenCode', '.agents/skills'],
+  ['cursor', 'Cursor', '.agents/skills'],
+  ['gemini-cli', 'Gemini CLI', '.agents/skills'],
+  ['github-copilot', 'GitHub Copilot', '.agents/skills'],
+  ['pi', 'Pi', '.agents/skills'],
+  ['hermes-agent', 'Hermes Agent', '.hermes/skills'],
 ] as const;
-const presets = [
-  { source: 'vercel-labs/agent-skills', label: 'Vercel · agent-skills' },
-  { source: 'anthropics/skills', label: 'Anthropic · skills' },
-];
-const sourcePattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
-const skillPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+const skills = [
+  {
+    name: 'winmux-terminal',
+    en: 'Control persistent Winmux workspaces, panes, input, notifications, and shell state.',
+    ru: 'Управление постоянными пространствами Winmux, панелями, вводом, уведомлениями и состоянием оболочки.',
+  },
+  {
+    name: 'winmux-browser',
+    en: 'Inspect and automate pages in the Winmux embedded browser.',
+    ru: 'Просмотр и автоматизация страниц во встроенном браузере Winmux.',
+  },
+] as const;
+
 const text = (en: string, ru: string) => getLanguage() === 'ru' ? ru : en;
+
+interface InstallResult {
+  workspaceId: string;
+  environment: 'windows' | 'wsl';
+  agent: string;
+  destinationRoot: string;
+  installedSkills: string[];
+  unchangedSkills: string[];
+  skills: Array<{ name: string; status: 'install' | 'unchanged'; path: string }>;
+}
 
 export interface SkillsSettingsProps {
   workspaces: Workspace[];
   activeWorkspaceId?: string;
-  onStarted(workspaceId: string, paneId: string): void;
+  onStarted?(workspaceId: string, paneId: string): void;
 }
 
-export function SkillsSettings({ workspaces, activeWorkspaceId, onStarted }: SkillsSettingsProps) {
+function destinationFor(workspace: Workspace, relative: string, skill: string) {
+  const separator = workspace.cwd.includes('\\') ? '\\' : '/';
+  const base = workspace.cwd.replace(/[\\/]+$/, '');
+  const relativePath = relative.split('/').join(separator);
+  const skillPart = skill ? `${separator}${skill}${separator}SKILL.md` : '';
+  return `${base}${separator}${relativePath}${skillPart}`;
+}
+
+export function SkillsSettings({ workspaces, activeWorkspaceId }: SkillsSettingsProps) {
   const id = useId();
   const [workspaceId, setWorkspaceId] = useState(activeWorkspaceId ?? workspaces[0]?.id ?? '');
-  const [source, setSource] = useState('vercel-labs/agent-skills');
-  const [skill, setSkill] = useState('');
-  const [agent, setAgent] = useState<string>('codex');
+  const [agent, setAgent] = useState('codex');
   const [pending, setPending] = useState(false);
-  const inFlight = useRef(false);
-  const [launched, setLaunched] = useState(false);
+  const [result, setResult] = useState<InstallResult | null>(null);
   const [error, setError] = useState('');
+  const inFlight = useRef(false);
   const workspace = workspaces.find(item => item.id === workspaceId)
     ?? workspaces.find(item => item.id === activeWorkspaceId) ?? workspaces[0];
-  const validSource = !/\s/.test(source) && sourcePattern.test(source);
-  const validSkill = !skill || (!/\s/.test(skill) && skillPattern.test(skill));
-  const valid = validSource && validSkill && agents.some(([value]) => value === agent);
-  const command = valid ? `npx skills add ${source} --agent ${agent}${skill ? ` --skill ${skill}` : ''} --yes` : '';
+  const agentEntry = agents.find(([value]) => value === agent) ?? agents[0];
+  const destinationRoot = workspace ? destinationFor(workspace, agentEntry[2], '') : '';
 
-  async function launch(event: FormEvent<HTMLFormElement>) {
+  async function install(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (inFlight.current || !workspace?.panes.length || !valid) return;
+    if (inFlight.current || !workspace) return;
     inFlight.current = true;
-    setPending(true); setError(''); setLaunched(false);
-    let result: { paneId: string; workspaceId: string };
+    setPending(true);
+    setError('');
+    setResult(null);
     try {
-      result = await bridge().call<{ paneId: string; workspaceId: string }>('skills.install', {
-        workspaceId: workspace.id, source, agent, ...(skill ? { skill } : {}),
+      const installed = await bridge().call<InstallResult>('skills.install', {
+        workspaceId: workspace.id,
+        agent,
       });
-      setLaunched(true);
+      setResult(installed);
     } catch (cause) {
       setError(errorMessage(cause));
-      return;
     } finally {
       inFlight.current = false;
       setPending(false);
     }
-    onStarted(result.workspaceId, result.paneId);
   }
 
   return <section aria-labelledby={`${id}-title`} data-testid="skills-settings">
-    <h3 id={`${id}-title`}>{text('Project skills', 'Навыки проекта')}</h3>
+    <h3 id={`${id}-title`}>{text('Winmux skills', 'Навыки Winmux')}</h3>
     <p className="preference-intro">{text(
-      'Install agent skills into the selected project using the official skills CLI. Node.js 22.20+ and npx must be available in its Windows or WSL environment.',
-      'Устанавливайте навыки агентов в выбранный проект через официальный skills CLI. В его среде Windows или WSL должны быть доступны Node.js 22.20+ и npx.',
+      'Install the two skills shipped with this version of Winmux into the selected project and agent. Unrelated project skills stay unchanged. An existing Winmux skill is never overwritten; identical files are left as an unchanged no-op.',
+      'Установите два навыка из этой версии Winmux в выбранный проект и для выбранного агента. Другие навыки проекта остаются без изменений. Существующий навык Winmux никогда не перезаписывается; идентичные файлы сохраняются без изменений.',
     )}</p>
-    <form onSubmit={launch} style={{ marginTop: 16 }}>
+    <form onSubmit={install} style={{ marginTop: 16 }}>
       <fieldset disabled={pending} style={{ border: 0, padding: 0, margin: 0, minWidth: 0, display: 'grid', gap: 14 }}>
-        <label htmlFor={`${id}-workspace`}>{text('Target workspace', 'Рабочее пространство')}
-          <select id={`${id}-workspace`} data-testid="skills-workspace" value={workspace?.id ?? ''} onChange={event => setWorkspaceId(event.target.value)} style={{ marginTop: 6 }}>
+        <label htmlFor={`${id}-workspace`}>{text('Project workspace', 'Рабочее пространство проекта')}
+          <select id={`${id}-workspace`} data-testid="skills-workspace" value={workspace?.id ?? ''} onChange={event => { setWorkspaceId(event.target.value); setResult(null); setError(''); }} style={{ marginTop: 6 }}>
             {!workspaces.length && <option value="">{text('Create a workspace first', 'Сначала создайте рабочее пространство')}</option>}
             {workspaces.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}
           </select>
         </label>
         {workspace && <p className="field-hint" style={{ overflowWrap: 'anywhere' }}>
-          {text('Startup directory', 'Стартовый каталог')}: <code>{workspace.cwd}</code><br />
+          {text('Project', 'Проект')}: <code>{workspace.cwd}</code><br />
           {text('Environment', 'Среда')}: {workspace.profileId.startsWith('wsl:') ? workspace.profileId : 'Windows · PowerShell'}
         </p>}
-        <div role="group" aria-label={text('Official repository presets', 'Официальные репозитории')} style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {presets.map(preset => <button type="button" className="button" key={preset.source} aria-pressed={source === preset.source}
-            onClick={() => { setSource(preset.source); setSkill(''); setLaunched(false); setError(''); }}>{preset.label}</button>)}
-        </div>
-        <label htmlFor={`${id}-source`}>{text('GitHub repository (owner/repo)', 'Репозиторий GitHub (owner/repo)')}
-          <input id={`${id}-source`} data-testid="skills-source" value={source} required maxLength={140} spellCheck={false} autoCapitalize="none" autoCorrect="off"
-            aria-invalid={!validSource} aria-describedby={`${id}-source-hint`} onChange={event => setSource(event.target.value)} placeholder="vercel-labs/agent-skills" style={{ marginTop: 6 }} />
-        </label>
-        <p id={`${id}-source-hint`} className="field-hint">{text('Use owner/repo only, without URLs, spaces or extra flags.', 'Укажите только owner/repo — без URL, пробелов и дополнительных флагов.')}</p>
-        <label htmlFor={`${id}-agent`}>{text('Agent', 'Агент')}
-          <select id={`${id}-agent`} data-testid="skills-agent" value={agent} onChange={event => setAgent(event.target.value)} style={{ marginTop: 6 }}>
+        <label htmlFor={`${id}-agent`}>{text('Target agent', 'Целевой агент')}
+          <select id={`${id}-agent`} data-testid="skills-agent" value={agent} onChange={event => { setAgent(event.target.value); setResult(null); setError(''); }} style={{ marginTop: 6 }}>
             {agents.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
           </select>
         </label>
-        <label htmlFor={`${id}-skill`}>{text('Skill name (optional)', 'Название навыка (необязательно)')}
-          <input id={`${id}-skill`} data-testid="skills-name" value={skill} maxLength={128} spellCheck={false} autoCapitalize="none" autoCorrect="off"
-            aria-invalid={!validSkill} aria-describedby={`${id}-skill-hint`} onChange={event => setSkill(event.target.value)} placeholder="web-design-guidelines" style={{ marginTop: 6 }} />
-        </label>
-        <p id={`${id}-skill-hint`} className="field-hint">{text(
-          'Leave blank to install all skills from this repository. Names must start with a letter or digit; use only ASCII letters, digits, dots, underscores and hyphens.',
-          'Оставьте пустым для установки всех навыков репозитория. Название начинается с буквы или цифры и содержит только латиницу, цифры, точки, подчёркивания и дефисы.',
-        )}</p>
-        <div>
-          <strong>{text('Command preview', 'Команда запуска')}</strong>
-          <pre data-testid="skills-command" style={{ marginTop: 8, padding: 12, borderRadius: 6, background: 'var(--bg)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}><code>{command || text('Enter a valid repository and skill name.', 'Укажите корректный репозиторий и название навыка.')}</code></pre>
-          <p className="preference-intro">{text(
-            'Project-local only. Opens a new terminal pane in the startup directory above. npx may ask to download the CLI; inspect the terminal for prompts and the installation result.',
-            'Установка только в проект. Откроется новая панель терминала в указанном стартовом каталоге. npx может запросить загрузку CLI; проверьте запросы и результат установки в терминале.',
-          )}</p>
+        <p className="field-hint" style={{ overflowWrap: 'anywhere' }} data-testid="skills-destination">
+          {text('Destination', 'Назначение')}: <code>{destinationRoot || '—'}</code>
+        </p>
+        <div role="list" aria-label={text('Skills to install', 'Навыки для установки')} style={{ display: 'grid', gap: 10 }}>
+          {skills.map(skill => <div role="listitem" key={skill.name} data-testid={`skills-skill-${skill.name}`} style={{ padding: 12, border: '1px solid var(--border)', borderRadius: 6 }}>
+            <strong><code>{skill.name}</code></strong>
+            <p className="field-hint" style={{ marginTop: 5 }}>{text(skill.en, skill.ru)}</p>
+            <p className="field-hint" style={{ marginTop: 5, overflowWrap: 'anywhere' }}>
+              {workspace ? <code>{destinationFor(workspace, agentEntry[2], skill.name)}</code> : '—'}
+            </p>
+          </div>)}
         </div>
-        <button type="submit" className="button primary" data-testid="skills-launch" disabled={!workspace?.panes.length || !valid || pending}>
-          {pending ? text('Launching…', 'Запуск…') : text('Launch installation command', 'Запустить команду установки')}
+        <button type="submit" className="button primary" data-testid="skills-launch" disabled={!workspace || pending}>
+          {pending ? text('Installing two skills…', 'Установка двух навыков…') : text('Install 2 Winmux skills', 'Установить 2 навыка Winmux')}
         </button>
       </fieldset>
     </form>
-    {launched && <p role="status" className="preference-intro">{text('Command launched. Inspect the new terminal for the installation result.', 'Команда запущена. Проверьте результат установки в новой панели терминала.')}</p>}
-    {error && <p role="alert" style={{ marginTop: 12, color: 'var(--error)', overflowWrap: 'anywhere' }}>{text('Could not launch the command: ', 'Не удалось запустить команду: ')}{error}</p>}
+    {result && <div role="status" data-testid="skills-result" style={{ marginTop: 14 }}>
+      <strong>{text('Installation complete', 'Установка завершена')}</strong>
+      <p className="field-hint" style={{ overflowWrap: 'anywhere' }}>{result.destinationRoot}</p>
+      <ul>
+        {result.skills.map(item => <li key={item.name}><code>{item.name}</code>: {item.status === 'install'
+          ? text('installed', 'установлен')
+          : text('already identical; unchanged', 'уже совпадает; без изменений')}</li>)}
+      </ul>
+    </div>}
+    {error && <p role="alert" data-testid="skills-error" style={{ marginTop: 12, color: 'var(--error)', overflowWrap: 'anywhere' }}>{text('Could not install the Winmux skills: ', 'Не удалось установить навыки Winmux: ')}{error}</p>}
   </section>;
 }

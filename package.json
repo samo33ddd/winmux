@@ -1,6 +1,6 @@
 {
   "name":"winmux",
-  "version":"0.2.0",
+  "version":"0.2.1",
   "private":true,
   "description":"A Windows terminal workspace for AI CLI agents",
   "main":"electron/main.cjs",
@@ -9,13 +9,14 @@
     "build":"tsc --noEmit && vite build",
     "start":"electron .",
     "test:backend":"node scripts/run-electron-node.cjs tests/backend-smoke.cjs",
-    "test:desktop":"node tests/desktop-smoke.cjs",
+    "test:desktop":"node tests/desktop-smoke.cjs && node tests/agent-integrations-electron.cjs",
     "test:cwd-agent":"node scripts/run-electron-node.cjs tests/cwd-agent-smoke.cjs",
     "test:profile":"node tests/powershell-profile-smoke.cjs",
     "test:skills":"node --test tests/skills-install-smoke.cjs",
+    "test:integrations":"node --test tests/codex-daemon-smoke.cjs tests/codex-mapping.cjs tests/terminal-tab-label.cjs tests/terminal-theme-smoke.cjs tests/agent-hooks-install-smoke.cjs && node scripts/run-electron-node.cjs tests/codex-controller-smoke.cjs && node scripts/run-electron-node.cjs tests/title-mode-smoke.cjs",
     "test:cookies":"node tests/cookie-import-smoke.cjs",
     "test:workspace":"node tests/workspace-smoke.cjs",
-    "test:file-preview":"node --test tests/local-file-links.cjs && node tests/file-preview-smoke.cjs",
+    "test:file-preview":"node --test tests/local-file-links.cjs && node tests/file-preview-smoke.cjs && node tests/local-file-preview-electron.cjs",
     "browser":"node scripts/browser.cjs",
     "cli":"node scripts/run-electron-node.cjs cli.cjs",
     "rebuild":"electron-rebuild -f -w node-pty",
@@ -23,6 +24,7 @@
     "release:build":"npm run build && electron-builder --win nsis portable --x64 --publish never"
   },
   "dependencies":{
+    "ws":"8.23.0",
     "@xterm/xterm":"6.0.0",
     "@xterm/headless":"6.0.0",
     "@xterm/addon-serialize":"0.14.0",

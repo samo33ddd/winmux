@@ -1,10 +1,31 @@
 # Using Winmux with agents
 
-Winmux exposes two local command surfaces: a persistent terminal daemon and a browser service owned by the open desktop window. These are local CLIs, not an MCP server. Supported Claude Code and modern Codex launches can add session-only status hooks. Conversation resume and Windows CLI interop from WSL remain unverified.
+Winmux exposes two local command surfaces: a persistent terminal daemon and a browser service owned by the open desktop window. These are local CLIs, not an MCP server. Supported Claude Code and modern Codex launches can add session-only status hooks. Windows Codex also supports native daemon status and project-local hook installation. Automatic conversation resume remains unsupported.
 
-The repository ships [winmux-terminal](../skills/winmux-terminal/SKILL.md) and [winmux-browser](../skills/winmux-browser/SKILL.md). They are portable instructions for an agent to read or install using its own skill mechanism; their presence here does not install them in your agent or modify a local Hermes profile.
+The repository ships [winmux-terminal](../skills/winmux-terminal/SKILL.md) and [winmux-browser](../skills/winmux-browser/SKILL.md). In **Settings → Skills**, choose the workspace and agent, then install these two bundled skills into that project's agent skill directory. This action does not fetch a general skills catalog or install third-party skills. Conflicting folders are preserved and reported before either skill is changed; an identical installation is left intact.
 
-## Prerequisites
+## Installed and portable builds
+
+Installed skills include a Node.js client wrapper and connection metadata for the Winmux instance that installed them. The client files live in a versioned plain directory under the Winmux data directory, outside the packaged application archive. A Winmux source checkout and a global `winmux` command are unnecessary.
+
+From the installed **winmux-terminal** directory, with Node.js on PATH:
+
+```powershell
+node scripts/winmux-client.cjs list
+node scripts/winmux-client.cjs environment
+```
+
+From the installed **winmux-browser** directory, the wrapper uses the separate browser service:
+
+```powershell
+node scripts/winmux-client.cjs list
+```
+
+Use terminal commands below with the terminal wrapper and browser commands with the browser wrapper, preserving each command's arguments. Both wrappers are clients: open the matching Winmux desktop to start its terminal daemon, rather than using `start` from an installed skill. Browser control and local file previews require that desktop to remain open. The connection metadata contains paths, not an IPC token.
+
+WSL installation uses the selected WSL project and runs the client through Windows Node.js interop. Windows `node.exe` must be available through WSL interop; `WINMUX_WINDOWS_NODE` can select its executable. The automated checks exercise this bridge in Ubuntu 24.04.
+
+## Source checkout prerequisites
 
 Use a Windows source checkout with dependencies installed (`npm ci`). Build and open the desktop with `npm run build` and `npm start` when browser control is needed. Terminal-only work can start a daemon with `npm run cli -- start`. Use the repo root as the working directory for every command below.
 
@@ -42,7 +63,19 @@ Terminal links use the same preview: local path patterns, quoted paths with spac
 
 The sidebar represents projects; horizontal terminal tabs stay within their workspace. Use `npm run cli -- tab WORKSPACE_ID --pane PANE_ID` to create a tab inheriting the selected pane's current directory. Add `--agent codex` (or an available catalog ID) to launch an installed agent there. `list` exposes `tabs`, `activeTabId`, and each pane's `tabId`; tab creation returns the tab with its initial leaf pane ID. The generic RPC methods `tab.select` and `tab.close` take `{workspaceId,tabId}`. Closing a tab stops only its panes.
 
-The desktop's **Agent status hooks** option adds hooks only to that supported launch. RPC launches can set `agentHooks:true` on `workspace.create`, `tab.create`, or `pane.split`; catalog `hookAdapter` identifies supported agents. Windows hooks require PowerShell 7.3+. Existing global/project hooks and Codex `notify` are preserved. Inspect `agentState` for confirmed hook/lifecycle events; `unknown` is intentional when activity cannot be established. A daemon restart starts fresh shells and clears current agent identity, without replaying agent commands. See [the daemon contract](../electron/backend/README.md) for the authenticated helper and compatibility details.
+The desktop's **Agent status hooks** option adds hooks only to that supported launch. RPC launches can set `agentHooks:true` on `workspace.create`, `tab.create`, or `pane.split`; catalog `hookAdapter` identifies supported agents. Windows session hooks require PowerShell 7.3+. Existing global/project hooks and Codex `notify` are preserved. Inspect `agentState` for confirmed hook/lifecycle events; `unknown` is intentional when activity cannot be established. A daemon restart starts fresh shells and clears current agent identity, without replaying agent commands. See [the daemon contract](../electron/backend/README.md) for the authenticated helper and compatibility details.
+
+## Native Codex status and project hooks
+
+On Windows, Winmux attaches to an already-running Codex app-server daemon through its WebSocket proxy. It never starts or stops that shared daemon, submits a turn, or answers an approval request while discovering status. The native transport was verified with Codex 0.167.0.
+
+Winmux verifies that Codex is a descendant of a terminal's actual shell process. One such pane and one loaded root thread in the same directory can bind automatically, including threads whose source is `vscode`. Multiple candidates require an explicit thread selection under **Settings → Behavior**. Thread bindings are not restored after a Winmux daemon restart. A known Codex process remains labelled Codex when its activity cannot be established.
+
+Native active flags distinguish running from approval/input waits. `idle` means ready for work; a turn is marked completed only after its completion event. A lost connection gives unknown activity rather than an inferred completion.
+
+The **Install Codex hook** action in **Settings → Behavior** writes `.codex/hooks.json` in the selected Windows project. It merges existing handlers, backs up a changed existing config, and leaves identical installs unchanged. It copies its helper to the Winmux data directory and requires a stable system Node.js executable. Open `/hooks` in Codex and review/trust the project hook before it runs; installation does not grant trust. Other hooks, user configuration, and `notify` are preserved. Project-local hook installation is currently Windows-only; existing Claude session hooks remain available through the launch selector.
+
+After upgrading from 0.2.0, the existing Winmux terminal daemon keeps its running sessions and older capabilities. Closing the window does not replace that daemon. Native controls show an upgrade notice until you have finished your terminal work, explicitly stopped those sessions and their Winmux daemon, and started the new version. Test instances use separate data directories and pipes.
 
 `horizontal` places panes side by side; `vertical` stacks them. `send` sends literal terminal input and appends carriage return only with `--enter`. Input can run commands in the actual target shell or interact with an agent TUI. Inspect the pane before sending. `key` supports Enter, Tab, Escape, Backspace, arrows, Home, End, Delete, PageUp, PageDown, and Ctrl+A through Ctrl+Z. Use `--` before literal text beginning with `--`, placing options such as `--enter` before that separator.
 

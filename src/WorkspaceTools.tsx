@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, CircleAlert, File, FileImage, FileText, Fold
 import { BrowserPanel } from './BrowserTabs';
 import { bridge, errorMessage, type Workspace } from './types';
 import { selectedPane } from './workspaceTabs';
+import { beginPreviewIntent, previewPresented } from './previewCoordinator';
 
 export type ToolTab = 'files' | 'git' | 'browser';
 interface Entry { name: string; path: string; type: 'directory' | 'file' | 'symlink'; size: number }
@@ -69,8 +70,15 @@ function FilesPanel({ workspace, active, paneId, cwd }: { workspace: Workspace; 
     }
     const request = ++latestRead.current, epoch = generation.current;
     const valid = () => alive.current && epoch === generation.current && request === latestRead.current;
+    const previewIntent = beginPreviewIntent(`files:${workspace.id}:${paneId ?? 'workspace'}`, epoch);
     setSelected(entry.path); setReading(true); setContent(null); setError('');
-    try { const result = await bridge().call<FileContent>('files.read', { workspaceId: workspace.id, paneId, path: entry.path }); if (valid()) setContent(result); }
+    try {
+      const result = await bridge().call<FileContent>('files.read', { workspaceId: workspace.id, paneId, path: entry.path });
+      if (valid()) {
+        setContent(result);
+        previewPresented(previewIntent);
+      }
+    }
     catch (error) { if (valid()) setError(errorMessage(error)); }
     finally { if (valid()) setReading(false); }
   }

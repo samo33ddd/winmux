@@ -3,7 +3,7 @@ import { defaults, getPreferences, subscribePreferences, savePreferences, palett
 import { SettingsDialog } from './SettingsDialog';
 import { BrandMark } from './BrandMark';
 import { AgentStatus, activityLabel, agentName } from './AgentStatus';
-import { activeTab, paneIds, paneTab, selectedPane, terminalTabs } from './workspaceTabs';
+import { activeTab, paneIds, paneTab, selectedPane, terminalTabLabel, terminalTabs } from './workspaceTabs';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { ResizeHandle, usePanelWidth } from './ResizeHandle';
 import { Bell, Check, ChevronDown, CircleAlert, Folder, FolderOpen, GitBranch, Globe, Keyboard, Minus, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Search, Settings2, SplitSquareHorizontal, SplitSquareVertical, Sun, TerminalSquare, X } from 'lucide-react';
@@ -11,9 +11,11 @@ import { ConfirmClose, CreateWorkspace, Modal, RenameWorkspace, profileLabel } f
 import { WorkspaceView } from './WorkspaceView';
 import { WorkspaceTools, type ToolTab } from './WorkspaceTools';
 import type { TerminalHandle } from './TerminalPane';
+import { subscribePreviewError } from './previewCoordinator';
 import { bridge, errorMessage, type Direction, type Environment, type Pane, type Settings, type State, type TerminalTab, type Workspace } from './types';
 
 type Dialog = { type: 'create' } | { type: 'rename'; workspace: Workspace } | { type: 'settings' } | { type: 'shortcuts' } | { type: 'close-pane'; pane: Pane } | { type: 'close-tab'; workspaceId: string; tab: TerminalTab } | { type: 'close-workspace'; workspace: Workspace } | null;
+type BannerError = { message: string; previewToken?: number };
 const agentHooksStorageKey = 'winmux.agent-status-hooks';
 function readAgentHooksPreference() {
   try { return localStorage.getItem(agentHooksStorageKey) !== 'false'; }
@@ -25,7 +27,8 @@ export default function App() {
   const shortcuts = [ [t('Новая вкладка терминала'), 'Ctrl+T'], [t('Следующая вкладка терминала'), 'Ctrl+Tab'], [t('Предыдущая вкладка терминала'), 'Ctrl+Shift+Tab'], [t("Новое пространство"), 'Ctrl+Shift+N'], [t("Разделить слева направо"), 'Ctrl+Shift+D'], [t("Разделить сверху вниз"), 'Ctrl+Shift+E'], [t("Закрыть панель"), 'Ctrl+Shift+W'], [t("Поиск в терминале"), 'Ctrl+Shift+F'], [t("Копировать выделенное"), 'Ctrl+Shift+C'], [t("Вставить"), 'Ctrl+Shift+V'], [t("Развернуть панель"), 'Ctrl+Shift+Enter'], [t("Перейти к соседней панели"), t("Alt+стрелки")], [t("Последнее непрочитанное уведомление"), 'Ctrl+Shift+U'], [t("Настройки"), 'Ctrl+,'] ];
   const [state, setState] = useState<State | null>(null);
   const [environment, setEnvironment] = useState<Environment | null>(null);
-  const [error, setError] = useState(''); const [loading, setLoading] = useState(true); const [reload, setReload] = useState(0);
+  const [error, setBannerError] = useState<BannerError | null>(null); const [loading, setLoading] = useState(true); const [reload, setReload] = useState(0);
+  const setError = useCallback((message: string) => setBannerError(message ? { message } : null), []);
   const [activeWorkspaceId, setActiveWorkspace] = useState<string>();
   const [activePanes, setActivePanes] = useState<Record<string, string>>({});
   const [zoomed, setZoomed] = useState<Record<string, string | undefined>>({});
@@ -53,10 +56,16 @@ export default function App() {
   const activePane = workspace ? selectedPane(workspace, activePanes) : undefined;
   const tabsAvailable = environment?.capabilities?.terminalTabs === true;
   const hooksAvailable = environment?.capabilities?.sessionAgentHooks === true && environment.agents?.some(agent => agent.available && Boolean(agent.hookAdapter));
+  const nativeCodex = environment?.capabilities?.nativeCodex === true;
   const preferences = useSyncExternalStore(subscribePreferences, getPreferences, getPreferences);
   const settings: Settings = { ...defaults, ...state?.settings, ...preferences, fontSize:state?.settings.fontSize ?? 14, theme:preferences.theme ?? state?.settings.theme ?? 'dark' };
   const current = useRef({ workspace, activePane, dialog, notificationsOpen, switcherOpen }); current.current = { workspace, activePane, dialog, notificationsOpen, switcherOpen };
   const reportError = useCallback((message: string) => setError(message), []);
+  useEffect(() => subscribePreviewError(event => setBannerError(current => (
+    event.type === 'set'
+      ? { message:event.message, previewToken:event.token }
+      : current?.previewToken === event.token ? null : current
+  ))), []);
   useEffect(() => {
     if (!switcherOpen) return;
     const close = (event: Event) => {
@@ -189,7 +198,7 @@ export default function App() {
       const cwd = source?.profileId === profileId ? source.cwd : profile?.cwd ?? (profile?.environment === 'wsl' ? '~' : environment?.defaultCwd);
       const created = await bridge().call<TerminalTab>('tab.create', {
         workspaceId: owner.id, sourcePaneId: source?.id, profileId, cwd,
-        ...(agent ? { agentId: agent.id, title: agent.label, agentHooks: Boolean(agentHooks && hooksAvailable && agent.hookAdapter) } : {}),
+        ...(agent ? { agentId: agent.id, title: agent.label, titleMode: 'auto' as const, agentHooks: Boolean(agentHooks && hooksAvailable && agent.hookAdapter) } : {}),
       });
       const next = await refresh();
       const updated = next.workspaces.find(item => item.id === owner.id);
@@ -271,9 +280,10 @@ export default function App() {
   }, []);
   const profiles = environment?.profiles ?? [];
   const unread = state?.notifications.filter(item => !item.read).length ?? 0;
+  const tabLabel = (owner: Workspace, tab: TerminalTab) => terminalTabLabel(owner, terminalTabs(owner).find(item => item.id === tab.id) ?? tab, activePanes, profiles);
   return <div className={`app-shell ${sidebarOpen ? '' : 'sidebar-hidden'}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--tools-width':`${effectiveToolsWidth}px`} as CSSProperties}>
     <aside className={`sidebar ${sidebarExpanded ? 'expanded' : 'rail'}`} data-testid="workspace-rail" aria-label={t("Рабочие пространства")}>
-      <div className="sidebar-heading"><div className="wordmark"><BrandMark />{sidebarExpanded && <span>winmux</span>}</div>{sidebarExpanded && <button className="icon-button" title={t("Новое пространство (Ctrl+Shift+N)")} aria-label={t("Новое рабочее пространство")} data-testid="new-workspace" disabled={!environment || loading} onClick={() => setDialog({ type: 'create' })}><Plus /></button>}</div>
+      <div className="sidebar-heading"><div className="sidebar-brand"><div className="wordmark"><BrandMark />{sidebarExpanded && <span>winmux</span>}</div><button className="icon-button sidebar-expand" data-testid="sidebar-expand" aria-pressed={sidebarExpanded} aria-label={sidebarExpanded ? t('Скрыть названия пространств') : t('Показать названия пространств')} title={sidebarExpanded ? t('Скрыть названия пространств') : t('Показать названия пространств')} onClick={() => setSidebarWidth(sidebarExpanded ? 60 : 240)}>{sidebarExpanded ? <PanelLeftClose /> : <PanelLeftOpen />}</button></div>{sidebarExpanded && <button className="icon-button" title={t("Новое пространство (Ctrl+Shift+N)")} aria-label={t("Новое рабочее пространство")} data-testid="new-workspace" disabled={!environment || loading} onClick={() => setDialog({ type: 'create' })}><Plus /></button>}</div>
       <nav className="workspace-list">
         {state?.workspaces.map(item => {
           const unreadWorkspace = state.notifications.some(notice => notice.workspaceId === item.id && !notice.read);
@@ -301,7 +311,6 @@ export default function App() {
         <button className={`sidebar-action ${notificationsOpen ? 'active' : ''}`} data-testid="notifications-toggle" aria-expanded={notificationsOpen} aria-label={t("Уведомления")} title={t("Уведомления")} onClick={() => setNotificationsOpen(value => !value)}><Bell />{sidebarExpanded && <span>{t("Уведомления")}</span>}{unread > 0 && <span className="unread-badge" aria-label={t("{0} непрочитанных", unread)}>{unread}</span>}</button>
         <button className="sidebar-action" data-testid="settings-open" aria-label={t("Настройки")} title={t("Настройки")} onClick={() => setDialog({ type: 'settings' })}><Settings2 />{sidebarExpanded && <><span>{t("Настройки")}</span><span className="shortcut-hint">Ctrl+,</span></>}</button>
         <button className="sidebar-action" aria-label={t("Горячие клавиши")} title={t("Горячие клавиши")} onClick={() => setDialog({ type: 'shortcuts' })}><Keyboard />{sidebarExpanded && <span>{t("Горячие клавиши")}</span>}</button>
-        <button className="sidebar-action" data-testid="sidebar-expand" aria-pressed={sidebarExpanded} aria-label={sidebarExpanded ? t('Скрыть названия пространств') : t('Показать названия пространств')} title={sidebarExpanded ? t('Скрыть названия пространств') : t('Показать названия пространств')} onClick={() => setSidebarWidth(sidebarExpanded ? 60 : 240)}>{sidebarExpanded ? <PanelLeftClose /> : <PanelLeftOpen />}</button>
       </div>
     </aside>
     {sidebarOpen && <ResizeHandle value={sidebarWidth} min={56} max={420} label={t('Ширина списка пространств')} testId="sidebar-resize" onChange={setSidebarWidth} />}
@@ -324,10 +333,13 @@ export default function App() {
           const index=tabs.indexOf(event.target as HTMLButtonElement), next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
           event.preventDefault(); tabs[next]?.click(); tabs[next]?.focus();
         }}>
-          {workspace && terminalTabs(workspace).map(tab=><div key={tab.id} className={`workspace-top-tab ${activeTab(workspace).id===tab.id?'selected':''}`}>
-            <button id={`terminal-tab-${tab.id}`} role="tab" aria-selected={activeTab(workspace).id===tab.id} aria-controls={`terminal-panel-${workspace.id}`} tabIndex={activeTab(workspace).id===tab.id?0:-1} data-testid="terminal-tab" data-tab-id={tab.id} data-workspace-id={workspace.id} title={tab.title} onClick={event=>void selectTerminalTab(workspace.id,tab.id,undefined,event.detail > 0)}><TerminalSquare /><span>{tab.title}</span>{state?.notifications.some(notice => !notice.read && paneIds(tab.root).includes(notice.paneId)) && <span className="unread-dot" aria-label={t('Есть непрочитанные уведомления')} />}</button>
-            <button className="icon-button" data-testid="terminal-tab-close" data-tab-id={tab.id} disabled={!tabsAvailable} aria-label={t('Закрыть вкладку {0}',tab.title)} title={t('Закрыть вкладку и её терминалы')} onClick={()=>setDialog({type:'close-tab',workspaceId:workspace.id,tab})}><X /></button>
-          </div>)}
+          {workspace && terminalTabs(workspace).map(tab => {
+            const label = tabLabel(workspace, tab);
+            return <div key={tab.id} className={`workspace-top-tab ${activeTab(workspace).id===tab.id?'selected':''}`}>
+            <button id={`terminal-tab-${tab.id}`} role="tab" aria-selected={activeTab(workspace).id===tab.id} aria-controls={`terminal-panel-${workspace.id}`} tabIndex={activeTab(workspace).id===tab.id?0:-1} data-testid="terminal-tab" data-tab-id={tab.id} data-workspace-id={workspace.id} title={label} onClick={event=>void selectTerminalTab(workspace.id,tab.id,undefined,event.detail > 0)}><TerminalSquare /><span>{label}</span>{state?.notifications.some(notice => !notice.read && paneIds(tab.root).includes(notice.paneId)) && <span className="unread-dot" aria-label={t('Есть непрочитанные уведомления')} />}</button>
+            <button className="icon-button" data-testid="terminal-tab-close" data-tab-id={tab.id} disabled={!tabsAvailable} aria-label={t('Закрыть вкладку {0}',label)} title={t('Закрыть вкладку и её терминалы')} onClick={()=>setDialog({type:'close-tab',workspaceId:workspace.id,tab})}><X /></button>
+          </div>;
+          })}
         </div>
         <div className="header-launch">
         <button className="icon-button" data-testid="new-terminal-tab" title={t('Новая вкладка терминала (Ctrl+T)')} aria-label={t('Новая вкладка терминала')} disabled={!workspace || !tabsAvailable || working || loading} onClick={()=>void createTerminalTab()}><Plus /></button>
@@ -351,7 +363,7 @@ export default function App() {
         </div>
       </header>
       {environment && !tabsAvailable && <div className="upgrade-notice" role="status" data-testid="daemon-upgrade-notice"><CircleAlert /><p><strong>{t('Для новых вкладок и запуска агентов требуется обновление сессии.')}</strong> {t('Текущие терминалы продолжают работать. Когда будете готовы, завершите все сессии и откройте Winmux снова. Закрытие окна или перезагрузка интерфейса не обновляет фоновый процесс.')}</p></div>}
-      {error && <div className="error-banner" role="alert"><CircleAlert /><span>{error}</span><button className="text-button" onClick={() => setReload(value => value + 1)}>{t("Переподключить")}</button><button className="icon-button" aria-label={t("Скрыть ошибку")} onClick={() => setError('')}><X /></button></div>}
+      {error && <div className="error-banner" role="alert"><CircleAlert /><span>{error.message}</span><button className="text-button" onClick={() => setReload(value => value + 1)}>{t("Переподключить")}</button><button className="icon-button" aria-label={t("Скрыть ошибку")} onClick={() => setError('')}><X /></button></div>}
       <div className="workbench">
       <div className="workspace-stage" aria-busy={loading || working}>
         {state?.workspaces.map(item => <WorkspaceView key={item.id} workspace={item} settings={settings} visible={workspace?.id === item.id} activePane={selectedPane(item, activePanes)?.id} zoomed={zoomed[item.id]} unreadPaneIds={state.notifications.filter(notice => !notice.read && notice.workspaceId === item.id).map(notice => notice.paneId)} register={register} onFocus={focusPane} onSplit={(id, direction) => void split(id, direction)} onClose={closePane} onZoom={toggleZoom} onRatio={saveRatio} onError={reportError} />)}
@@ -369,9 +381,9 @@ export default function App() {
     {dialog?.type === 'create' && environment && <CreateWorkspace environment={environment} defaultAgentHooks={agentHooks} onClose={() => setDialog(null)} onCreate={async values => { const created = await bridge().call<Workspace>('workspace.create', values); await refresh(); selectWorkspace(created.id, created.panes[0]?.id); }} />}
     {dialog?.type === 'rename' && <RenameWorkspace name={dialog.workspace.name} onClose={() => setDialog(null)} onSave={async name => { await bridge().call('workspace.rename', { workspaceId: dialog.workspace.id, name }); }} />}
     {dialog?.type === 'close-pane' && <ConfirmClose title={t("Закрыть терминал?")} description={t("Панель «{0}» будет закрыта. {1}", dialog.pane.title, dialog.pane.status === 'running' ? t("Запущенный процесс и его дочерние процессы будут завершены. Несохранённая работа может быть потеряна.") : t("Процесс уже завершён."))} onClose={() => setDialog(null)} onConfirm={async () => { await bridge().call('pane.close', { paneId: dialog.pane.id }); }} />}
-    {dialog?.type === 'close-tab' && <ConfirmClose title={t('Закрыть вкладку терминала?')} description={t('Все терминалы вкладки «{0}» будут закрыты, их процессы — завершены. Остальные вкладки сохранятся.', dialog.tab.title)} onClose={() => setDialog(null)} onConfirm={async () => { await bridge().call('tab.close', { workspaceId: dialog.workspaceId, tabId: dialog.tab.id }); await refresh(); }} />}
+    {dialog?.type === 'close-tab' && <ConfirmClose title={t('Закрыть вкладку терминала?')} description={t('Все терминалы вкладки «{0}» будут закрыты, их процессы — завершены. Остальные вкладки сохранятся.', (owner => owner ? tabLabel(owner, dialog.tab) : dialog.tab.title)(state?.workspaces.find(item => item.id === dialog.workspaceId)))} onClose={() => setDialog(null)} onConfirm={async () => { await bridge().call('tab.close', { workspaceId: dialog.workspaceId, tabId: dialog.tab.id }); await refresh(); }} />}
     {dialog?.type === 'close-workspace' && <ConfirmClose title={t("Закрыть рабочее пространство?")} description={t("Все терминалы пространства «{0}» будут закрыты, их процессы — завершены. Чтобы сохранить сессии, просто закройте окно приложения.", dialog.workspace.name)} onClose={() => setDialog(null)} onConfirm={async () => { await bridge().call('workspace.close', { workspaceId: dialog.workspace.id }); }} />}
     {dialog?.type === 'shortcuts' && <Modal title={t("Горячие клавиши")} onClose={() => setDialog(null)}><div className="shortcut-list">{shortcuts.map(([label, key]) => <div key={key}><span>{label}</span><kbd>{key}</kbd></div>)}</div><p className="dialog-footnote">{t("Ctrl+C остаётся прерыванием процесса в терминале. Двойное нажатие на разделитель выравнивает панели.")}</p></Modal>}
-    {dialog?.type === 'settings' && <SettingsDialog settings={settings} profiles={profiles} workspaces={state?.workspaces ?? []} activeWorkspaceId={workspace?.id} agentHooks={agentHooks} agentHooksAvailable={Boolean(hooksAvailable)} onAgentHooksChange={updateAgentHooks} onSkillStarted={async(workspaceId,paneId)=>{await refresh();selectWorkspace(workspaceId,paneId);setDialog(null);}} onChange={updateSettings} onClose={() => setDialog(null)} />}
+    {dialog?.type === 'settings' && <SettingsDialog settings={settings} profiles={profiles} workspaces={state?.workspaces ?? []} activeWorkspaceId={workspace?.id} agentHooks={agentHooks} agentHooksAvailable={Boolean(hooksAvailable)} nativeCodex={nativeCodex} onAgentHooksChange={updateAgentHooks} onSkillStarted={async(workspaceId,paneId)=>{await refresh();selectWorkspace(workspaceId,paneId);setDialog(null);}} onChange={updateSettings} onClose={() => setDialog(null)} />}
   </div>;
 }

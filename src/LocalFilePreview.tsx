@@ -3,6 +3,7 @@ import { Maximize2, Minimize2 } from 'lucide-react';
 import { Modal } from './Dialogs';
 import { t } from './i18n';
 import { bridge, type FilePreviewEvent } from './types';
+import { previewPresented } from './previewCoordinator';
 
 function sizeLabel(size: number) {
   if (size < 1024) return t('{0} Б', size);
@@ -17,6 +18,7 @@ export function LocalFilePreview() {
   useEffect(() => {
     const unsubscribe = bridge().onEvent(event => {
       if (event.type !== 'file-preview') return;
+      previewPresented();
       setActualSize(false);
       setPreview(event);
     });
