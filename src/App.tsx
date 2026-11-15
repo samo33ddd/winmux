@@ -2,7 +2,7 @@ import { t, subscribeLanguage, getLanguage, dateLocale } from './i18n';
 import { defaults, getPreferences, subscribePreferences, savePreferences, paletteFor } from './appearance';
 import { SettingsDialog } from './SettingsDialog';
 import { BrandMark } from './BrandMark';
-import { AgentStatus, activityLabel, agentName } from './AgentStatus';
+import { AgentStatus, activityLabel, agentActionLabel, agentName } from './AgentStatus';
 import { activeTab, paneIds, paneTab, selectedPane, terminalTabLabel, terminalTabs } from './workspaceTabs';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { ResizeHandle, usePanelWidth } from './ResizeHandle';
@@ -290,7 +290,7 @@ export default function App() {
           const agents = item.panes.filter(pane => agentName(pane));
           const selected = selectedPane(item, activePanes);
           const described = agents.length ? agents : selected ? [selected] : [];
-          const agentLabel = described.map(pane => [agentName(pane), activityLabel(pane)].filter(Boolean).join(' · ')).join('\n');
+          const agentLabel = described.map(pane => [agentName(pane), activityLabel(pane), agentActionLabel(pane)].filter(Boolean).join(' · ')).join('\n');
           const summary = [item.name, profileLabel(profiles, selected?.profileId ?? item.profileId), agentLabel, t('Терминалов: {0}', item.panes.length), settings.showWorkspacePaths ? (selected?.cwd ?? item.cwd) : ''].filter(Boolean).join('\n');
           const badge = (selected && agentName(selected) ? selected : agents[0]);
           return <div key={item.id} className={`workspace-row ${workspace?.id === item.id ? 'selected' : ''}`}>
@@ -298,7 +298,7 @@ export default function App() {
               <span className="workspace-glyph" aria-hidden="true">{item.name.trim().charAt(0).toUpperCase() || 'W'}</span>
               <span className="sr-only">{item.name} {agentLabel}</span>
               {sidebarExpanded && <span className="workspace-copy"><span className="workspace-name"><span>{item.name}</span>{unreadWorkspace && <span className="unread-dot" aria-label={t("Есть непрочитанные уведомления")} />}</span><span className="workspace-profile"><span>{profileLabel(profiles, selected?.profileId ?? item.profileId)}</span><span className="workspace-pane-count">{item.panes.length}</span></span>{settings.showWorkspacePaths && <span className="workspace-path">{selected?.cwd ?? item.cwd}</span>}{agents.map(pane => <span key={pane.id} className="workspace-agent"><AgentStatus pane={pane} /></span>)}</span>}
-              {!sidebarExpanded && badge && <span className={`rail-agent-state activity-${badge.agentState ?? 'unknown'}`} title={`${agentName(badge)} · ${activityLabel(badge)}`} />}
+              {!sidebarExpanded && badge && <span className={`rail-agent-state activity-${badge.agentState ?? 'unknown'}`} title={[agentName(badge), activityLabel(badge), agentActionLabel(badge)].filter(Boolean).join(' · ')} />}
               {!sidebarExpanded && unreadWorkspace && <span className="unread-dot rail-unread" aria-label={t("Есть непрочитанные уведомления")} />}
             </button>
             {sidebarExpanded && <button className="icon-button workspace-close" aria-label={t("Закрыть пространство {0}", item.name)} title={t("Закрыть пространство и завершить процессы")} onClick={() => setDialog({ type: 'close-workspace', workspace: item })}><X /></button>}

@@ -4,6 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { promisify } = require('node:util');
 const execFileAsync = promisify(execFile);
+const { createActivityTracker } = require('./agent-activity.cjs');
+const { findPrimaryAgents } = require('./agent-processes.cjs');
 
 // Native worker owns electron/codex-daemon.cjs and must export:
 //   connectReadonly(options?) -> Promise<CodexReadonlyClient>
@@ -106,8 +108,13 @@ function loadedRoots(threads, loadedIds) {
 
 function decoratePanes(panes, processes) {
   return (panes || []).map(pane => {
-    const descendants = pane?.status === 'running' ? findCodexDescendants(pane.pid, processes) : [];
-    return { ...pane, codexPid: descendants[0] || null, codexCount: descendants.length };
+    const primary = pane?.status === 'running' ? findPrimaryAgents(pane.pid, processes) : [];
+    const codexRoots = primary.filter(agent => agent.agentId === 'codex');
+    return {
+      ...pane,
+      codexPid: codexRoots.length ? codexRoots[0].pid : null,
+      codexCount: codexRoots.length ? primary.length : 0,
+    };
   });
 }
 
@@ -187,7 +194,7 @@ function matchHook({ agentId, event, sessionId, cwd, paneId, panes, threads, loa
 }
 
 async function windowsProcessTable() {
-  const script = "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); Get-CimInstance -ClassName Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress -Depth 3";
+  const script = "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); Get-CimInstance -ClassName Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine,@{Name='CreatedAt';Expression={if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') }}} | ConvertTo-Json -Compress -Depth 3";
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   const { stdout } = await execFileAsync('powershell.exe', ['-NoLogo', '-NoProfile', '-EncodedCommand', encoded], {
     windowsHide: true, timeout: 8000, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8',
@@ -196,6 +203,7 @@ async function windowsProcessTable() {
   return (Array.isArray(parsed) ? parsed : [parsed]).map(row => ({
     pid: Number(row.ProcessId), ppid: Number(row.ParentProcessId), name: row.Name || '',
     executable: row.ExecutablePath || '', commandLine: row.CommandLine || '',
+    createdAt: typeof row.CreatedAt === 'string' && Number.isFinite(Date.parse(row.CreatedAt)) ? new Date(row.CreatedAt).toISOString() : '',
   })).filter(row => Number.isInteger(row.pid) && row.pid > 0 && Number.isInteger(row.ppid));
 }
 
@@ -234,8 +242,11 @@ function connectReadonly(options = {}) {
     onNotification(listener) {
       const status = payload => listener({ method: 'thread/status/changed', params: payload });
       const turn = payload => listener({ method: 'turn/completed', params: { threadId: payload.threadId, turn: { status: payload.status } } });
-      daemon.on('status', status); daemon.on('turn', turn);
-      return () => { daemon.off('status', status); daemon.off('turn', turn); };
+      const forward = message => {
+        if (['item/started', 'item/completed', 'turn/started', 'turn/completed'].includes(message?.method)) listener(message);
+      };
+      daemon.on('status', status); daemon.on('turn', turn); daemon.on('notification', forward);
+      return () => { daemon.off('status', status); daemon.off('turn', turn); daemon.off('notification', forward); };
     },
     close() { daemon.dispose(); },
   };
@@ -269,6 +280,30 @@ function createController(options = {}) {
   let daemon = null;
   let connection = 'disconnected', connectionReason = 'starting';
   let threads = [], loadedIds = [], processes = [], plans = [];
+  const activities = new Map();
+  const closedTurns = new Set();
+  const activityKey = thread => `${thread.id}\0${thread.sessionId || ''}`;
+  function activityFor(plan) {
+    const key = activityKey(plan.thread);
+    let record = activities.get(key);
+    if (!record) {
+      record = { paneId: plan.paneId, turnId: '', tracker: createActivityTracker() };
+      activities.set(key, record);
+    }
+    return record;
+  }
+  function dropActivities(predicate) {
+    for (const [key, record] of [...activities]) {
+      if (!predicate(key, record)) continue;
+      record.tracker.clear();
+      activities.delete(key);
+    }
+  }
+  function rememberClosed(turnId) {
+    if (typeof turnId !== 'string' || !turnId) return;
+    closedTurns.add(turnId);
+    while (closedTurns.size > 256) closedTurns.delete(closedTurns.values().next().value);
+  }
   function snapshot() {
     return {
       connection, reason: connectionReason,
@@ -284,7 +319,10 @@ function createController(options = {}) {
   }
   function handleNotification(message) {
     const method = message?.method, params = message?.params || {};
+    if (method === 'item/started' || method === 'item/completed') return observeItem(params, method === 'item/completed' ? 'end' : 'start');
+    if (method === 'turn/started') return observeTurn(params, true);
     if (method === 'turn/completed') {
+      observeTurn(params, false);
       const state = stateAfterTurn(params.turn);
       const plan = plans.find(item => item.thread?.id === params.threadId && (item.action === 'auto' || item.action === 'keep'));
       if (!state || !plan) return;
@@ -302,6 +340,67 @@ function createController(options = {}) {
       options.apply?.(plan.paneId, identity(plan.thread, state, plan.action === 'keep' ? 'explicit' : 'auto'));
     }
   }
+  function exactPlan(threadId) {
+    if (typeof threadId !== 'string' || !threadId) return null;
+    const matches = plans.filter(item => item.thread?.id === threadId && (item.action === 'auto' || item.action === 'keep'));
+    return matches.length === 1 ? matches[0] : null;
+  }
+  function publishActivity(plan) {
+    const pane = (options.panes?.() || []).find(item => item.id === plan.paneId);
+    if (!pane || pane.agentThreadId !== plan.thread.id || (pane.agentSessionId || '') !== (plan.thread.sessionId || '')
+      || !['auto', 'explicit'].includes(pane.agentBinding)) return;
+    const binding = plan.action === 'keep' || pane.agentBinding === 'explicit' ? 'explicit' : 'auto';
+    options.apply?.(plan.paneId, identity(plan.thread, pane.agentState || plan.state, binding));
+  }
+  function alignRecord(record, plan) {
+    if (record.paneId === plan.paneId) return;
+    record.tracker.clear();
+    record.paneId = plan.paneId;
+    record.turnId = '';
+  }
+  function observeTurn(params, started) {
+    const plan = exactPlan(params.threadId);
+    const turnId = params.turn?.id;
+    if (!plan || typeof turnId !== 'string' || !turnId) return;
+    const record = activityFor(plan);
+    alignRecord(record, plan);
+    if (!started) {
+      rememberClosed(turnId);
+      if (record.turnId === turnId) { record.tracker.clear(); record.turnId = ''; publishActivity(plan); }
+      return;
+    }
+    if (closedTurns.has(turnId)) return;
+    if (record.turnId !== turnId) { record.tracker.clear(); record.turnId = turnId; publishActivity(plan); }
+  }
+  function classifyItem(item) {
+    const type = item?.type;
+    if (type === 'reasoning') return 'thinking';
+    if (type === 'commandExecution') return 'command';
+    if (type === 'fileChange') return 'editing';
+    if (type === 'webSearch') return 'searching';
+    if (type === 'collabAgentToolCall' || type === 'subAgentActivity') return 'delegating';
+    if (type === 'imageView') return 'reading';
+    if (type === 'mcpToolCall' && typeof item.tool === 'string') return { toolName: item.tool };
+    if (type === 'dynamicToolCall' && typeof item.tool === 'string') {
+      return { toolName: typeof item.namespace === 'string' && item.namespace ? `${item.namespace}/${item.tool}` : item.tool };
+    }
+    return null;
+  }
+  function observeItem(params, phase) {
+    const plan = exactPlan(params.threadId);
+    const item = params.item;
+    const kind = classifyItem(item);
+    if (!plan || !kind || typeof params.turnId !== 'string' || !params.turnId || typeof item?.id !== 'string' || !item.id) return;
+    if (closedTurns.has(params.turnId)) return;
+    const record = activityFor(plan);
+    alignRecord(record, plan);
+    if (record.turnId && record.turnId !== params.turnId) record.tracker.clear();
+    record.turnId = params.turnId;
+    record.tracker.update({
+      phase, toolId: `${params.turnId}:${item.id}`, toolName: kind.toolName, activity: kind.toolName ? undefined : kind,
+    });
+    if (record.turnId === params.turnId) publishActivity(plan);
+  }
   async function ensure() {
     if (client || stopped) return;
     if (!connect) {
@@ -311,7 +410,7 @@ function createController(options = {}) {
         daemon.on('unavailable', () => {
           if (daemon !== currentDaemon) return;
           connection = 'disconnected'; connectionReason = 'unavailable';
-          threads = []; loadedIds = []; plans = [];
+          threads = []; loadedIds = []; plans = []; dropActivities(() => true);
         });
         daemon.on('status', payload => handleNotification({ method: 'thread/status/changed', params: payload }));
         daemon.on('turn', payload => handleNotification({ method: 'turn/completed', params: { threadId: payload.threadId, turn: { status: payload.status } } }));
@@ -331,6 +430,7 @@ function createController(options = {}) {
     } catch (error) {
       client = null; connection = 'disconnected';
       connectionReason = error.code === 'ADAPTER_MISSING' ? 'adapter-missing' : 'unavailable';
+      dropActivities(() => true);
     }
   }
   async function refresh() {
@@ -341,7 +441,14 @@ function createController(options = {}) {
       try {
         processes = rawPanes.some(pane => pane.status === 'running' && pane.pid) ? await listProcesses() : [];
       } catch { processes = []; }
+      try { options.onProcesses?.(processes); }
+      catch { try { options.onProcesses?.([]); } catch { /* Shared detection stays optional. */ } }
+      const observedPanes = options.panes?.() || rawPanes;
       const decorated = decoratePanes(rawPanes, processes);
+      const currentPanes = observedPanes.map(pane => {
+        const detected = decorated.find(item => item.id === pane.id);
+        return detected ? { ...detected, ...pane, pid: detected.pid, status: detected.status, codexPid: detected.codexPid, codexCount: detected.codexCount } : pane;
+      });
       const cwds = [...new Set(decorated.filter(pane => pane.codexPid).map(pane => pane.cwd).filter(cwd => typeof cwd === 'string' && cwd))];
       let daemonAvailable = false;
       if (client) {
@@ -361,6 +468,7 @@ function createController(options = {}) {
           daemonAvailable = true;
         } catch {
           connection = 'disconnected'; connectionReason = 'unavailable'; threads = []; loadedIds = [];
+          dropActivities(() => true);
           try { await client.close?.(); } catch { /* The proxy process is ours; the user daemon stays up. */ }
           try { daemon?.dispose?.(); } catch { /* dispose is idempotent */ }
           unsubscribe?.(); unsubscribe = null; client = null;
@@ -368,7 +476,9 @@ function createController(options = {}) {
         }
       }
       if (daemonAvailable) {
-        plans = planBindings({ panes: decorated, threads, loadedIds });
+        plans = planBindings({ panes: currentPanes, threads, loadedIds });
+        const live = new Set(plans.filter(plan => plan.thread && (plan.action === 'auto' || plan.action === 'keep')).map(plan => activityKey(plan.thread)));
+        dropActivities(key => !live.has(key));
         for (const plan of plans) {
           if (plan.action === 'auto' || plan.action === 'keep') options.apply?.(plan.paneId, identity(plan.thread, plan.state, plan.action === 'keep' ? 'explicit' : 'auto'));
           else if (plan.action === 'stale') options.apply?.(plan.paneId, processIdentity());
@@ -376,20 +486,23 @@ function createController(options = {}) {
           else if (plan.action === 'ambiguous') options.apply?.(plan.paneId, processIdentity());
         }
       } else {
-        plans = decorated.filter(pane => pane.codexPid).map(pane => ({ paneId: pane.id, action: 'unknown', candidates: [], state: 'unknown' }));
+        dropActivities(() => true);
+        plans = currentPanes.filter(pane => pane.codexPid).map(pane => ({ paneId: pane.id, action: 'unknown', candidates: [], state: 'unknown' }));
         for (const plan of plans) options.apply?.(plan.paneId, processIdentity());
       }
     })().finally(() => { refreshing = null; });
     return refreshing;
   }
   function identity(thread, state, binding) {
+    const pane = (options.panes?.() || []).find(item => item.agentThreadId === thread.id && ['auto', 'explicit'].includes(item.agentBinding));
+    const record = pane && (pane.agentSessionId || '') === (thread.sessionId || '') ? activities.get(activityKey(thread)) : null;
     return {
       agentId: 'codex', agentLabel: 'Codex', agentThreadId: thread.id, agentSessionId: thread.sessionId || '',
-      agentBinding: binding, agentState: state,
+      agentBinding: binding, agentState: state, agentActivity: state === 'running' && record ? record.tracker.current() : null,
     };
   }
   function processIdentity() {
-    return { agentId: 'codex', agentLabel: 'Codex', agentThreadId: '', agentSessionId: '', agentBinding: '', agentState: 'unknown' };
+    return { agentId: 'codex', agentLabel: 'Codex', agentThreadId: '', agentSessionId: '', agentBinding: '', agentState: 'unknown', agentActivity: null };
   }
   return {
     start() {
@@ -402,6 +515,7 @@ function createController(options = {}) {
     async stop() {
       stopped = true; clearInterval(timer); timer = null;
       unsubscribe?.(); unsubscribe = null;
+      dropActivities(() => true);
       const current = client; client = null; connection = 'disconnected'; connectionReason = 'stopped';
       const currentDaemon = daemon; daemon = null;
       try { await current?.close?.(); } catch { /* Closing the proxy must not affect the user daemon. */ }
@@ -424,7 +538,12 @@ function createController(options = {}) {
       await refresh();
       const match = matchHook({ ...input, panes: decoratePanes(options.panes?.() || [], processes), threads, loadedIds });
       if (match.action !== 'apply') return { applied: false, reason: match.reason };
-      options.apply?.(match.paneId, match.thread ? identity(match.thread, match.state, 'auto') : { agentState: match.state });
+      const plan = plans.find(item => item.paneId === match.paneId && item.thread && (item.action === 'auto' || item.action === 'keep'));
+      const record = plan ? activityFor(plan) : null;
+      if (record) alignRecord(record, plan);
+      if (record && input?.phase && typeof input.toolId === 'string') record.tracker.update({ phase: input.phase, toolId: input.toolId, toolName: input.toolName });
+      if (record && !['running', 'waiting'].includes(match.state)) { record.tracker.clear(); record.turnId = ''; }
+      options.apply?.(match.paneId, plan ? identity(plan.thread, match.state, plan.action === 'keep' ? 'explicit' : 'auto') : { agentState: match.state, agentActivity: null });
       return { applied: true, paneId: match.paneId, state: match.state };
     },
   };

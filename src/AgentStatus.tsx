@@ -1,4 +1,5 @@
 import { t } from './i18n';
+import { BookOpen, FilePenLine, TerminalSquare, Search, Globe, Network, Sparkles } from 'lucide-react';
 import type { Pane } from './types';
 
 export function agentName(pane: Pane): string | undefined {
@@ -18,14 +19,33 @@ export function activityLabel(pane: Pane): string {
   }
 }
 
+const actions = {
+  thinking: { label: 'Обрабатывает задачу', icon: Sparkles },
+  reading: { label: 'Читает файлы', icon: BookOpen },
+  editing: { label: 'Изменяет файлы', icon: FilePenLine },
+  command: { label: 'Выполняет команду', icon: TerminalSquare },
+  searching: { label: 'Ищет информацию', icon: Search },
+  browser: { label: 'Работает с браузером', icon: Globe },
+  delegating: { label: 'Поручает работу агентам', icon: Network },
+};
+
+export function agentActionLabel(pane: Pane): string {
+  const action = pane.agentActivity && actions[pane.agentActivity];
+  return agentName(pane) && pane.agentState === 'running' && action ? t(action.label) : '';
+}
+
 export function AgentStatus({ pane, showName = true }: { pane: Pane; showName?: boolean }) {
   const name = agentName(pane), state = name ? pane.agentState ?? 'unknown' : pane.status;
   const label = activityLabel(pane), code = name ? pane.agentExitCode : pane.exitCode;
-  const details = [name, label, code !== undefined ? t('Код выхода: {0}', code) : '',
+  const actionLabel = agentActionLabel(pane);
+  const ActionIcon = pane.agentActivity && actions[pane.agentActivity]?.icon;
+  const details = [name, label, actionLabel, code !== undefined ? t('Код выхода: {0}', code) : '',
     name && state === 'unknown' ? t('Состояние оболочки не определяет активность агента.') : ''].filter(Boolean).join(' · ');
   return <span className="agent-metadata" data-testid="agent-metadata" data-agent-id={pane.agentId} data-agent-state={state} title={details}>
-    <span className={`activity-dot activity-${state}`} aria-hidden="true" />
-    {showName && name && <span className="agent-name">{name}</span>}
-    <span className="agent-state">{label}{code !== undefined ? ` (${code})` : ''}</span>
+    <span className="agent-status-line"><span className={`activity-dot activity-${state}`} aria-hidden="true" />
+      {showName && name && <span className="agent-name">{name}</span>}
+      <span className="agent-state">{label}{code !== undefined ? ` (${code})` : ''}</span>
+    </span>
+    {actionLabel && ActionIcon && <span className="agent-action" data-testid="agent-action"><ActionIcon aria-hidden="true" /><span>{actionLabel}</span></span>}
   </span>;
 }

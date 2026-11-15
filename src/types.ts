@@ -8,6 +8,7 @@ export interface Pane {
   status: 'running' | 'exited'; exitCode?: number; cols: number; rows: number;
   tabId?: string; agentId?: string; agentLabel?: string;
   agentState?: 'starting' | 'running' | 'waiting' | 'idle' | 'completed' | 'failed' | 'unknown'; agentExitCode?: number;
+  agentActivity?: 'thinking' | 'reading' | 'editing' | 'command' | 'searching' | 'browser' | 'delegating';
   agentThreadId?: string; agentBinding?: 'auto' | 'explicit';
 }
 export interface TerminalTab { id: string; title: string; titleMode?: 'auto' | 'custom'; root: LayoutNode }
