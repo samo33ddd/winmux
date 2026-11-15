@@ -3,7 +3,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { createController } = require('../electron/agent-integration.cjs');
-const { hookActivity } = require('../electron/backend/agent-status.cjs');
+const { hookActivity, claudeState } = require('../electron/backend/agent-status.cjs');
+const { claudeSettings } = require('../electron/backend/agent-hooks.cjs');
+const { createActivityTracker } = require('../electron/agent-activity.cjs');
 
 function fixture(overrides = {}) {
   const panes = [{ id: 'pane', pid: 100, status: 'running', cwd: 'E:/project', agentState: 'unknown' }];
@@ -82,6 +84,19 @@ test('per-launch hook metadata keeps only a bounded tool identifier and matching
   assert.deepEqual(hookActivity({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'read', tool_input: { command: 'SECRET_SENTINEL' }, prompt: 'PRIVATE' }), { phase: 'start', toolName: 'Read', toolId: 'read' });
   assert.deepEqual(hookActivity({ hook_event_name: 'Stop', tool_name: 'Read', tool_use_id: 'read' }), {});
   assert.deepEqual(hookActivity({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'x'.repeat(257) }), {});
+});
+
+test('the actual Claude session hook configuration clears a failed tool while reasoning continues', () => {
+  const settings = claudeSettings({ environment: 'windows' });
+  const tracker = createActivityTracker();
+  const tool = { tool_name: 'Bash', tool_use_id: 'failed-command' };
+  for (const hook_event_name of ['PreToolUse', 'PostToolUseFailure']) {
+    assert.ok(settings.hooks[hook_event_name]?.length, `the launch must subscribe to ${hook_event_name}`);
+    const event = { ...tool, hook_event_name };
+    assert.equal(claudeState(event), 'running');
+    tracker.update(hookActivity(event));
+    assert.equal(tracker.current(), hook_event_name === 'PreToolUse' ? 'command' : 'thinking');
+  }
 });
 
 test('a shared Hermes gateway requires an explicit session binding to its real client', () => {

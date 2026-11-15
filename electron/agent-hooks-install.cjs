@@ -330,20 +330,29 @@ function assertHermesPluginSafe(home, pluginDir) {
   if (configStat && (!configStat.isFile() || configStat.isSymbolicLink())) {
     fail('CONFIG_UNSAFE', 'Hermes config.yaml is not a regular file.');
   }
-  for (const [fileName, message] of [
-    ['plugin.yaml', 'The Hermes Winmux plugin manifest is not a regular file.'],
-    ['__init__.py', 'The Hermes Winmux plugin is not a regular file.'],
-  ]) {
-    const stat = fs.lstatSync(path.join(pluginDir, fileName), { throwIfNoEntry: false });
-    if (stat && (!stat.isFile() || stat.isSymbolicLink())) fail('EXTENSION_UNSAFE', message);
+  for (const alias of ['plugin.yml', 'plugin.json']) {
+    if (assertHermesPluginFile(pluginDir, alias, `The Hermes manifest ${alias} is not a regular file.`)) {
+      fail('CONFIG_CONFLICT', `An existing ${alias} already occupies the Winmux Hermes plugin path.`);
+    }
   }
-  const manifestPath = path.join(pluginDir, 'plugin.yaml');
-  if (fs.existsSync(manifestPath)) {
-    const current = fs.readFileSync(manifestPath, 'utf8');
+  if (assertHermesPluginFile(pluginDir, 'plugin.yaml', 'The Hermes Winmux plugin manifest is not a regular file.')) {
+    const current = fs.readFileSync(path.join(pluginDir, 'plugin.yaml'), 'utf8');
     if (!current.includes('name: winmux-status') || !current.includes(HERMES_PLUGIN_MARKER)) {
       fail('CONFIG_CONFLICT', 'An unrelated Hermes plugin already occupies the Winmux plugin path.');
     }
   }
+  if (assertHermesPluginFile(pluginDir, '__init__.py', 'The Hermes Winmux plugin is not a regular file.')) {
+    const current = fs.readFileSync(path.join(pluginDir, '__init__.py'), 'utf8');
+    if (!current.includes(HERMES_PLUGIN_MARKER)) {
+      fail('CONFIG_CONFLICT', 'An unrelated Hermes plugin source already occupies the Winmux plugin path.');
+    }
+  }
+}
+
+function assertHermesPluginFile(pluginDir, fileName, message) {
+  const stat = fs.lstatSync(path.join(pluginDir, fileName), { throwIfNoEntry: false });
+  if (stat && (!stat.isFile() || stat.isSymbolicLink())) fail('EXTENSION_UNSAFE', message);
+  return stat;
 }
 
 function commitHermesPlugin(home, helperRoot, config) {
@@ -353,21 +362,9 @@ function commitHermesPlugin(home, helperRoot, config) {
   const configStat = fs.lstatSync(configPath, { throwIfNoEntry: false });
   const configBefore = configStat ? fs.readFileSync(configPath) : null;
   const manifestPath = path.join(pluginDir.target, 'plugin.yaml');
-  const manifestStat = fs.lstatSync(manifestPath, { throwIfNoEntry: false });
-  if (manifestStat && (!manifestStat.isFile() || manifestStat.isSymbolicLink())) {
-    fail('EXTENSION_UNSAFE', 'The Hermes Winmux plugin manifest is not a regular file.');
-  }
-  if (manifestStat) {
-    const current = fs.readFileSync(manifestPath, 'utf8');
-    if (!current.includes('name: winmux-status') || !current.includes(HERMES_PLUGIN_MARKER)) {
-      fail('CONFIG_CONFLICT', 'An unrelated Hermes plugin already occupies the Winmux plugin path.');
-    }
-  }
   const pythonPath = path.join(pluginDir.target, '__init__.py');
+  const manifestStat = fs.lstatSync(manifestPath, { throwIfNoEntry: false });
   const pythonStat = fs.lstatSync(pythonPath, { throwIfNoEntry: false });
-  if (pythonStat && (!pythonStat.isFile() || pythonStat.isSymbolicLink())) {
-    fail('EXTENSION_UNSAFE', 'The Hermes Winmux plugin is not a regular file.');
-  }
   const template = fs.readFileSync(path.join(helperRoot, 'winmux-hermes-plugin.py'), 'utf8');
   if (!template.includes(HERMES_PLUGIN_MARKER) || !template.includes('__WINMUX_CONFIG_B64__')) {
     fail('HELPER_INVALID', 'The bundled Hermes plugin template is invalid.');
@@ -385,18 +382,16 @@ function commitHermesPlugin(home, helperRoot, config) {
     ...HERMES_HOOKS.map(name => `  - ${name}`),
     '',
   ].join('\n');
-  const unchanged = manifestStat && pythonStat
-    && fs.readFileSync(manifestPath, 'utf8') === manifest
-    && fs.readFileSync(pythonPath, 'utf8') === content;
-  if (!unchanged) {
+  const manifestSame = Boolean(manifestStat) && fs.readFileSync(manifestPath, 'utf8') === manifest;
+  const pythonSame = Boolean(pythonStat) && fs.readFileSync(pythonPath, 'utf8') === content;
+  const backupPaths = [];
+  if (!manifestSame || !pythonSame) {
     fs.mkdirSync(pluginDir.target, { recursive: true, mode: 0o755 });
+    if (manifestStat && !manifestSame) backupPaths.push(backupOwnedFile(manifestPath));
+    if (pythonStat && !pythonSame) backupPaths.push(backupOwnedFile(pythonPath));
     const stamp = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-    const manifestStage = path.join(pluginDir.target, `.plugin-${stamp}.yaml`);
-    const pythonStage = path.join(pluginDir.target, `.__init__-${stamp}.py`);
-    fs.writeFileSync(manifestStage, manifest, { mode: 0o644 });
-    fs.writeFileSync(pythonStage, content, { mode: 0o644 });
-    fs.renameSync(manifestStage, manifestPath);
-    fs.renameSync(pythonStage, pythonPath);
+    if (!manifestSame) replaceOwnedFile(pluginDir.target, `.plugin-${stamp}.yaml`, manifestPath, manifest);
+    if (!pythonSame) replaceOwnedFile(pluginDir.target, `.__init__-${stamp}.py`, pythonPath, content);
   }
   if (configBefore === null) {
     if (fs.existsSync(configPath)) fail('CONFIG_CONFLICT', 'Hermes config.yaml was created during plugin installation.');
@@ -404,9 +399,22 @@ function commitHermesPlugin(home, helperRoot, config) {
     fail('CONFIG_CONFLICT', 'Hermes config.yaml changed during plugin installation.');
   }
   return {
-    status: unchanged ? 'unchanged' : manifestStat ? 'updated' : 'installed',
+    status: manifestSame && pythonSame ? 'unchanged' : manifestStat || pythonStat ? 'updated' : 'installed',
     configPath: manifestPath,
+    ...(backupPaths.length ? { backupPaths } : {}),
   };
+}
+
+function backupOwnedFile(filePath) {
+  const backupPath = `${filePath}.${HERMES_PLUGIN_MARKER}-${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomBytes(3).toString('hex')}.bak`;
+  fs.copyFileSync(filePath, backupPath);
+  return backupPath;
+}
+
+function replaceOwnedFile(directory, stageName, target, content) {
+  const stage = path.join(directory, stageName);
+  fs.writeFileSync(stage, content, { mode: 0o644 });
+  fs.renameSync(stage, target);
 }
 
 function installMergedJson(directory, fileName, current, merged, marker) {
@@ -511,6 +519,7 @@ async function installAgentHooks(client, params, options = {}) {
       requiresEnable: true,
       enableCommand: 'hermes plugins enable winmux-status',
       requiresRestart: true,
+      ...(installed.backupPaths ? { backupPaths: installed.backupPaths } : {}),
     };
   }
 

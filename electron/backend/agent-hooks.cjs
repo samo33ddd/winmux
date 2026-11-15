@@ -27,7 +27,7 @@ function claudeSettings(profile) {
   const entry = matcher => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', ...(windows ? { shell: 'powershell' } : {}), command, timeout: 5 }] }];
   // https://code.claude.com/docs/en/hooks: entries merge across settings levels.
   // --settings is session-only; no user/project/global file is written or replaced.
-  return { hooks: { UserPromptSubmit: entry(), PreToolUse: entry(), PostToolUse: entry(),
+  return { hooks: { UserPromptSubmit: entry(), PreToolUse: entry(), PostToolUse: entry(), PostToolUseFailure: entry(),
     PermissionRequest: entry(), Notification: [...entry('permission_prompt'), ...entry('idle_prompt')], Stop: entry(), StopFailure: entry() } };
 }
 function withSessionHooks(agent, profile, enabled) {

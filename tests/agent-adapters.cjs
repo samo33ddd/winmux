@@ -244,12 +244,21 @@ emit("post_tool_call", tool_name="read_file", tool_call_id="tool-1", session_id=
      error_message="secret-error")
 
 # Actual gateway /new reset payload. The old session proves the root lineage.
+emit("on_session_finalize", session_id=root_session, platform="cli",
+     conversation_id="root-conversation")
+emit("pre_tool_call", session_id=root_session, conversation_id="root-conversation",
+     tool_name="terminal", tool_call_id="stale-before-reset")
 emit("on_session_reset", session_id=rotated_session, reason="new_session",
      platform="cli", old_session_id=root_session, new_session_id=rotated_session)
+emit("on_session_open", session_id=rotated_session, platform="cli", reason="create")
 emit("pre_llm_call", session_id=rotated_session, task_id="task-2", turn_id="turn-2",
      user_message="secret-prompt-rotated", conversation_history=[],
      is_first_turn=True, model="metadata-only", platform="cli",
      parent_session_id="", sender_id="user-1")
+emit("pre_tool_call", session_id=root_session, conversation_id="root-conversation",
+     tool_name="terminal", tool_call_id="stale-after-reset")
+emit("on_session_open", session_id=root_session, platform="cli", reason="resume")
+emit("pre_llm_call", session_id=root_session, parent_session_id="", platform="cli")
 emit("post_tool_call", tool_name="read_file", tool_call_id="tool-2",
      session_id=rotated_session, conversation_id="root-conversation",
      result="secret-rotated-result", status="ok")
@@ -275,6 +284,36 @@ for delegated_value in (None, True):
     isolated.pre_llm_call(session_id="blocked-root", parent_session_id="", platform="cli")
     assert len(sent) == sent_before, (delegated_value, sent[sent_before:])
 
+# Retirement metadata is bounded, cannot authorize delegated/foreign resets,
+# and can correlate only one successor for each closed native session.
+bounded_events = []
+delegated = False
+bounded = module.WinmuxHermesPlugin(
+    send=bounded_events.append, get_cwd=lambda: r"E:\project",
+    delegated_context=lambda: delegated, environ={}, async_delivery=False,
+    max_identities=2,
+)
+for sid in ("closed-0", "closed-1", "closed-2"):
+    bounded.on_session_open(session_id=sid, platform="cli", reason="create")
+    bounded.pre_llm_call(session_id=sid, platform="cli", parent_session_id="")
+    bounded.on_session_finalize(session_id=sid, platform="cli")
+bounded_events.clear()
+def reset(old, new, platform="cli", reason="new_session"):
+    bounded.on_session_reset(session_id=new, platform=platform, reason=reason,
+                             old_session_id=old, new_session_id=new)
+reset("closed-0", "evicted-successor")
+reset("unknown", "unknown-successor")
+reset("closed-1", "foreign-successor", platform="desktop")
+reset("closed-1", "unproven-successor", reason="unknown")
+delegated = True
+reset("closed-1", "delegated-successor")
+delegated = False
+reset("closed-1", "valid-successor")
+reset("closed-1", "reused-successor")
+assert [(e["sessionId"], e["event"]) for e in bounded_events] == [
+    ("closed-1", "session_switch")
+]
+
 print(json.dumps({"events": sent, "root": root_session, "rotated": rotated_session},
                  separators=(",", ":")))
 `;
@@ -295,6 +334,7 @@ print(json.dumps({"events": sent, "root": root_session, "rotated": rotated_sessi
     ['tool_approval_resolved', 'waiting'],
     ['tool_approval_resolved', 'running'],
     ['tool_execution_end', 'running'],
+    ['session_shutdown', 'idle'],
     ['session_switch', 'idle'],
     ['agent_start', 'running'],
     ['tool_execution_end', 'running'],
@@ -306,6 +346,30 @@ print(json.dumps({"events": sent, "root": root_session, "rotated": rotated_sessi
   assert.equal(sent.some(item => ['desktop-chat', 'telegram-chat', 'unknown-session'].includes(item.sessionId)), false);
   assert.equal(sent.every(item => item.pid === 4242), true);
   assert.equal(sent.every(item => item.paneId === 'pane-1'), true);
+  // Feed actual adapter payloads into the shared-gateway controller after one
+  // explicit binding. Finalize/reset must not require a new UI binding.
+  const { createController } = require('../electron/agent-integration.cjs');
+  const pane = { id: 'pane-1', pid: 100, status: 'running', cwd: 'E:/client' };
+  const controller = createController({
+    panes: () => [pane], now: () => 2000, monotonic: () => 10000n,
+    apply(_id, identity) { if (identity) Object.assign(pane, identity); },
+  });
+  const executable = path.join(process.env.LOCALAPPDATA || 'C:/Users/Fixture/AppData/Local', 'hermes', 'bin', 'hermes.exe');
+  const client = { pid: 200, ppid: 100, name: 'hermes.exe', executable, createdAt: new Date(1000).toISOString() };
+  controller.scan([
+    { pid: 100, ppid: 1, name: 'pwsh.exe', executable: 'C:/tools/pwsh.exe' },
+    client, { ...client, pid: 4242, ppid: 1 },
+  ]);
+  assert.equal(controller.hook(sent[0]).reason, 'binding-required');
+  assert.equal(controller.bind('pane-1', output.root).applied, true);
+  for (const event of sent.slice(1)) {
+    assert.equal(controller.hook(event).applied, true, `${event.event} must preserve the binding`);
+    if (event.event === 'session_switch') {
+      assert.equal(pane.agentSessionId, output.root);
+      assert.equal(pane.agentActivity, null);
+    }
+  }
+  assert.equal(controller.sessions().panes[0].sessionId, output.root);
   assert.match(sent[0].stamp, /^\d+$/);
   assert.deepEqual(
     sent.filter(item => item.toolName).map(item => [

@@ -158,6 +158,92 @@ test('read-only forwarding and the shared process snapshot add no control calls'
   assert.equal(new Date(self.createdAt).toISOString(), self.createdAt);
 });
 
+test('production daemon bridge forwards lifecycle activity and removes its raw listener', async () => {
+  const panes = [pane()];
+  const daemon = new EventEmitter();
+  let createCalls = 0, connectCalls = 0, refreshCalls = 0, disposeCalls = 0;
+  daemon.connect = async () => { connectCalls += 1; };
+  daemon.readState = () => ({ available: true, loadedThreadIds: [root.id] });
+  daemon.refresh = async () => {
+    refreshCalls += 1;
+    return { threads: [root], loadedThreadIds: [root.id], complete: true, nextCursor: null };
+  };
+  daemon.dispose = () => { disposeCalls += 1; };
+  const controller = createController({
+    intervalMs: 60000,
+    createDaemon: () => { createCalls += 1; return daemon; },
+    listProcesses: async () => processes(),
+    panes: () => panes,
+    apply(id, identity) {
+      const target = panes.find(entry => entry.id === id);
+      if (!target) return;
+      if (!identity) { delete target.agentId; delete target.agentActivity; target.agentState = 'unknown'; return; }
+      Object.assign(target, identity);
+      if (identity.agentActivity == null) delete target.agentActivity;
+      for (const key of ['agentThreadId', 'agentSessionId', 'agentBinding']) if (target[key] === '') delete target[key];
+    },
+  });
+  await controller.refresh();
+  assert.equal(createCalls, 1);
+  assert.equal(connectCalls, 1);
+  assert.equal(refreshCalls, 1);
+  assert.equal(daemon.listenerCount('notification'), 1);
+  assert.equal(panes[0].agentBinding, 'auto');
+
+  const emit = message => daemon.emit('notification', message);
+  emit({ method: 'turn/started', params: { threadId: root.id, turn: { id: 'turn-1' } } });
+  emit(item('mcpToolCall', 'read', 'turn-1', { tool: 'read_file', arguments: { path: 'secret.txt' } }));
+  assert.equal(panes[0].agentActivity, 'reading');
+  emit({ method: 'item/completed', params: { threadId: root.id, turnId: 'turn-1', item: { id: 'read', type: 'mcpToolCall', tool: 'read_file' } } });
+  assert.equal(panes[0].agentActivity, 'thinking');
+  emit(item('commandExecution', 'command', 'turn-1', { command: 'secret command' }));
+  assert.equal(panes[0].agentActivity, 'command');
+  emit({ method: 'item/completed', params: { threadId: root.id, turnId: 'turn-1', item: { id: 'command', type: 'commandExecution' } } });
+  assert.equal(panes[0].agentActivity, 'thinking');
+  emit(item('fileChange', 'edit', 'turn-1', { changes: ['secret.txt'] }));
+  assert.equal(panes[0].agentActivity, 'editing');
+
+  emit({ method: 'item/started', params: { threadId: 'foreign-root', turnId: 'foreign-turn', item: { id: 'foreign', type: 'webSearch' } } });
+  emit({ method: 'item/commandExecution/requestApproval', params: { threadId: root.id, turnId: 'turn-1' } });
+  assert.equal(panes[0].agentActivity, 'editing', 'foreign roots and approval requests cannot replace activity');
+  assert.equal(JSON.stringify(panes[0]).includes('secret'), false);
+
+  emit({ method: 'turn/completed', params: { threadId: root.id, turn: { id: 'turn-1', status: 'completed' } } });
+  assert.equal(panes[0].agentState, 'completed');
+  assert.equal(panes[0].agentActivity, undefined);
+  emit(item('fileChange', 'late', 'turn-1'));
+  assert.equal(panes[0].agentActivity, undefined, 'closed turns cannot revive the caption');
+
+  await controller.stop();
+  assert.equal(daemon.listenerCount('notification'), 0);
+  assert.equal(disposeCalls, 1);
+});
+
+test('production daemon bridge removes raw listeners when connection setup fails', async () => {
+  const daemon = new EventEmitter();
+  let connectCalls = 0, disposeCalls = 0;
+  daemon.connect = async () => {
+    connectCalls += 1;
+    assert.equal(daemon.listenerCount('notification'), 1);
+    throw new Error('fixture connection failed');
+  };
+  daemon.readState = () => ({ available: false, loadedThreadIds: [] });
+  daemon.refresh = async () => ({ threads: [], loadedThreadIds: [], complete: true, nextCursor: null });
+  daemon.dispose = () => { disposeCalls += 1; };
+  const controller = createController({
+    intervalMs: 60000,
+    createDaemon: () => daemon,
+    listProcesses: async () => processes(),
+    panes: () => [pane()],
+  });
+  await controller.refresh();
+  assert.equal(connectCalls, 1);
+  assert.equal(controller.status().reason, 'unavailable');
+  assert.equal(daemon.listenerCount('notification'), 0);
+  assert.equal(disposeCalls, 1);
+  await controller.stop();
+});
+
 test('shared process observation stays available while the optional Codex connection is pending', async () => {
   let release, snapshots = 0, finished = false;
   const connection = new Promise(resolve => { release = resolve; });

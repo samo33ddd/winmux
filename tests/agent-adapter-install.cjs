@@ -161,6 +161,127 @@ test('rejects a Claude hook conflict and a dangling settings link without replac
   }
 });
 
+function captured(file) {
+  return { body: fs.readFileSync(file), mtimeMs: fs.statSync(file).mtimeMs };
+}
+
+function assertUnchanged(file, before) {
+  assert.deepEqual(fs.readFileSync(file), before.body);
+  assert.equal(fs.statSync(file).mtimeMs, before.mtimeMs);
+}
+
+test('rejects foreign Hermes manifest aliases and source before writing', async t => {
+  const project = temp('winmux-hermes-foreign-project-');
+  const dirs = [project];
+  t.after(() => removeAll(dirs));
+  const config = 'plugins:\n  enabled: ["foreign"]\n';
+  const foreignSource = 'def register(ctx):\n    raise RuntimeError("foreign")\n';
+  const cases = [
+    ['yml', { 'plugin.yml': 'name: someone-else\n', '__init__.py': foreignSource }],
+    ['json', { 'plugin.json': '{"name":"someone-else"}\n', '__init__.py': foreignSource }],
+    ['source', { '__init__.py': foreignSource }],
+    ['owned-manifest', {
+      'plugin.yaml': `# ${HERMES_PLUGIN_MARKER}\nname: winmux-status\nversion: "9.9.9"\n`,
+      '__init__.py': foreignSource,
+    }],
+  ];
+  for (const [label, files] of cases) {
+    const home = temp(`winmux-hermes-foreign-${label}-`);
+    const dataDir = temp(`winmux-hermes-foreign-${label}-data-`);
+    dirs.push(home, dataDir);
+    const pluginDir = path.join(home, 'plugins', 'winmux-status');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const configPath = path.join(home, 'config.yaml');
+    fs.writeFileSync(configPath, config);
+    const before = new Map();
+    for (const [name, content] of Object.entries(files)) {
+      const file = path.join(pluginDir, name);
+      fs.writeFileSync(file, content);
+      before.set(file, captured(file));
+    }
+    const configBefore = captured(configPath);
+    const listing = fs.readdirSync(pluginDir).sort();
+    await assert.rejects(() => installAgentHooks(fixture(project), {
+      workspaceId: 'workspace-1',
+      agent: 'hermes',
+      hermesHome: home,
+    }, { dataDir, nodePath: process.execPath }), { code: 'CONFIG_CONFLICT' });
+    assert.deepEqual(fs.readdirSync(pluginDir).sort(), listing);
+    for (const [file, snapshot] of before) assertUnchanged(file, snapshot);
+    assertUnchanged(configPath, configBefore);
+    assert.equal(fs.existsSync(path.join(dataDir, 'hooks', 'winmux-agent-event.cjs')), false);
+    assert.equal(fs.existsSync(path.join(pluginDir, 'plugin.yaml')) && !files['plugin.yaml'], false);
+  }
+});
+
+test('backs up an owned Hermes plugin before upgrading and repairs an owned partial plugin', async t => {
+  const project = temp('winmux-hermes-upgrade-project-');
+  const dataDir = temp('winmux-hermes-upgrade-data-');
+  const home = temp('winmux-hermes-upgrade-home-');
+  const partial = temp('winmux-hermes-upgrade-partial-');
+  t.after(() => removeAll([project, dataDir, home, partial]));
+  const configPath = path.join(home, 'config.yaml');
+  const config = 'plugins:\n  enabled: []\n';
+  fs.writeFileSync(configPath, config);
+  const configBefore = captured(configPath);
+  await installAgentHooks(fixture(project), {
+    workspaceId: 'workspace-1',
+    agent: 'hermes',
+    hermesHome: home,
+  }, { dataDir, nodePath: process.execPath });
+  const pluginDir = path.join(home, 'plugins', 'winmux-status');
+  const manifestPath = path.join(pluginDir, 'plugin.yaml');
+  const pythonPath = path.join(pluginDir, '__init__.py');
+  const canonicalManifest = fs.readFileSync(manifestPath);
+  const canonicalPython = fs.readFileSync(pythonPath);
+  fs.writeFileSync(manifestPath, canonicalManifest.toString('utf8').replace('version: "1.0.0"', 'version: "0.9.0"'));
+  fs.writeFileSync(pythonPath, `${canonicalPython.toString('utf8')}\n# owned local note\n`);
+  const ownedManifest = captured(manifestPath);
+  const ownedPython = captured(pythonPath);
+  const upgraded = await installAgentHooks(fixture(project), {
+    workspaceId: 'workspace-1',
+    agent: 'hermes',
+    hermesHome: home,
+  }, { dataDir, nodePath: process.execPath });
+  assert.equal(upgraded.status, 'updated');
+  assert.equal(upgraded.backupPaths.length, 2);
+  assert.deepEqual(fs.readFileSync(upgraded.backupPaths.find(file => file.includes('plugin.yaml'))), ownedManifest.body);
+  assert.deepEqual(fs.readFileSync(upgraded.backupPaths.find(file => file.includes('__init__.py'))), ownedPython.body);
+  assert.equal(fs.readFileSync(manifestPath, 'utf8').includes('version: "1.0.0"'), true);
+  assert.equal(fs.readFileSync(pythonPath, 'utf8').includes('owned local note'), false);
+  assert.match(fs.readFileSync(pythonPath, 'utf8'), new RegExp(HERMES_PLUGIN_MARKER));
+  assertUnchanged(configPath, configBefore);
+  const upgradedManifest = captured(manifestPath);
+  const upgradedPython = captured(pythonPath);
+  const repeated = await installAgentHooks(fixture(project), {
+    workspaceId: 'workspace-1',
+    agent: 'hermes',
+    hermesHome: home,
+  }, { dataDir, nodePath: process.execPath });
+  assert.equal(repeated.status, 'unchanged');
+  assert.equal(repeated.backupPaths, undefined);
+  assert.equal(fs.readdirSync(pluginDir).filter(name => name.endsWith('.bak')).length, 2);
+  assertUnchanged(manifestPath, upgradedManifest);
+  assertUnchanged(pythonPath, upgradedPython);
+  assertUnchanged(configPath, configBefore);
+
+  const partialDir = path.join(partial, 'plugins', 'winmux-status');
+  fs.mkdirSync(partialDir, { recursive: true });
+  const partialManifest = path.join(partialDir, 'plugin.yaml');
+  fs.writeFileSync(partialManifest, canonicalManifest);
+  const partialBefore = captured(partialManifest);
+  const repaired = await installAgentHooks(fixture(project), {
+    workspaceId: 'workspace-1',
+    agent: 'hermes',
+    hermesHome: partial,
+  }, { dataDir, nodePath: process.execPath });
+  assert.equal(repaired.status, 'updated');
+  assert.equal(repaired.backupPaths, undefined);
+  assertUnchanged(partialManifest, partialBefore);
+  assert.match(fs.readFileSync(path.join(partialDir, '__init__.py'), 'utf8'), new RegExp(HERMES_PLUGIN_MARKER));
+  assert.equal(fs.existsSync(path.join(partial, 'config.yaml')), false);
+});
+
 test('installs the discovered Pi .ts extension, keeps foreign files, and rejects conflicts', async t => {
   const root = temp('winmux-pi-project-');
   const dataDir = temp('winmux-pi-data-');

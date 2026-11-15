@@ -415,10 +415,17 @@ function createController(options = {}) {
         });
         daemon.on('status', payload => handleNotification({ method: 'thread/status/changed', params: payload }));
         daemon.on('turn', payload => handleNotification({ method: 'turn/completed', params: { threadId: payload.threadId, turn: { status: payload.status } } }));
+        const forward = message => {
+          if (daemon === currentDaemon && !stopped && ['item/started', 'item/completed', 'turn/started', 'turn/completed'].includes(message?.method)) handleNotification(message);
+        };
+        daemon.on('notification', forward);
+        unsubscribe = () => currentDaemon.off('notification', forward);
         await daemon.connect();
         if (!daemon.readState().available) throw new Error('Codex daemon is disconnected');
         client = daemon; connection = 'connected'; connectionReason = '';
       } catch (error) {
+        unsubscribe?.(); unsubscribe = null;
+        try { daemon?.dispose?.(); } catch { /* Only this read-only proxy is owned here. */ }
         daemon = null; client = null; connection = 'disconnected';
         connectionReason = error.code === 'ADAPTER_MISSING' ? 'adapter-missing' : 'unavailable';
       }

@@ -124,6 +124,9 @@ class WinmuxHermesPlugin:
         self._lock = threading.RLock()
         self._opened_sessions: OrderedDict[str, str] = OrderedDict()
         self._root_sessions: OrderedDict[str, _RootSession] = OrderedDict()
+        # Closed identities are never activity sources. The flag records whether
+        # an explicit old/new reset has already consumed their metadata.
+        self._retired_roots: OrderedDict[str, tuple[_RootSession, bool]] = OrderedDict()
         self._root_by_conversation: OrderedDict[str, str] = OrderedDict()
         self._nested_sessions: OrderedDict[str, None] = OrderedDict()
         self._active: set[str] = set()
@@ -172,7 +175,9 @@ class WinmuxHermesPlugin:
 
     def _forget_root(self, session_id: str) -> None:
         root = self._root_sessions.pop(session_id, None)
-        if root and root.conversation_id:
+        if root is not None:
+            self._remember(self._retired_roots, session_id, (root, False))
+        if root and root.conversation_id and self._root_by_conversation.get(root.conversation_id) == session_id:
             self._root_by_conversation.pop(root.conversation_id, None)
         self._opened_sessions.pop(session_id, None)
         self._active.discard(session_id)
@@ -234,7 +239,8 @@ class WinmuxHermesPlugin:
         *,
         reporting_id: str | None = None,
     ) -> "_RootSession | None":
-        if platform not in ROOT_PLATFORMS or not cwd:
+        if (platform not in ROOT_PLATFORMS or not cwd
+                or session_id in self._retired_roots or session_id in self._nested_sessions):
             return None
         root = _RootSession(
             session_id=session_id,
@@ -260,7 +266,7 @@ class WinmuxHermesPlugin:
         if self._parent_session_id(meta):
             return None, False
         session_id = self._session_id(meta)
-        if not session_id or session_id in self._nested_sessions:
+        if not session_id or session_id in self._nested_sessions or session_id in self._retired_roots:
             return None, False
         conversation_id = self._conversation_id(meta)
         root = self._root_sessions.get(session_id)
@@ -401,6 +407,8 @@ class WinmuxHermesPlugin:
         if not session_id or platform not in ROOT_PLATFORMS:
             return
         with self._lock:
+            if session_id in self._retired_roots:
+                return
             # Open is the only root-candidate source. It becomes trusted only after
             # pre_llm_call confirms an empty parent and no delegated context.
             self._remember(self._opened_sessions, session_id, platform)
@@ -420,9 +428,13 @@ class WinmuxHermesPlugin:
         with self._lock:
             selected = _bounded(selected, 128) or ""
             old_session_id = _bounded(old_session_id, 128) or ""
-            if not selected or platform not in ROOT_PLATFORMS:
+            if (not selected or selected == old_session_id or platform not in ROOT_PLATFORMS
+                    or self._is_delegated() is not False or old_session_id in self._nested_sessions):
                 return
             previous = self._root_sessions.get(old_session_id)
+            retired = self._retired_roots.get(old_session_id)
+            if previous is None and retired is not None and not retired[1] and reason == "new_session":
+                previous = retired[0]
             if previous is None:
                 return
             root = self._new_root(
@@ -434,6 +446,8 @@ class WinmuxHermesPlugin:
             )
             if root is None:
                 return
+            if retired is not None:
+                self._remember(self._retired_roots, old_session_id, (previous, True))
             self._root_sessions.pop(old_session_id, None)
             self._active.discard(old_session_id)
             self._waiting.pop(old_session_id, None)
@@ -446,8 +460,8 @@ class WinmuxHermesPlugin:
             root, _ = self._trusted_root(event)
             if root is None:
                 return
-            if self._emit(root, "session_shutdown", "idle"):
-                self._forget_root(root.session_id)
+            self._emit(root, "session_shutdown", "idle")
+            self._forget_root(root.session_id)
 
     def pre_llm_call(
         self,
