@@ -9,6 +9,9 @@ const { fail, string } = require('./shared.cjs');
 const { selectedAgent, shellArgs } = require('./shell-integration.cjs');
 const { withSessionHooks } = require('./agent-hooks.cjs');
 const execFileAsync = promisify(execFile); // Argument arrays only; no shell interpolation.
+const agentNames = ['claude', 'codex', 'hermes', 'omp', 'pi'];
+const wslDiscoveryScript = 'PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; for name in claude codex hermes omp pi; do location=$(command -v "$name" 2>/dev/null) || location=; printf "%s\\t%s\\n" "$name" "$location"; done';
+const wslAgentScript = 'PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; command -v "$1" 2>/dev/null || true';
 async function run(command, args, timeout = 8000) {
   const { stdout } = await execFileAsync(command, args, { windowsHide: true, timeout, maxBuffer: 256 * 1024, encoding: 'buffer' });
   return (stdout.includes(0) ? stdout.toString('utf16le') : stdout.toString('utf8')).replace(/^\uFEFF/, '').trim();
@@ -23,6 +26,34 @@ async function executable(name, candidates = []) {
     return paths[0] || null;
   } catch { return null; }
 }
+const lines = value => value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+function wslAgent(profile, name, available, command) {
+  return { id: `${profile.id}:${name}`, label: name, environment: 'wsl', profileId: profile.id, distro: profile.distro, available, command, ...(['claude', 'codex'].includes(name) ? { hookAdapter: name } : {}) };
+}
+async function probeWslAgents(profile) {
+  const output = await run(profile.command, [...profile.args, '--exec', 'sh', '-c', wslDiscoveryScript]);
+  return new Map(lines(output).map(line => {
+    const separator = line.indexOf('\t');
+    return separator < 0 ? [line, ''] : [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
+  }));
+}
+async function probeWslAgent(profile, name) {
+  return run(profile.command, [...profile.args, '--exec', 'sh', '-c', wslAgentScript, 'winmux-agent-probe', name]);
+}
+async function selectedAgentForLaunch(environment, profile, agentId) {
+  if (agentId === undefined || profile.environment !== 'wsl') return selectedAgent(environment, profile, agentId);
+  string(agentId, 'agentId', 256);
+  const agent = environment.agents.find(item => item.id === agentId);
+  if (!agent || agent.available !== null) return selectedAgent(environment, profile, agentId);
+  if (agent.profileId !== profile.id || agent.environment !== profile.environment) fail('AGENT_PROFILE_MISMATCH', 'Selected agent does not belong to the terminal profile');
+  const prefix = `${profile.id}:`;
+  if (!agent.id.startsWith(prefix) || agent.id.length === prefix.length) fail('AGENT_UNAVAILABLE', `Agent is unavailable: ${agentId}`);
+  let command;
+  try { command = await probeWslAgent(profile, agent.id.slice(prefix.length)); }
+  catch { fail('AGENT_UNAVAILABLE', `Agent is unavailable: ${agentId}`); }
+  const resolved = { ...agent, available: Boolean(command), command: command || null };
+  return selectedAgent({ ...environment, agents: environment.agents.map(item => item === agent ? resolved : item) }, profile, agentId);
+}
 async function discover() {
   const profiles = [];
   if (process.platform === 'win32') {
@@ -34,8 +65,11 @@ async function discover() {
     const wsl = await executable('wsl.exe', [path.join(process.env.SystemRoot || 'C:/Windows', 'System32', 'wsl.exe')]);
     if (wsl) {
       try {
-        const distros = (await run(wsl, ['--list', '--quiet'])).split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-        for (const distro of distros) profiles.push({ id: `wsl:${distro}`, label: distro, environment: 'wsl', command: wsl, args: ['--distribution', distro], distro });
+        const distros = lines(await run(wsl, ['--list', '--quiet']));
+        let running = new Set();
+        try { running = new Set(lines(await run(wsl, ['--list', '--running', '--quiet']))); }
+        catch (error) { console.warn(`WSL running-state discovery unavailable: ${error.message.split('\n')[0]}`); }
+        for (const distro of distros) profiles.push({ id: `wsl:${distro}`, label: distro, environment: 'wsl', command: wsl, args: ['--distribution', distro], distro, running: running.has(distro) });
       } catch (error) { console.warn(`WSL discovery unavailable: ${error.message.split('\n')[0]}`); }
     }
   } else {
@@ -43,18 +77,23 @@ async function discover() {
   }
   // Discovery only: never run an agent, even with --version. A shell remains the
   // persisted launch profile, so a daemon restart cannot resume arbitrary work.
-  const agentNames = ['claude', 'codex', 'hermes', 'omp', 'pi'];
   const agents = await Promise.all(agentNames.map(async name => {
     const command = await executable(name);
     return { id: name, label: name, environment: 'windows', profileId: 'powershell', available: Boolean(command), command, ...(['claude', 'codex'].includes(name) ? { hookAdapter: name } : {}) };
   }));
   for (const profile of profiles.filter(p => p.environment === 'wsl')) {
+    if (!profile.running) {
+      for (const name of agentNames) agents.push(wslAgent(profile, name, null, null));
+      continue;
+    }
     let discovered = new Map();
     try {
-      const output = await run(profile.command, [...profile.args, '--exec', 'sh', '-c', 'PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; for name in claude codex hermes omp pi; do location=$(command -v "$name" 2>/dev/null) || location=; printf "%s\\t%s\\n" "$name" "$location"; done']);
-      discovered = new Map(output.split(/\r?\n/).map(line => line.split('\t')));
+      discovered = await probeWslAgents(profile);
     } catch { /* Availability remains false when a distribution cannot be queried. */ }
-    for (const name of agentNames) agents.push({ id: `${profile.id}:${name}`, label: name, environment: 'wsl', profileId: profile.id, distro: profile.distro, available: Boolean(discovered.get(name)), command: discovered.get(name) || null, ...(['claude', 'codex'].includes(name) ? { hookAdapter: name } : {}) });
+    for (const name of agentNames) {
+      const command = discovered.get(name) || null;
+      agents.push(wslAgent(profile, name, Boolean(command), command));
+    }
   }
   return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, nativeCodex: true, protocolVersion: 3 } };
 }
@@ -62,7 +101,7 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
   const profile = environment.profiles.find(p => p.id === profileId);
   if (!profile) fail('PROFILE_UNAVAILABLE', `Terminal profile is unavailable: ${profileId}`);
   if (agentHooks !== undefined && typeof agentHooks !== 'boolean') fail('INVALID_ARGUMENT', 'agentHooks must be a boolean');
-  const selected = selectedAgent(environment, profile, agentId);
+  const selected = await selectedAgentForLaunch(environment, profile, agentId);
   const agent = selected && withSessionHooks(selected, profile, agentHooks === true);
   const agentFields = agent ? { agentId: agent.id, agentLabel: agent.label || agent.id, agentLaunchId: randomUUID() } : {};
   let cwd = requestedCwd;

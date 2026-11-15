@@ -62,6 +62,7 @@ const english: Record<string, string> = {
   'Агент': 'Agent',
   'Только терминал': 'Terminal only',
   ' — не установлен': ' — not installed',
+  ' — проверка при запуске': ' — check on launch',
   'Запустить агента…': 'Launch agent…',
   'Запустить агента в новой вкладке': 'Launch agent in a new tab',
   'Вкладки рабочих пространств': 'Workspace tabs',

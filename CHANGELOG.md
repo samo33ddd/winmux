@@ -2,6 +2,11 @@
 
 User-visible changes are recorded here. Release availability and downloadable assets are authoritative on the [releases page](https://github.com/samo33ddd/winmux/releases).
 
+## Unreleased
+
+- Queue short terminal request bursts within count and byte limits; cancel unsent input on disconnect or an active request timeout instead of replaying it (Issue #15).
+- Leave stopped WSL distributions stopped during environment discovery; check their agents only when explicitly launched (Issue #16).
+
 ## 0.2.1 — Agent integration fixes
 
 ### Added
