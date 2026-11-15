@@ -9,5 +9,6 @@ contextBridge.exposeInMainWorld('winmux', {
   writeClipboard: text => ipcRenderer.invoke('winmux:clipboard-write', text),
   readClipboard: () => ipcRenderer.invoke('winmux:clipboard-read'),
   pickDirectory: () => ipcRenderer.invoke('winmux:directory'),
+  setWindowTheme: theme => ipcRenderer.invoke('winmux:window-theme', theme),
   openExternal: url => ipcRenderer.invoke('winmux:external', url)
 });

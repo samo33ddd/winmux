@@ -1,0 +1,89 @@
+.local-file-preview-modal {
+  width: min(1040px, calc(100vw - 48px));
+  max-height: calc(100vh - 72px);
+}
+
+.local-file-preview-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.local-file-preview-meta code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-file-preview-meta span {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.local-file-image {
+  display: grid;
+  min-height: 240px;
+  max-height: calc(100vh - 190px);
+  overflow: auto;
+  place-items: center;
+  padding: 18px;
+  background: color-mix(in srgb, var(--surface) 86%, black);
+}
+
+.local-file-image img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 226px);
+  object-fit: contain;
+}
+
+.local-file-image.is-actual-size {
+  display: block;
+}
+
+.local-file-image.is-actual-size img {
+  max-width: none;
+  max-height: none;
+}
+
+.local-file-text {
+  min-height: 260px;
+  max-height: calc(100vh - 190px);
+  overflow: auto;
+  margin: 0;
+  padding: 18px;
+  color: var(--text);
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+
+.local-file-note,
+.local-file-binary {
+  margin: 0;
+  padding: 0 18px 18px;
+  color: var(--muted);
+}
+
+.local-file-link-tooltip {
+  position: absolute;
+  z-index: 20;
+  max-width: min(480px, calc(100% - 16px));
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--raised);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 28%);
+  color: var(--text);
+  font: 12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}

@@ -16,7 +16,7 @@ async function check(cwd,profile){
   assert.equal(text.kind,'text');assert(text.text.includes('Привет'));
   const image=await rpc('files.read',{path:'pixel.png'});
   assert.equal(image.kind,'image');assert(image.dataUrl.startsWith('data:image/png;base64,'));
-  await assert.rejects(()=>rpc('files.read',{path:'../outside'}),/внутри проекта/);
+  await assert.rejects(()=>rpc('files.read',{path:'../outside'}),/Path must remain inside the current directory/);
   const status=await rpc('git.status');
   assert.equal(status.available,true,status.error);assert(status.branch.includes('main'));
   assert(status.entries.some(entry=>entry.path==='hello.txt'&&entry.worktree==='M'));

@@ -1,0 +1,28 @@
+name: Windows checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:backend
+      - run: npm run test:workspace
+      - run: npm run test:cwd-agent
+      - run: npm run test:profile
+      - run: npm run test:skills
+      - run: npm run test:cookies
+      - run: npm run test:file-preview
+      - run: npm run test:desktop

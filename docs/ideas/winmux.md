@@ -1,77 +1,73 @@
-# Winmux — рабочая концепция
+# Winmux — product direction
 
-Статус: согласовано направление; предложены техническая основа и границы первой версии. Реализация и проверка приложения ещё не выполнены. Winmux — временное название.
+Status: the initial Windows preview is implemented in this repository and is being prepared for v0.1.0. This document records the product direction and acceptance goals; it is not a report of passed tests. Consult [verification notes](../verification.md) for observed runtime results.
 
-## Задача
+## The problem
 
-Сделать собственный настольный терминальный мультиплексер для Windows, вдохновлённый cmux: несколько проектов и AI CLI в одном окне, удобные панели, понятные уведомления и программное управление. Нужны Windows и WSL. Первые целевые агенты: Claude Code, Codex CLI, Hermes, omp, pi.
+Developers working with AI CLI agents need several projects, shells, and previews within reach throughout the day. Winmux brings them into a Windows terminal workspace inspired by cmux: clear pane layouts, useful notifications, and local programmatic control. Windows and WSL are the intended environments. Initial agent discovery targets are Claude Code, Codex CLI, Hermes, omp, and pi; discovery does not establish that an agent works end to end.
 
-## Выбранное направление
+## Technical direction
 
-Свой проект с готовым терминальным движком. Существующий mkurman/cmux-windows можно изучать как пример; пользователь выбрал самостоятельный проект. Создавать собственный ANSI/VT-эмулятор не требуется.
+Build an independent application around existing terminal components rather than a new ANSI/VT emulator. The current foundation is Electron and TypeScript, xterm.js, and node-pty with ConPTY for Windows processes. WSL launches through `wsl.exe` with an explicit distribution. Electron's memory and startup costs need measurement with real agent TUIs.
 
-Предложенная основа: Electron + TypeScript для приложения, xterm.js для терминала, node-pty с ConPTY для Windows-процессов. WSL запускается через wsl.exe с явно выбранным дистрибутивом. Electron означает больший расход памяти по сравнению с полностью нативным интерфейсом; скорость и память нужно измерить на реальных агентных TUI.
+The original [cmux](https://github.com/manaflow-ai/cmux) and [cmux-windows](https://github.com/mkurman/cmux-windows) are reference projects, not dependencies or compatibility guarantees. Winmux is independently implemented and is not affiliated with cmux.
 
-## Пользовательская модель
+## User model
 
-Workspace — проект или задача. У него имя, цвет, среда запуска, каталог и дерево панелей. В панели живёт терминальная сессия. Слева видны рабочие пространства, в центре — панели, в уведомлении указаны проект и агент. Нажатие на уведомление переводит прямо в нужную панель.
+A workspace represents a project or task. It has a name, launch environment, startup directory, and terminal tabs. Each tab has its own pane tree; each pane owns a shell session. The sidebar switches workspaces and the horizontal tab bar switches terminals within one workspace. Notifications focus their workspace, terminal tab, and pane. Project tools provide files, Git information, and a browser alongside the terminals.
 
-Среда запуска хранится явно: Windows или WSL с идентификатором дистрибутива. Windows-пути и Linux-пути не взаимозаменяемы. Для каждого профиля запуска задаются исполняемый файл, аргументы и каталог; не собирать команду произвольной конкатенацией строк.
+Store the launch environment explicitly as Windows or WSL with a distribution identifier. Keep executable, arguments, and startup directory separate. Windows and Linux paths are different namespaces. The Windows folder picker cannot select a Linux directory; the user enters that path for the chosen WSL profile.
 
-## Первая рабочая версия
+## Initial preview scope
 
-- Создание, переименование и переключение рабочих пространств.
-- Вертикальные и горизонтальные разделения, изменение размеров, фокус с клавиатуры, разворачивание одной панели.
-- Реальные интерактивные PowerShell и WSL-сессии; корректные resize, Ctrl+C, вставка многострочного текста, Unicode, альтернативный экран и scrollback.
-- Поиск по выводу, копирование, ссылки, настройка шрифта и темы.
-- Профили запуска Claude Code, Codex CLI, Hermes, omp и pi. В каждой среде проверять фактическую установленную команду. Точные пакеты и интерфейсы omp/pi ещё не установлены.
-- Список уведомлений, непрочитанные события и переход к панели, требующей внимания.
-- Общий CLI notify и поддержка выбранных терминальных последовательностей уведомлений. Агентные hooks добавлять после проверки их актуальных интерфейсов.
-- CLI/API для списка и создания рабочих пространств, разделения панелей, отправки текста и клавиш, чтения экрана, уведомлений.
-- Автосохранение раскладки, профилей, каталогов и метаданных.
-- Фоновый процесс терминальных сессий: закрытие окна отсоединяет интерфейс; повторное открытие подключает его к живым процессам. Команда завершения сессии и выход с остановкой процессов должны быть явными.
+- Create, rename, and switch workspaces; persist their layouts and metadata.
+- Split panes horizontally and vertically, resize dividers, move focus by keyboard, and zoom one pane.
+- Run interactive shells with resizing, interruption, Unicode, alternate-screen TUIs, and scrollback.
+- Search output, copy selected text automatically, paste from the clipboard, follow links, and configure font size and theme.
+- Show notifications with unread state and a direct path to the relevant pane.
+- Provide CLI operations for state, environment discovery, workspace creation, pane splitting, text/key input, screen reading, resizing, notifications, and explicit termination.
+- Keep terminal processes in a separate daemon so the UI can detach and reconnect.
+- Open real HTTP(S) pages in an embedded browser with local snapshot, click, fill, evaluate, and screenshot operations while the desktop is open.
+- Show project files, text and image previews, Git branch/status, and staged or working-tree diffs. These tools are read-only.
 
-## Архитектура и ограничения
+File browsing, images, browser previews, Git inspection, and selection copying are part of the initial scope. The interface stays compact and supports English and Russian labels.
 
-UI общается с процессом Electron через узкий IPC-интерфейс. PTY принадлежит отдельному фоновому процессу, который не завершается при закрытии окна. Локальный CLI обращается к нему через Windows named pipe, доступный текущему пользователю. Доступ из WSL требует проверенного моста: Windows CLI через WSL interop там, где это доступно; поддержку нельзя считать готовой до реального прогона.
+## Architecture and boundaries
 
-Нельзя смешивать байтовый поток терминала и обычный текстовый лог. Для повторного подключения и read-screen нужна терминальная модель на стороне фонового процесса либо другая проверенная схема снимка состояния с упорядоченной доставкой последующих данных. Простое проигрывание ограниченного хвоста ANSI не гарантирует восстановление TUI. Это отдельный ранний технический эксперимент. Вывод должен передаваться пакетами, с ограничением буферов и учётом медленного клиента.
+The renderer uses a narrow, isolated preload bridge. A detached background process owns the PTYs. The terminal CLI connects over a local authenticated named pipe using a capability token. Browser automation has its own desktop-owned service and endpoint; it is not a `browser.*` extension to the terminal daemon. Closing the desktop removes browser automation while terminal sessions remain in the daemon.
 
-Состояние процесса и состояние агента показывать отдельно. Известно, что процесс запущен или завершился; без агентного события неизвестно, думает ли агент, закончил ли ответ или ждёт разрешения. Отсутствие вывода не считать завершением. Для уведомлений использовать явные события и hooks; неподдерживаемое состояние обозначать как неизвестное.
+The daemon maintains a terminal model using `@xterm/headless`. Snapshots carry a sequence number, and reconnecting clients subscribe before taking a snapshot, then apply only newer output in order. A bounded ANSI tail alone is insufficient to restore an interactive TUI. Buffers and slow clients need explicit limits; terminal output history is not persisted to disk by the daemon. See [the daemon contract](../../electron/backend/README.md).
 
-Закрытие окна, падение фонового процесса и перезагрузка Windows — разные случаи. Живые процессы переживают только закрытие/перезапуск интерфейса при работающем фоне. После перезагрузки восстанавливаются раскладка и новые терминалы. Возобновление разговора возможно лишь через поддерживаемую команду конкретного агента и сохранённый идентификатор. Не запускать автоматически заново произвольную последнюю команду.
+Process state and agent state are separate. A process can be known to be running or exited. Without an explicit agent event, thinking, completion, and approval state are unknown. Silence is not completion. Executable discovery is availability information, not an agent launch profile, hook integration, or resume guarantee.
 
-Git-метаданные и текущий каталог получать в среде соответствующего терминала. Windows Git не использовать вслепую для WSL-репозитория. Отслеживание смены каталога требует shell integration; до этого показывать стартовый каталог как стартовый.
+Closing the UI, losing the daemon, and rebooting Windows have different outcomes. Existing processes survive only while the daemon and operating system remain alive. After a daemon restart or reboot, saved layout and metadata restore with fresh shells. Never rerun an arbitrary previous command. Conversation resume would need a supported agent command and a saved conversation identifier; it is future work.
 
-## Уточнение обязательного объёма
+File and Git tools use the active terminal's profile and last directory reported through shell integration. New terminal tabs inherit that directory. Windows Git must not be used for WSL repositories. WSL project tools require `python3` and Git in the distribution. A foreground program can temporarily hide shell-directory updates; the UI must not claim knowledge of its internal directory.
 
-По уточнению пользователя в первую рабочую версию входят также копирование при выделении, вставка, встроенный браузер, просмотр фотографий/изображений, файловый браузер и Git (ветка, изменённые файлы, diff). Это обязательная часть удобной минималистичной среды, а не отложенные улучшения. Интерфейс должен быть красивым и понятным в духе cmux.
+Embedded pages have no Node.js access or privileged app preload. Only HTTP(S) navigation is supported; popups, downloads, and permission requests are blocked. Pages share a persistent browser session. The current automation snapshot covers a bounded set of visible main-document elements, not a complete browser accessibility tree. Windows CLI access from inside WSL requires a verified interop path and must not be advertised as proven from Windows-side WSL launching alone.
 
-## Следующий этап после ядра
+## After the core
 
-- Расширение браузерной панели: текущая версия уже должна открывать реальные HTTP(S)-страницы рядом с агентом. Для сайтов — отдельный контекст без Node.js и доступа к управляющему IPC.
-- Шаблоны раскладок: агент + shell; два агента + тесты; агент + предпросмотр.
-- Git-ветка, изменённые файлы, opt-in создание worktree для отдельных задач.
-- Агентные адаптеры уведомлений и resume по реально доступным hooks.
-- MCP как тонкий клиент того же локального API, когда CLI/API стабилизируются.
+- Layout templates such as agent + shell, two agents + tests, and agent + browser preview.
+- Explicit, opt-in worktree creation for independent tasks.
+- Agent adapters for notifications and conversation resume, based on verified upstream interfaces.
+- Broader shell integration beyond the included PowerShell and WSL Bash tracking.
+- A thin MCP client over a stable local API.
+- Broader browser automation coverage and UI localization.
 
-## Пока не входит
+## Out of scope
 
-Облачная синхронизация, мобильный клиент, собственный AI-чат и биллинг моделей, автоматическое распределение задач, полная совместимость tmux, полное копирование cmux. Эти функции не нужны для проверки основного рабочего сценария.
+Cloud synchronization, a mobile client, built-in AI chat or model billing, automatic task dispatch, complete tmux compatibility, and a complete copy of cmux are outside the initial preview.
 
-## Ранние проверки
+## Acceptance goals
 
-1. Запустить реальные целевые CLI в Windows и хотя бы одном установленном WSL-дистрибутиве; зафиксировать фактическую доступность каждой команды.
-2. Проверить длительный поток вывода и интерактивный TUI: resize, прерывание, Unicode, копирование и многострочную вставку.
-3. Отсоединить окно при работающем процессе, открыть снова и проверить тот же PID и корректный экран без потери/дублирования данных.
-4. Отправить уведомление из Windows и WSL, получить правильную панель и непрочитанный статус.
-5. Создать рабочее пространство и панель через CLI, отправить ввод, прочитать результат.
-6. После перезапуска приложения восстановить раскладку; отдельно проверить обработку отсутствующего каталога и недоступного WSL-дистрибутива.
+1. Launch the intended CLI tools on Windows and at least one installed WSL distribution; record each tool's actual availability and exercised behavior separately.
+2. Exercise sustained output and a real interactive TUI, including resize, interruption, Unicode, copying, and multiline paste.
+3. Detach and reopen the UI while a shell runs; verify the same process and a correctly restored screen without missing or duplicated output.
+4. Deliver a notification to the correct pane and verify unread state. Test Windows and any claimed WSL interop route independently.
+5. Create a workspace and split pane through the terminal CLI, submit input, and inspect resulting screen state.
+6. Verify fresh-shell restoration after daemon restart, and clear handling of missing directories and unavailable WSL distributions.
+7. Inspect real project files, images, Git status, and diffs without modifying the project through those panels.
+8. Open a real page in the embedded browser, inspect it, act on returned element references, and verify the resulting state and screenshot while the desktop remains open.
 
-Первый вертикальный срез: одна настоящая Windows-сессия и одна WSL-сессия, разделение панели, работающий ввод/вывод/resize. Затем проверить жизненный цикл фонового процесса. Красивый интерфейс без этих проверок не считается работающим мультиплексером.
-
-## Источники
-
-- https://cmux.com — функции оригинального cmux, обнаруженные в поиске; прямое извлечение страницы вернуло 403.
-- https://github.com/manaflow-ai/cmux — исходный проект.
-- https://raw.githubusercontent.com/mkurman/cmux-windows/main/README.md — прочитан напрямую; заявлены WPF + ConPTY, рабочие пространства, панели, OSC-уведомления, named-pipe CLI и MIT. Качество реализации не проверялось.
+The first engineering milestone is working terminal input/output and lifecycle behavior. Attractive screenshots are useful evidence of the interface, but cannot substitute for those runtime checks.

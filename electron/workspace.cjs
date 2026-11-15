@@ -7,26 +7,40 @@ const workspaceMethods = new Set(['files.list','files.read','git.status','git.di
 const LIMIT = 12 * 1024 * 1024;
 const imageTypes = {'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.bmp':'image/bmp','.ico':'image/x-icon','.avif':'image/avif','.svg':'image/svg+xml'};
 function relative(value='') {
-  if (typeof value!=='string' || value.length>4096 || /[\x00-\x1f]/.test(value)) throw new Error('Некорректный путь');
+  if (typeof value!=='string' || value.length>4096 || /[\x00-\x1f]/.test(value)) throw new Error('Invalid path');
   const normalized=value.replace(/\\/g,'/');
-  if (normalized.startsWith('/') || normalized.includes(':') || normalized.split('/').some(p=>p==='..')) throw new Error('Путь должен находиться внутри проекта');
+  if (normalized.startsWith('/') || normalized.includes(':') || normalized.split('/').some(p=>p==='..')) throw new Error('Path must remain inside the current directory');
   return normalized.replace(/^\.\//,'');
 }
 async function context(client, params) {
-  if (!params || typeof params.workspaceId!=='string') throw new Error('Не указано рабочее пространство');
+  if (!params || typeof params.workspaceId!=='string') throw new Error('Workspace is required');
   const state=await client.request('state',{});
   const workspace=state.workspaces.find(w=>w.id===params.workspaceId);
-  if(!workspace) throw new Error('Рабочее пространство уже закрыто');
+  if(!workspace) throw new Error('Workspace is closed');
+  let target=workspace;
+  if(params.paneId!==undefined){
+    if(typeof params.paneId!=='string')throw new Error('Invalid paneId');
+    const pane=workspace.panes?.find(p=>p.id===params.paneId);
+    if(!pane)throw new Error('Pane does not belong to this workspace');
+    target={...workspace,cwd:pane.cwd,profileId:pane.profileId};
+  }
   const env=await client.request('environment',{});
-  const profile=env.profiles.find(p=>p.id===workspace.profileId);
-  if(!profile) throw new Error('Профиль запуска недоступен');
-  return {workspace,profile};
+  const profile=env.profiles.find(p=>p.id===target.profileId);
+  if(!profile) throw new Error('Terminal profile is unavailable');
+  return {workspace:target,profile};
 }
-async function resolveLocal(root, rel) {
+async function resolveLocal(root, rel, allowMissing=false) {
   const actualRoot=await fs.realpath(root);
-  const target=await fs.realpath(path.resolve(actualRoot,relative(rel)));
+  let candidate=path.resolve(actualRoot,relative(rel)), target;
+  while(true){
+    try {target=await fs.realpath(candidate);break;}
+    catch(error){
+      if(!allowMissing || error.code!=='ENOENT' || path.dirname(candidate)===candidate)throw error;
+      candidate=path.dirname(candidate);
+    }
+  }
   const fromRoot=path.relative(actualRoot,target);
-  if(fromRoot==='..' || fromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(fromRoot)) throw new Error('Ссылка ведёт за пределы проекта');
+  if(fromRoot==='..' || fromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(fromRoot)) throw new Error('Link points outside the current directory');
   return target;
 }
 function preview(buffer,name,size) {
@@ -43,8 +57,8 @@ async function localFiles(root,method,rel) {
     return {path:rel,entries:entries.slice(0,2000).map(e=>({name:e.name,path:rel?`${rel}/${e.name}`:e.name,type:e.isDirectory()?'directory':e.isSymbolicLink()?'symlink':'file',size:0})),truncated:entries.length>2000};
   }
   const stat=await fs.stat(target);
-  if(!stat.isFile()) throw new Error('Выбери файл для просмотра');
-  if(stat.size>LIMIT) throw new Error('Предпросмотр ограничен файлами до 12 МБ');
+  if(!stat.isFile()) throw new Error('Select a file to preview');
+  if(stat.size>LIMIT) throw new Error('Preview limit is 12 MB');
   return {path:rel,...preview(await fs.readFile(target),rel,stat.size)};
 }
 const pythonFiles = String.raw`import os,sys,json,base64,mimetypes
@@ -77,7 +91,7 @@ async function linuxRoot(workspace,profile) {
   if(wslRoots.has(key))return wslRoots.get(key);
   const {stdout}=await run('wsl.exe',['-d',profile.distro,'--','python3','-c','import os,sys;print(os.path.realpath(os.path.expanduser(sys.argv[1])))',workspace.cwd],{windowsHide:true,timeout:12000,maxBuffer:65536,encoding:'utf8'});
   const root=stdout.trim();
-  if(!root.startsWith('/'))throw new Error('WSL не вернул каталог проекта');
+  if(!root.startsWith('/'))throw new Error('WSL did not return an absolute directory');
   wslRoots.set(key,root);
   return root;
 }
@@ -108,7 +122,7 @@ function parseStatus(stdout) {
   return {available:true,branch,entries};
 }
 async function workspaceRequest(client,method,params) {
-  if(!workspaceMethods.has(method))throw new Error('Неизвестная операция');
+  if(!workspaceMethods.has(method))throw new Error('Unknown workspace operation');
   const {workspace,profile}=await context(client,params);
   const rel=relative(params.path);
   if(method.startsWith('files.')){
@@ -116,21 +130,41 @@ async function workspaceRequest(client,method,params) {
     try {
       const {stdout}=await run('wsl.exe',['-d',profile.distro,'--','python3','-c',pythonFiles,workspace.cwd,rel,method],{windowsHide:true,timeout:15000,maxBuffer:20*1024*1024,encoding:'utf8'});
       return JSON.parse(stdout);
-    }catch(error){throw new Error(`Не удалось открыть файл WSL. Требуется python3 в дистрибутиве. ${(error.stderr || error.message).trim().slice(0,1200)}`);}
+    }catch(error){throw new Error(`Cannot open WSL file; python3 is required in the distribution. ${(error.stderr || error.message).trim().slice(0,1200)}`);}
   }
   if(method==='git.status'){
-    try{return parseStatus(await executeGit(workspace,profile,['status','--porcelain=v1','-z','--branch','--untracked-files=normal']));}
+    try{
+      const status=parseStatus(await executeGit(workspace,profile,['status','--porcelain=v1','-z','--branch','--untracked-files=normal',...(params.paneId!==undefined?['--','.']:[])]));
+      if(params.paneId!==undefined){
+        const prefix=(await executeGit(workspace,profile,['rev-parse','--show-prefix'])).replace(/\r?\n$/,'');
+        status.entries=status.entries.filter(entry=>entry.path.startsWith(prefix)).map(entry=>{
+          const result={...entry,path:entry.path.slice(prefix.length)};
+          if(result.originalPath){
+            if(result.originalPath.startsWith(prefix))result.originalPath=result.originalPath.slice(prefix.length);
+            else delete result.originalPath;
+          }
+          return result;
+        });
+      }
+      return status;
+    }
     catch(error){return {available:false,branch:'',entries:[],error:error.message};}
   }
   const args=['diff','--no-ext-diff','--no-textconv','--no-color'];
+  if(params.paneId!==undefined){
+    if(profile.environment==='wsl'){
+      await run('wsl.exe',['-d',profile.distro,'--','python3','-c','import os,sys; root=os.path.realpath(sys.argv[1]); target=os.path.realpath(os.path.join(root,sys.argv[2])); assert os.path.commonpath([root,target])==root, "Path is outside current directory"',await linuxRoot(workspace,profile),rel],{windowsHide:true,timeout:12000,maxBuffer:65536,encoding:'utf8'});
+    }else await resolveLocal(workspace.cwd,rel,true);
+    args.push('--relative');
+  }
   if(params.staged===true)args.push('--cached');
-  args.push('--');if(rel)args.push(rel);
+  args.push('--');if(rel)args.push(rel);else if(params.paneId!==undefined)args.push('.');
   const text=await executeGit(workspace,profile,args);
   if(!text && rel && !params.staged){
     const untracked=await executeGit(workspace,profile,['ls-files','--others','--exclude-standard','--',rel]);
     if(untracked.trim()){
-      const file=await workspaceRequest(client,'files.read',{workspaceId:workspace.id,path:rel});
-      return {text:file.kind==='text'?`Новый файл: ${rel}\n\n${file.text}`:`Новый двоичный файл: ${rel}`};
+      const file=await workspaceRequest(client,'files.read',{workspaceId:workspace.id,paneId:params.paneId,path:rel});
+      return {text:file.kind==='text'?`New file: ${rel}\n\n${file.text}`:`New binary file: ${rel}`};
     }
   }
   return {text};

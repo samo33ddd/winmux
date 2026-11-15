@@ -4,12 +4,12 @@ User requirement: files, image previews, embedded browser and Git are part of th
 
 ## Boundary and responses
 
-Only the exact top-level Winmux webContents and main frame may call IPC. Embedded HTTP(S) webviews have no preload, Node, terminal bridge or file bridge. Workspace identity is resolved from daemon state on every call. File paths are relative to the selected workspace startup directory; absolute paths, traversal, and symlinks escaping it are rejected. Windows uses Node filesystem APIs; WSL uses python3 and Git inside the selected distribution via executable/argument arrays.
+Only the exact top-level Winmux webContents and main frame may call IPC. Embedded HTTP(S) webviews have no preload, Node, terminal bridge or file bridge. Workspace identity is resolved from daemon state on every call. With `paneId`, file paths are relative to that pane's last shell-reported directory and use its profile; a pane from another workspace is rejected. Without `paneId`, the workspace startup directory/profile remain the compatibility default. Absolute paths, traversal, and symlinks escaping the selected root are rejected. Windows uses Node filesystem APIs; WSL uses python3 and Git inside the selected distribution via executable/argument arrays.
 
-- files.list {workspaceId,path?} -> {path,entries:[{name,path,type,size}],truncated}; directories first, up to 2000 rows, .git omitted. Size is not loaded during browsing (0); read returns actual size.
-- files.read {workspaceId,path} -> {path,kind:text|image|binary,size,text?,dataUrl?,truncated?}; images up to12MiB, text preview up to512KiB, no HTML execution.
-- git.status {workspaceId} -> {available,branch,entries:[{path,index,worktree,originalPath?}],error?}; actual porcelain status.
-- git.diff {workspaceId,path?,staged?} -> {text}; disables textconv and external diff helpers, literal pathspecs, no shell command concatenation. New untracked text is displayed as actual content with a label.
+- files.list {workspaceId,paneId?,path?} -> {path,entries:[{name,path,type,size}],truncated}; directories first, up to 2000 rows, .git omitted. Size is not loaded during browsing (0); read returns actual size.
+- files.read {workspaceId,paneId?,path} -> {path,kind:text|image|binary,size,text?,dataUrl?,truncated?}; images up to12MiB, text preview up to512KiB, no HTML execution.
+- git.status {workspaceId,paneId?} -> {available,branch,entries:[{path,index,worktree,originalPath?}],error?}; actual porcelain status, limited to the selected root.
+- git.diff {workspaceId,paneId?,path?,staged?} -> {text}; disables textconv and external diff helpers, literal pathspecs, no shell command concatenation. New untracked text is displayed as actual content with a label.
 - writeClipboard(text)/readClipboard() -> native text clipboard, bound write size.
 
 IPC rejects with a human error for malformed path, closed workspace, inaccessible files, file-too-large, Python missing, process timeout or permission failure. Git unavailable/not-a-repository uses available:false with its error for a useful empty state. No implicit retry for state mutations. File reads and Git operations are idempotent; process operations bounded to12–15s and bounded buffers. No persistence/schema migration needed for these read-only services.

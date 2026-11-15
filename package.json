@@ -10,9 +10,17 @@
     "start":"electron .",
     "test:backend":"node scripts/run-electron-node.cjs tests/backend-smoke.cjs",
     "test:desktop":"node tests/desktop-smoke.cjs",
+    "test:cwd-agent":"node scripts/run-electron-node.cjs tests/cwd-agent-smoke.cjs",
+    "test:profile":"node tests/powershell-profile-smoke.cjs",
+    "test:skills":"node --test tests/skills-install-smoke.cjs",
+    "test:cookies":"node tests/cookie-import-smoke.cjs",
+    "test:workspace":"node tests/workspace-smoke.cjs",
+    "test:file-preview":"node --test tests/local-file-links.cjs && node tests/file-preview-smoke.cjs",
+    "browser":"node scripts/browser.cjs",
     "cli":"node scripts/run-electron-node.cjs cli.cjs",
     "rebuild":"electron-rebuild -f -w node-pty",
-    "package":"npm run build && electron-builder --dir"
+    "package":"npm run build && electron-builder --dir",
+    "release:build":"npm run build && electron-builder --win nsis portable --x64 --publish never"
   },
   "dependencies":{
     "@xterm/xterm":"6.0.0",
@@ -39,11 +47,15 @@
     "vite":"^7.2.0"
   },
   "build":{
-    "appId":"local.winmux.desktop",
+    "appId":"io.github.samo33ddd.winmux",
     "productName":"Winmux",
     "directories":{"output":"release"},
-    "files":["dist/**/*","electron/**/*","cli.cjs","package.json"],
+    "files":["dist/**/*","electron/**/*","cli.cjs","scripts/browser.cjs","skills/**/*","build/icon.png","package.json"],
     "asarUnpack":["node_modules/node-pty/**/*"],
-    "win":{"target":"dir"}
+    "extraResources":[{"from":"build/icon.ico","to":"icon.ico"}],
+    "npmRebuild":false,
+    "win":{"target":["nsis","portable"],"icon":"build/icon.ico"},
+    "nsis":{"oneClick":false,"allowToChangeInstallationDirectory":true,"perMachine":false,"artifactName":"Winmux-Setup-${version}-${arch}.${ext}"},
+    "portable":{"artifactName":"Winmux-Portable-${version}-${arch}.${ext}"}
   }
 }
