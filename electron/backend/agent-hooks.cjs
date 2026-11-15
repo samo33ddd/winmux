@@ -5,10 +5,13 @@ const { fail } = require('./shared.cjs');
 const psQuote = value => `'${value.replace(/'/g, "''")}'`;
 const shQuote = value => `'${value.replace(/'/g, "'\\''")}'`;
 const wslPath = value => /^[A-Za-z]:[\\/]/.test(value) ? '/mnt/' + value[0].toLowerCase() + value.slice(2).replace(/\\/g, '/') : value;
+// Forward Node mode through WSL interop only for this helper invocation.
+const wslNodeEnv = 'ELECTRON_RUN_AS_NODE=1 WSLENV="${WSLENV:+$WSLENV:}ELECTRON_RUN_AS_NODE"';
 function windowsHookCommand(adapter) {
   // Inherited per-launch paths also keep repeated hook config below the Windows
   // process command-line limit. The environment values are never shell source.
-  const script = `& $env:WINMUX_AGENT_NODE $env:WINMUX_AGENT_HELPER --${adapter}`;
+  // This PowerShell process belongs only to the hook, never the pane shell.
+  const script = `$env:ELECTRON_RUN_AS_NODE='1'; & $env:WINMUX_AGENT_NODE $env:WINMUX_AGENT_HELPER --${adapter}`;
   return `powershell.exe -NoLogo -NoProfile -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
 }
 
@@ -20,7 +23,7 @@ function claudeSettings(profile) {
   // executable resolves its script argument using Windows path semantics.
   const executable = convert(process.execPath), helper = path.join(__dirname, 'agent-status.cjs');
   // Keep shell metacharacters out of npm .cmd argument vectors, even inside JSON.
-  const command = windows ? windowsHookCommand('claude') : `${quote(executable)} ${quote(helper)} --claude`;
+  const command = windows ? windowsHookCommand('claude') : `${profile.environment === 'wsl' ? wslNodeEnv : 'ELECTRON_RUN_AS_NODE=1'} ${quote(executable)} ${quote(helper)} --claude`;
   const entry = matcher => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', ...(windows ? { shell: 'powershell' } : {}), command, timeout: 5 }] }];
   // https://code.claude.com/docs/en/hooks: entries merge across settings levels.
   // --settings is session-only; no user/project/global file is written or replaced.
@@ -42,7 +45,7 @@ function codexHookArgs(profile) {
   const convert = profile.environment === 'wsl' ? wslPath : value => value;
   const helper = path.join(__dirname, 'agent-status.cjs'), executable = convert(process.execPath);
   const commandWindows = windowsHookCommand('codex');
-  const command = profile.environment === 'wsl' ? `${shQuote(executable)} ${shQuote(helper)} --codex` : commandWindows;
+  const command = profile.environment === 'wsl' ? `${wslNodeEnv} ${shQuote(executable)} ${shQuote(helper)} --codex` : commandWindows;
   // Native hook discovery collects each settings layer independently, including
   // SessionFlags from -c. Existing hooks and notify stay in their own layers.
   // https://github.com/openai/codex/blob/main/codex-rs/hooks/src/engine/discovery.rs

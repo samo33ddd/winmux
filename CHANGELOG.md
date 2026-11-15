@@ -18,6 +18,11 @@ User-visible changes are recorded here. Release availability and downloadable as
 - Detection of older daemons so unsupported new operations explain the required restart instead of silently doing nothing.
 - English documentation, contribution guidance, and repository-shipped terminal and browser agent skills.
 
+### Fixed
+
+- Keep host-only imported cookies on their original host; domain cookies retain their intended subdomain scope.
+- Isolate Electron's Node-only mode to daemon and hook helper processes so Electron applications can start normally inside terminal panes.
+
 ### Preview limits
 
 - Restarting the daemon or Windows starts fresh shells; commands and agent conversations are not replayed or resumed.

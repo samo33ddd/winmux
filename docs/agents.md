@@ -1,6 +1,6 @@
 # Using Winmux with agents
 
-Winmux exposes two local command surfaces: a persistent terminal daemon and a browser service owned by the open desktop window. These are local CLIs, not an MCP server. Agent hooks, conversation resume, and Windows CLI interop from WSL are not verified integrations.
+Winmux exposes two local command surfaces: a persistent terminal daemon and a browser service owned by the open desktop window. These are local CLIs, not an MCP server. Supported Claude Code and modern Codex launches can add session-only status hooks. Conversation resume and Windows CLI interop from WSL remain unverified.
 
 The repository ships [winmux-terminal](../skills/winmux-terminal/SKILL.md) and [winmux-browser](../skills/winmux-browser/SKILL.md). They are portable instructions for an agent to read or install using its own skill mechanism; their presence here does not install them in your agent or modify a local Hermes profile.
 
@@ -34,6 +34,10 @@ npm run cli -- read PANE_ID --snapshot
 npm run cli -- key PANE_ID Ctrl+C
 npm run cli -- notify PANE_ID --title "Task finished" --body "Inspect the terminal for results"
 ```
+
+The sidebar represents projects; horizontal terminal tabs stay within their workspace. Use `npm run cli -- tab WORKSPACE_ID --pane PANE_ID` to create a tab inheriting the selected pane's current directory. Add `--agent codex` (or an available catalog ID) to launch an installed agent there. `list` exposes `tabs`, `activeTabId`, and each pane's `tabId`; tab creation returns the tab with its initial leaf pane ID. The generic RPC methods `tab.select` and `tab.close` take `{workspaceId,tabId}`. Closing a tab stops only its panes.
+
+The desktop's **Agent status hooks** option adds hooks only to that supported launch. RPC launches can set `agentHooks:true` on `workspace.create`, `tab.create`, or `pane.split`; catalog `hookAdapter` identifies supported agents. Windows hooks require PowerShell 7.3+. Existing global/project hooks and Codex `notify` are preserved. Inspect `agentState` for confirmed hook/lifecycle events; `unknown` is intentional when activity cannot be established. A daemon restart starts fresh shells and clears current agent identity, without replaying agent commands. See [the daemon contract](../electron/backend/README.md) for the authenticated helper and compatibility details.
 
 `horizontal` places panes side by side; `vertical` stacks them. `send` sends literal terminal input and appends carriage return only with `--enter`. Input can run commands in the actual target shell or interact with an agent TUI. Inspect the pane before sending. `key` supports Enter, Tab, Escape, Backspace, arrows, Home, End, Delete, PageUp, PageDown, and Ctrl+A through Ctrl+Z. Use `--` before literal text beginning with `--`, placing options such as `--enter` before that separator.
 

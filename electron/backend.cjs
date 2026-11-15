@@ -220,12 +220,18 @@ async function startServer(options = {}) {
     const runtime = terminalFor(pane);
     runtime.agentLaunchId = launch.agentLaunchId;
     try {
+      // Even an unset name in WSLENV creates an empty variable in Linux.
+      const forwardedEnv = (process.env.WSLENV || '').split(':').filter(entry => entry.split('/')[0].toUpperCase() !== 'ELECTRON_RUN_AS_NODE');
+      const shellEnv = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', WINMUX_PANE_ID: pane.id, WINMUX_DATA_DIR: loc.dataDir, WINMUX_PIPE_NAME: loc.pipeName,
+        WINMUX_AGENT_LAUNCH_ID: launch.agentLaunchId || '',
+        WINMUX_AGENT_NODE: process.execPath, WINMUX_AGENT_HELPER: path.join(__dirname, 'backend', 'agent-status.cjs'),
+        WSLENV: [...forwardedEnv, 'WINMUX_PANE_ID', 'WINMUX_DATA_DIR', 'WINMUX_PIPE_NAME', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER'].filter(Boolean).join(':') };
+      for (const key of Object.keys(shellEnv)) {
+        if ((process.platform === 'win32' ? key.toUpperCase() : key) === 'ELECTRON_RUN_AS_NODE') delete shellEnv[key];
+      }
       runtime.pty = pty.spawn(launch.profile.command, launch.args, {
         name: 'xterm-256color', cols: pane.cols, rows: pane.rows, cwd: launch.spawnCwd,
-        env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', WINMUX_PANE_ID: pane.id, WINMUX_DATA_DIR: loc.dataDir, WINMUX_PIPE_NAME: loc.pipeName,
-          WINMUX_AGENT_LAUNCH_ID: launch.agentLaunchId || '', ELECTRON_RUN_AS_NODE: '1',
-          WINMUX_AGENT_NODE: process.execPath, WINMUX_AGENT_HELPER: path.join(__dirname, 'backend', 'agent-status.cjs'),
-          WSLENV: [process.env.WSLENV, 'WINMUX_PANE_ID', 'WINMUX_DATA_DIR', 'WINMUX_PIPE_NAME', 'WINMUX_AGENT_LAUNCH_ID', 'ELECTRON_RUN_AS_NODE', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER'].filter(Boolean).join(':') },
+        env: shellEnv,
         useConpty: true, useConptyDll: true,
       });
       pane.pid = runtime.pty.pid; pane.status = 'running'; delete pane.exitCode;

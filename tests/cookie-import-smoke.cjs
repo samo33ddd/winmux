@@ -17,4 +17,25 @@ assert.equal(normalizeCookies(input,'http://app.example.test').accepted.length,0
 assert.throws(()=>normalizeCookies(input,'file:///secret'),/HTTP/);
 assert.throws(()=>normalizeCookies(input,'https://user:pass@example.test'),/HTTP/);
 assert.throws(()=>normalizeCookies({},'https://example.test'),/array/);
+for (const scope of [
+ {domain:'app.example.test',hostOnly:true,domainCookie:false},
+ {domain:'.app.example.test',hostOnly:true,domainCookie:false},
+ {domain:'app.example.test',domainCookie:false},
+ {domain:'app.example.test',hostOnly:false,domainCookie:true},
+ {domain:'.app.example.test',domainCookie:true},
+]) {
+ for (const host of ['app.example.test','child.app.example.test','sibling.example.test','example.test','otherapp.example.test']) {
+  const {domainCookie,...cookie}=scope;
+  const target=`https://${host}`;
+  const normalized=normalizeCookies([{...cookie,name:'scoped',value:'fixture-only',path:'/app'}],target);
+  const matches=host==='app.example.test' || (domainCookie && host==='child.app.example.test');
+  assert.equal(normalized.accepted.length,Number(matches),JSON.stringify({cookie,host}));
+  assert.equal(normalized.skipped,Number(!matches));
+  if (matches) {
+   assert.equal(normalized.accepted[0].url,target+'/app');
+   assert.equal(normalized.accepted[0].path,'/app');
+   assert.equal(normalized.accepted[0].domain,domainCookie ? cookie.domain : undefined);
+  }
+ }
+}
 console.log('COOKIE_NORMALIZATION_OK: domain filtering, host-only, expiry, SameSite, partition rejection, invalid input');

@@ -8,7 +8,8 @@ function normalizeCookies(input, target) {
   const accepted = []; let skipped = 0;
   for (const cookie of cookies) {
     const domain = typeof cookie?.domain === 'string' ? cookie.domain.toLowerCase().replace(/^\./,'') : '';
-    if (!domain || !(url.hostname === domain || url.hostname.endsWith('.'+domain))) { skipped++; continue; }
+    const domainCookie = cookie?.hostOnly === false || (cookie?.hostOnly !== true && typeof cookie?.domain === 'string' && cookie.domain.startsWith('.'));
+    if (!domain || !(url.hostname === domain || (domainCookie && url.hostname.endsWith('.'+domain)))) { skipped++; continue; }
     if (typeof cookie.name !== 'string' || !cookie.name || /[\x00-\x20\x7f()<>@,;:\\"/\[\]?={}]/.test(cookie.name) || typeof cookie.value !== 'string' || cookie.value.length > 4096 || /[\x00\r\n]/.test(cookie.value) || cookie.partitionKey) { skipped++; continue; }
     const secure = cookie.secure === true;
     if (secure && url.protocol !== 'https:') { skipped++; continue; }
@@ -18,7 +19,7 @@ function normalizeCookies(input, target) {
     const sameSite = {none:'no_restriction',no_restriction:'no_restriction',lax:'lax',strict:'strict',unspecified:'unspecified'}[String(cookie.sameSite || 'unspecified').toLowerCase()];
     if (!sameSite || (sameSite === 'no_restriction' && !secure)) { skipped++; continue; }
     accepted.push({url:url.origin+cookiePath,name:cookie.name,value:cookie.value,path:cookiePath,secure,httpOnly:cookie.httpOnly === true,sameSite,
-      ...(cookie.hostOnly === false || (cookie.hostOnly !== true && cookie.domain.startsWith('.')) ? {domain:cookie.domain} : {}),
+      ...(domainCookie ? {domain:cookie.domain} : {}),
       ...(cookie.session !== true && expires !== undefined && expires !== -1 ? {expirationDate:expires} : {})});
   }
   return {url,accepted,skipped};

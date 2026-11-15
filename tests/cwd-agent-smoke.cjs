@@ -49,8 +49,8 @@ if (process.argv.includes('--fixture-daemon')) {
   for (const dir of [fixture, childDir, outside]) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(fixture, 'fixture.cmd'), '@echo off\r\necho run>>"%~dp0windows-runs.txt"\r\necho SAFE_AGENT_STARTED\r\nexit /b 0\r\n');
   fs.writeFileSync(path.join(fixture, 'fixture.sh'), '#!/bin/bash\nprintf "run\\n" >> "$(dirname -- "$0")/wsl-runs.txt"\nprintf "SAFE_AGENT_STARTED\\n"\n');
-  fs.writeFileSync(path.join(fixture, 'hooks.cmd'), `@echo off\r\n"${process.execPath}" "%~dp0hooks.cjs" %*\r\nexit /b %errorlevel%\r\n`);
-  fs.writeFileSync(path.join(fixture, 'hooks.sh'), `#!/bin/bash\n${shQuote(linuxPath(process.execPath))} ${shQuote(path.join(fixture, 'hooks.cjs'))} "$@"\n`);
+  fs.writeFileSync(path.join(fixture, 'hooks.cmd'), `@echo off\r\nif defined ELECTRON_RUN_AS_NODE exit /b 91\r\nsetlocal\r\nset "ELECTRON_RUN_AS_NODE=1"\r\n"${process.execPath}" "%~dp0hooks.cjs" %*\r\nexit /b %errorlevel%\r\n`);
+  fs.writeFileSync(path.join(fixture, 'hooks.sh'), `#!/bin/bash\nif [ "\${ELECTRON_RUN_AS_NODE+x}" = x ]; then exit 91; fi\nELECTRON_RUN_AS_NODE=1 WSLENV="\${WSLENV:+$WSLENV:}ELECTRON_RUN_AS_NODE" ${shQuote(linuxPath(process.execPath))} ${shQuote(path.join(fixture, 'hooks.cjs'))} "$@"\n`);
   fs.writeFileSync(path.join(fixture, 'hooks.cjs'), String.raw`
 const fs = require('node:fs'), path = require('node:path');
 const base = path.join(process.env.WINMUX_DATA_DIR, 'hook-' + process.env.WINMUX_PANE_ID);
@@ -58,6 +58,19 @@ const env = Object.fromEntries(['WINMUX_DATA_DIR', 'WINMUX_PIPE_NAME', 'WINMUX_P
 fs.writeFileSync(base + '.json', JSON.stringify({ args: process.argv.slice(2), env }));
 console.log('SAFE_HOOK_FIXTURE');
 setInterval(() => { if (fs.existsSync(base + '.exit')) process.exit(Number(fs.readFileSync(base + '.exit', 'utf8'))); }, 50);
+`);
+  const electronFixture = path.join(fixture, 'electron-app');
+  fs.mkdirSync(electronFixture);
+  fs.writeFileSync(path.join(electronFixture, 'package.json'), JSON.stringify({ name: 'winmux-electron-fixture', main: 'main.cjs' }));
+  fs.writeFileSync(path.join(electronFixture, 'main.cjs'), `
+const { app } = require('electron');
+const fs = require('node:fs'), path = require('node:path');
+app.setPath('userData', path.join(__dirname, 'user-data'));
+app.whenReady().then(() => {
+  fs.writeFileSync(path.join(__dirname, 'ready.json'), JSON.stringify({ ready: app.isReady(), electron: process.versions.electron, runAsNode: process.env.ELECTRON_RUN_AS_NODE }));
+  console.log('WINMUX_ELECTRON_APP_READY');
+  app.quit();
+});
 `);
   fs.writeFileSync(path.join(project, 'root-only.txt'), 'root');
   fs.writeFileSync(path.join(childDir, 'inside.txt'), 'before\n');
@@ -70,7 +83,10 @@ setInterval(() => { if (fs.existsSync(base + '.exit')) process.exit(Number(fs.re
   fs.symlinkSync(outside, path.join(childDir, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
   const pipeName = process.platform === 'win32' ? `\\\\.\\pipe\\winmux-cwd-agent-${randomUUID()}` : path.join(dataDir, 'ipc.sock');
   const options = { dataDir, pipeName };
-  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', WINMUX_DATA_DIR: dataDir, WINMUX_PIPE_NAME: pipeName, WINMUX_FIXTURE_DIR: fixture, WINMUX_NO_PROFILE: '1' };
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', WINMUX_DATA_DIR: dataDir, WINMUX_PIPE_NAME: pipeName, WINMUX_FIXTURE_DIR: fixture, WINMUX_NO_PROFILE: '1',
+    WSLENV: [process.env.WSLENV, 'eLeCtRoN_rUn_As_NoDe'].filter(Boolean).join(':') };
+  // Windows environment lookup is case-insensitive, but object keys need not be.
+  if (process.platform === 'win32') { delete env.ELECTRON_RUN_AS_NODE; env.eLeCtRoN_rUn_As_NoDe = '1'; }
   let daemon, client, logs = '';
   const events = [];
   async function eventually(action, label, timeout = 20000) {
@@ -128,13 +144,15 @@ setInterval(() => { if (fs.existsSync(base + '.exit')) process.exit(Number(fs.re
     const deliver = async (event, expected, extra = {}) => {
       const input = JSON.stringify({ hook_event_name: event, ...extra });
       let result;
+      const helperEnv = { ...env, ...captured.env };
+      for (const key of Object.keys(helperEnv)) if (key.toUpperCase() === 'ELECTRON_RUN_AS_NODE') delete helperEnv[key];
       if (isWsl) {
         // Execute the generated Linux hook command, including real WSL->Windows interop.
         result = spawnSync(profile.command, [...profile.args, '--exec', '/bin/bash', '-c', commandFor(event)], {
-          env: { ...env, ...captured.env, WSLENV: ['ELECTRON_RUN_AS_NODE', 'WINMUX_DATA_DIR', 'WINMUX_PIPE_NAME', 'WINMUX_PANE_ID', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER'].join(':') },
+          env: { ...helperEnv, WSLENV: ['WINMUX_DATA_DIR', 'WINMUX_PIPE_NAME', 'WINMUX_PANE_ID', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER'].join(':') },
           input, encoding: 'utf8', timeout: 10000, windowsHide: true });
       } else result = spawnSync('pwsh.exe', ['-NoLogo', '-NoProfile', '-EncodedCommand', Buffer.from(commandFor(event), 'utf16le').toString('base64')], {
-        env: { ...env, ...captured.env }, input, encoding: 'utf8', timeout: 10000, windowsHide: true });
+        env: helperEnv, input, encoding: 'utf8', timeout: 10000, windowsHide: true });
       assert.equal(result.status, 0, result.error?.message || result.stderr);
       await eventually(async () => (await paneState(paneId)).agentState === expected, `${profile.id} ${event}: ${expected}`);
     };
@@ -152,9 +170,28 @@ setInterval(() => { if (fs.existsSync(base + '.exit')) process.exit(Number(fs.re
     fs.writeFileSync(base + '.exit', '7');
     await eventually(async () => (await paneState(paneId)).agentExitCode === 7, 'actual agent exit code');
     assert.equal((await paneState(paneId)).agentState, 'failed'); assert.equal((await paneState(paneId)).status, 'running');
+    await checkShellEnv(paneId, isWsl);
     await assert.rejects(client.request('agent.status', { paneId, state: 'running', launchId: captured.env.WINMUX_AGENT_LAUNCH_ID }), { code: 'AGENT_NOT_ACTIVE' });
     await client.request('tab.close', { workspaceId: workspace.id, tabId: tab.id });
     console.log(`PASS ${profile.id} ${adapter}: exact hook argv, authenticated running/waiting/completed, stale rejection, exit failure, shell survives`);
+  }
+  async function checkShellEnv(paneId, isWsl) {
+    const command = isWsl
+      ? `if [ "\${ELECTRON_RUN_AS_NODE+x}" = x ]; then printf '%s%s\\n' ELECTRON_ENV_ LEAK; else printf '%s%s\\n' ELECTRON_ENV_ CLEAR; fi`
+      : "if (Test-Path Env:ELECTRON_RUN_AS_NODE) { Write-Output ('ELECTRON_ENV_' + 'LEAK') } else { Write-Output ('ELECTRON_ENV_' + 'CLEAR') }";
+    await client.request('pane.input', { paneId, data: command + '\r' });
+    await eventually(async () => /ELECTRON_ENV_(CLEAR|LEAK)/.test((await client.request('pane.screen', { paneId })).text), 'Electron shell environment check');
+    assert((await client.request('pane.screen', { paneId })).text.includes('ELECTRON_ENV_CLEAR'), 'pane shell must not inherit ELECTRON_RUN_AS_NODE');
+  }
+  async function checkElectronApp(paneId) {
+    assert(process.versions.electron, 'Run this test with scripts/run-electron-node.cjs to exercise Electron helpers and app mode');
+    // A pipeline makes interactive PowerShell wait for the GUI executable to exit.
+    await client.request('pane.input', { paneId, data: `Push-Location -LiteralPath ${psQuote(electronFixture)}; try { & ${psQuote(process.execPath)} . | Out-Null } finally { Pop-Location }; Write-Output ('ELECTRON_APP_' + 'EXITED')\r` });
+    await screen(paneId, 'ELECTRON_APP_EXITED');
+    assert(fs.existsSync(path.join(electronFixture, 'ready.json')), 'electron . must reach app.whenReady()');
+    const result = JSON.parse(fs.readFileSync(path.join(electronFixture, 'ready.json'), 'utf8'));
+    assert.equal(result.ready, true); assert.equal(result.electron, process.versions.electron); assert.equal(result.runAsNode, undefined);
+    console.log('PASS Electron app mode: electron . reaches app.whenReady() and quits without creating a window');
   }
   async function checkFiles(workspace, pane, isWsl) {
     const rpc = (method, extra = {}) => workspaceRequest(client, method, { workspaceId: workspace.id, paneId: pane.id, ...extra });
@@ -202,6 +239,8 @@ setInterval(() => { if (fs.existsSync(base + '.exit')) process.exit(Number(fs.re
     const plain = await client.request('pane.split', { paneId: pane.id, direction: 'horizontal' });
     await client.request('pane.input', { paneId: plain.id, data: "Write-Output ('PLAIN_' + 'SHELL_OK')\r" });
     await screen(plain.id, 'PLAIN_SHELL_OK'); assert.equal(runs('windows-runs.txt'), 2);
+    await checkShellEnv(plain.id, false);
+    await checkElectronApp(plain.id);
     await client.request('pane.input', { paneId: plain.id, data: "Start-Sleep -Seconds 20; Write-Output ('UNEXPECTED_' + 'COMPLETION')\r" });
     await sleep(250);
     await client.request('pane.input', { paneId: plain.id, data: '\x03' });
@@ -244,6 +283,7 @@ setInterval(() => { if (fs.existsSync(base + '.exit')) process.exit(Number(fs.re
       // Mixed-profile workspace proves pane profile, rather than workspace profile, drives files/Git.
       const linux = await client.request('pane.split', { paneId: pane.id, direction: 'vertical', profileId: wsl.id, cwd: linuxPath(project), agentId: `fixture:${wsl.id}` });
       await screen(linux.id, 'SAFE_AGENT_STARTED'); assert.equal(runs('wsl-runs.txt'), 1);
+      await checkShellEnv(linux.id, true);
       await client.request('pane.input', { paneId: linux.id, data: `cd -- ${shQuote(linuxPath(childDir))}\r` });
       await eventually(async () => (await paneState(linux.id)).cwd === linuxPath(childDir), 'WSL Unicode cwd');
       await checkFiles(workspace, linux, true);

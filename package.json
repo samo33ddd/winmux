@@ -10,7 +10,7 @@
     "start":"electron .",
     "test:backend":"node scripts/run-electron-node.cjs tests/backend-smoke.cjs",
     "test:desktop":"node tests/desktop-smoke.cjs",
-    "test:cwd-agent":"node tests/cwd-agent-smoke.cjs",
+    "test:cwd-agent":"node scripts/run-electron-node.cjs tests/cwd-agent-smoke.cjs",
     "test:profile":"node tests/powershell-profile-smoke.cjs",
     "test:skills":"node --test tests/skills-install-smoke.cjs",
     "test:cookies":"node tests/cookie-import-smoke.cjs",

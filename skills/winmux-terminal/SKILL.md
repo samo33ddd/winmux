@@ -48,6 +48,8 @@ npm run cli -- start
 npm run cli -- list
 npm run cli -- environment
 npm run cli -- new --name AgentWork --cwd C:/path/to/project --profile powershell
+npm run cli -- tab WORKSPACE_ID --pane PANE_ID
+npm run cli -- tab WORKSPACE_ID --pane PANE_ID --agent codex
 npm run cli -- split PANE_ID horizontal
 npm run cli -- send PANE_ID "Write-Output 'WINMUX_READY'" --enter
 npm run cli -- key PANE_ID Enter
@@ -62,7 +64,7 @@ npm run cli -- notify PANE_ID --title "Task finished" --body "Review terminal re
 ## Procedure
 
 1. Run `list` and `environment`. Confirm the intended workspace, startup directory, environment, and pane ID. Start the daemon only if needed for the task; use an isolated data directory for experiments.
-2. Create a workspace or split a pane only when needed. `new` returns a workspace with `panes`; `split` returns the new pane. Record its real ID and verify it with `list`.
+2. Keep work for the same project in its existing workspace: `tab WORKSPACE_ID --pane PANE_ID` adds an independent terminal tab inheriting that pane's current directory. `--agent ID` launches an available catalog agent in the new tab. Use `new` for a different project and `split` for another pane in a tab. `new` returns a workspace; `tab` returns a tab with its initial root pane ID; `split` returns the new pane. Record the real IDs and verify them with `list`.
 3. Read the target pane before sending input. Confirm whether the target is a shell prompt or an interactive program. Match the command syntax to that environment.
 4. Send the authorized input once. `send` appends carriage return only with `--enter`; `key Enter` submits separately. For literal text beginning with `--`, put options before a `--` separator. Confirm the result with `read` before additional input.
 5. Check the command's actual outcome through screen output and task-specific evidence. An accepted write, quiet terminal, or running process does not prove success. Report unresolved completion state explicitly.
