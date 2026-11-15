@@ -182,7 +182,7 @@ export default function App() {
   }, [state, activeWorkspaceId]);
   async function refresh() { const next = await bridge().call<State>('state'); setState(next); stateRef.current = next; return next; }
   async function launchAgent(agentId: string) {
-    const agent=environment?.agents?.find(item=>item.id===agentId && item.available);
+    const agent=environment?.agents?.find(item=>item.id===agentId && item.available !== false);
     if (agent) await createTerminalTab(agent.id);
   }
   async function createTerminalTab(agentId?: string) {
@@ -190,7 +190,7 @@ export default function App() {
     if (!owner || working || !tabsAvailable) return;
     setWorking(true);
     try {
-      const agent = environment?.agents?.find(item => item.id === agentId && item.available);
+      const agent = environment?.agents?.find(item => item.id === agentId && item.available !== false);
       if (agentId && !agent) return;
       const profileId = agent?.profileId ?? source?.profileId ?? owner.profileId;
       const profile = environment?.profiles.find(item => item.id === profileId);
