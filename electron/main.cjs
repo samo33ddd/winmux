@@ -4,6 +4,7 @@ const { installSkills } = require('./skills-install.cjs');
 const { appId, registerWindowsIdentity } = require('./windows-identity.cjs');
 const { workspaceRequest, workspaceMethods } = require('./workspace.cjs');
 const { startBrowserControl } = require('./browser-control.cjs');
+const { readFilePreview, previewMetadata } = require('./file-preview.cjs');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -63,6 +64,11 @@ async function ensureDaemon() {
 function trusted(event) {
   if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame) throw new Error('Untrusted IPC sender');
 }
+async function openFilePreview(params) {
+  const preview = await readFilePreview({ client, ...(params || {}) });
+  if (win && !win.isDestroyed()) win.webContents.send('winmux:event', { type:'file-preview', ...preview });
+  return previewMetadata(preview);
+}
 const allowedMethods = new Set(['state','environment','workspace.create','workspace.rename','workspace.close','tab.create','tab.select','tab.close','pane.split','pane.close','pane.input','pane.resize','pane.snapshot','pane.screen','agent.status','layout.ratio','notify','notifications.read','settings.update']);
 function syncWindowTheme(theme) {
   const colors = {dark:['#101315','#e7eeea'],midnight:['#101523','#e1e9fa'],nord:['#252c38','#eceff4'],dracula:['#20212b','#f8f8f2'],light:['#e9eeeb','#202723'],sand:['#eee8dc','#3a3328']};
@@ -83,6 +89,7 @@ async function start() {
     trusted(event);
     if (method === 'cookies.import') return importCookies({dialog,session,win},params?.url);
     if (method === 'skills.install') return installSkills(client,params);
+    if (method === 'file.open') return openFilePreview(params);
     if (method === 'theme.export') {
       if (typeof params?.json !== 'string' || params.json.length > 32768) throw new Error('Invalid theme export');
       JSON.parse(params.json);
@@ -176,7 +183,7 @@ async function start() {
   win.webContents.session.setPermissionCheckHandler(() => false);
   win.once('ready-to-show',() => { if (process.env.WINMUX_TEST_MODE !== '1') win.show(); });
   syncWindowTheme((await client.request('state',{})).settings.theme);
-  browserControl = await startBrowserControl({win, client, dataDir});
+  browserControl = await startBrowserControl({win, client, dataDir, fileOpen:openFilePreview});
   win.on('closed',() => { win=null; });
   if (devUrl) await win.loadURL(devUrl); else await win.loadFile(path.join(__dirname,'../dist/index.html'));
 }

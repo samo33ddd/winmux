@@ -52,7 +52,11 @@ Create a workspace with **Ctrl+Shift+N**, choose a shell profile, and select its
 
 Use the folder, branch, and globe buttons in the top bar to open **Files**, **Git**, and **Browser**. Files shows text and image previews. Git shows the current branch, changed files, and diffs; perform edits, staging, commits, and other Git operations in a terminal. Browser opens a website or a local development server alongside your terminals.
 
+Click local paths printed in a terminal to open the same text or image preview inside Winmux. Windows absolute paths, `./` relative paths, quoted paths with spaces, `file:line` references, and local `file://` links are supported. HTTP(S) links keep their existing external-browser behavior. Winmux never changes Windows file associations or executes the selected file.
+
 ![Winmux project tools](docs/screenshots/project-tools.png)
+
+![Local image preview inside the packaged Winmux application](docs/screenshots/file-preview.png)
 
 Select terminal text to copy it, or use the copy and paste shortcuts below. **Ctrl+C** still interrupts a terminal process. Open Settings with **Ctrl+,** for language, themes, fonts, cursor, clipboard behavior, cookie import, and project-scoped skill installation. The bell opens notifications; choosing one focuses its terminal and tab.
 
@@ -84,6 +88,8 @@ The workspace and pane show the selected agent and its last confirmed state. **A
 
 Files and Git follow the active terminal's directory through shell integration. PowerShell keeps the user's profile and prompt; WSL Bash reports its directory through OSC 7. While a foreground program is running, the displayed directory is the last directory reported by its shell. Windows and Linux paths are separate namespaces: the folder picker selects Windows directories; enter Linux paths for WSL profiles.
 
+The in-app explicit file preview is separate from the containment-limited Files panel. Text is read up to 512 KB and supported raster/SVG images up to 12 MB; binary files show metadata only. Relative terminal or CLI paths resolve from the caller pane's live directory. WSL previews use `python3` inside the pane's distribution. UNC paths, remote `file://` hosts, directories, and oversized images are rejected.
+
 Browser automation is available only while the desktop window is open. The embedded browser is a preview surface: popups, downloads, and permission requests are blocked. Its tabs retain independent pages and share a persistent browser session. File and Git views are read-only. Conversation resume, MCP, and automatic worktree creation remain future work.
 
 After an application update, an already-running daemon continues using its loaded code. Winmux detects older daemons and explains which features require a restart. When ready to stop your running commands, use **Stop all sessions and exit**, then reopen Winmux. Merely closing the window or reloading the UI does not upgrade a daemon. Never stop shared sessions as part of automated test cleanup.
@@ -96,10 +102,11 @@ From a source checkout, start the desktop with `npm start`, or start only the te
 npm run cli -- --help
 npm run cli -- list
 npm run cli -- environment
+npm run cli -- open ./screenshot.png --pane PANE_ID
 npm run browser -- --help
 ```
 
-The terminal CLI uses an authenticated local named pipe. Browser automation uses a separate desktop service. Read [the agent guide](docs/agents.md) for exact JSON arguments and practical workflows, or [the daemon contract](electron/backend/README.md) for protocol details.
+`open` requires the matching desktop window and uses its authenticated local UI pipe. `PANE_ID` may be replaced by `WINMUX_PANE_ID`; `--workspace WORKSPACE_ID` is the fallback when no pane is supplied. These commands run from a source checkout and do not install a global `winmux` executable. Read [the agent guide](docs/agents.md) for exact JSON arguments and practical workflows, or [the daemon contract](electron/backend/README.md) for protocol details.
 
 Local state and capability tokens stay under `%LOCALAPPDATA%/Winmux/`; set `WINMUX_DATA_DIR` consistently for the UI and both CLIs to select an isolated instance. API access can send input to real shells and act on signed-in pages. Keep tokens, terminal output, browser captures, and private project data out of commits and public reports.
 
@@ -111,6 +118,7 @@ Changes go through pull requests, code review, and green CI before merge. See [C
 npm run build
 npm run test:backend
 npm run test:workspace
+npm run test:file-preview
 npm run test:desktop
 ```
 

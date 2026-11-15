@@ -6,11 +6,11 @@ export interface Palette {
   muted: string; accent: string; selection: string; hover: string;
 }
 export const palettes: Palette[] = [
-  { id:'dark', name:'Graphite', scheme:'dark', bg:'#101315', surface:'#181b1e', raised:'#22272a', border:'#343c40', text:'#e7eeea', muted:'#a0ada7', accent:'#a9d9bb', selection:'#23362d', hover:'#20282a' },
+  { id:'dark', name:'Graphite', scheme:'dark', bg:'#0d0f10', surface:'#141719', raised:'#1a1e20', border:'#292e30', text:'#dfe5e1', muted:'#8e9993', accent:'#91bea6', selection:'#1d2b24', hover:'#1a1e20' },
   { id:'midnight', name:'Midnight', scheme:'dark', bg:'#101523', surface:'#171f31', raised:'#222d43', border:'#35435d', text:'#e1e9fa', muted:'#a3b4d2', accent:'#99bbff', selection:'#263c61', hover:'#222f49' },
   { id:'nord', name:'Nord', scheme:'dark', bg:'#252c38', surface:'#2e3440', raised:'#3b4252', border:'#4c566a', text:'#eceff4', muted:'#b4c1d4', accent:'#88c0d0', selection:'#3c5261', hover:'#384353' },
   { id:'dracula', name:'Dracula', scheme:'dark', bg:'#20212b', surface:'#282a36', raised:'#343746', border:'#505368', text:'#f8f8f2', muted:'#b8b8d0', accent:'#bd93f9', selection:'#493a60', hover:'#373747' },
-  { id:'light', name:'Paper', scheme:'light', bg:'#e9eeeb', surface:'#ffffff', raised:'#f8faf8', border:'#c9d3cb', text:'#202723', muted:'#5c6861', accent:'#286044', selection:'#dcebdd', hover:'#e1e8e2' },
+  { id:'light', name:'Paper', scheme:'light', bg:'#ebece9', surface:'#f8f9f6', raised:'#ffffff', border:'#d6dad5', text:'#1f2421', muted:'#626b66', accent:'#477b60', selection:'#dfe9e2', hover:'#e3e6e2' },
   { id:'sand', name:'Sand', scheme:'light', bg:'#eee8dc', surface:'#faf6ed', raised:'#fffbf4', border:'#d5cbb9', text:'#3a3328', muted:'#736551', accent:'#865321', selection:'#e9d8bb', hover:'#e8e0d1' },
 ];
 export const colorKeys = ['bg','surface','raised','border','text','muted','accent','selection','hover'] as const;

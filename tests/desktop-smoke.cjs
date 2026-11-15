@@ -57,6 +57,11 @@ async function waitScreen(paneId, text) {
   }
   throw new Error(`Terminal did not show ${text}`);
 }
+function cliOpen(file, paneId) {
+  return spawnSync(require('electron'), [path.join(root, 'cli.cjs'), 'open', file, '--pane', paneId], {
+    cwd:root, env:{...env,ELECTRON_RUN_AS_NODE:'1'}, encoding:'utf8', timeout:20000,
+  });
+}
 async function main() {
   // Start the independent daemon outside Playwright's Windows process tree:
   // its extra fd 3/4 handles otherwise outlive the GUI and delay app.close().
@@ -213,6 +218,51 @@ async function main() {
   await page.locator('[data-testid="file-entry"][data-path="build/icon.png"]').click();
   await page.getByTestId('image-preview').waitFor();
   await page.screenshot({path:path.join(artifacts,'project-tools.png')});
+  const terminalImage = path.join(dataDir, 'terminal preview.png');
+  fs.copyFileSync(path.join(root, 'build', 'icon.png'), terminalImage);
+  const quotedImage = terminalImage.replace(/'/g, "''");
+  await rpc('pane.input',{paneId:first.id,data:`Clear-Host; Write-Output '"${quotedImage}"'; Write-Output ('PREVIEW_' + 'READY')\r`});
+  const terminalScreen = await waitScreen(first.id,'PREVIEW_READY');
+  const screenLines = terminalScreen.text.split(/\r?\n/);
+  const imageRow = screenLines.findIndex(line => line.includes('terminal preview.png'));
+  assert(imageRow >= 0, 'Terminal image path must be visible');
+  const imageColumn = screenLines[imageRow].indexOf('terminal preview.png');
+  const previewPane = (await rpc('state')).workspaces.flatMap(item => item.panes).find(item => item.id === first.id);
+  const screenBox = await page.locator(`[data-pane-id="${first.id}"] .xterm-screen`).boundingBox();
+  assert(screenBox && previewPane);
+  await page.mouse.move(
+    screenBox.x + (imageColumn + 2) * (screenBox.width / previewPane.cols),
+    screenBox.y + (imageRow + 0.5) * (screenBox.height / previewPane.rows),
+  );
+  await page.locator('.local-file-link-tooltip').waitFor();
+  assert.match(await page.locator('.local-file-link-tooltip').innerText(),/terminal preview\.png/);
+  const windowCount = await desktop.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().length);
+  await page.mouse.click(
+    screenBox.x + (imageColumn + 2) * (screenBox.width / previewPane.cols),
+    screenBox.y + (imageRow + 0.5) * (screenBox.height / previewPane.rows),
+  );
+  await page.getByTestId('local-file-image').waitFor();
+  assert((await page.getByTestId('local-file-image').evaluate(image => image.naturalWidth)) > 0);
+  await page.keyboard.press('Escape');
+  await page.getByTestId('local-file-image').waitFor({state:'detached'});
+  const missing = cliOpen(path.join(dataDir, 'missing-preview.png'), first.id);
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /File not found/);
+  const textCli = cliOpen(path.join(dataDir, 'follow-me.txt'), first.id);
+  assert.equal(textCli.status, 0,textCli.stderr || textCli.stdout);
+  const textMetadata = JSON.parse(textCli.stdout);
+  assert.equal(textMetadata.kind, 'text');
+  assert.equal('text' in textMetadata, false, 'Named-pipe response must remain metadata-only');
+  assert.match(await page.getByTestId('local-file-text').innerText(), /Current terminal directory fixture/);
+  await page.keyboard.press('Escape');
+  await page.getByTestId('local-file-text').waitFor({state:'detached'});
+  const imageCli = cliOpen(terminalImage, first.id);
+  assert.equal(imageCli.status, 0,imageCli.stderr || imageCli.stdout);
+  await page.getByTestId('local-file-image').waitFor();
+  assert.equal((await desktop.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().length)),windowCount);
+  await page.keyboard.press('Escape');
+  await page.getByTestId('local-file-image').waitFor({state:'detached'});
+  findings.push('Terminal image-path click and CLI text/image opens used the in-app viewer; missing files failed and Escape closed without another window.');
   await page.getByTestId('git-toggle').click();
   assert.equal((await rpc('git.status',{workspaceId:workspace.id})).available,true);
   findings.push('File tree opens README text and real application PNG; Git status is available.');

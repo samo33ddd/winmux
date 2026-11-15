@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const { connect } = require('./electron/client.cjs');
 const { locations } = require('./electron/backend/shared.cjs');
+const { request:desktopRequest } = require('./scripts/browser.cjs');
 
 const HELP = `Winmux — control persistent terminal sessions
 Usage: node cli.cjs [--data-dir DIR] [--pipe NAME] COMMAND [arguments]
@@ -24,6 +25,8 @@ Usage: node cli.cjs [--data-dir DIR] [--pipe NAME] COMMAND [arguments]
   close PANE                         Close a pane and stop its process
   notify [PANE] --title TITLE [--body BODY]
                                      PANE defaults to WINMUX_PANE_ID
+  open PATH [--pane ID] [--workspace ID]
+                                     Preview a local file inside Winmux
   shutdown                           Stop daemon and ALL its terminal processes
   rpc METHOD [JSON]                   Call any method below; JSON defaults to {}
 
@@ -40,13 +43,14 @@ All commands use the local capability token. WINMUX_DATA_DIR and
 WINMUX_PIPE_NAME may select a daemon. No commands are retried automatically.
 Examples:
   node cli.cjs new --name Work --cwd E:/projects --profile powershell
+  node cli.cjs open ./screenshot.png --pane PANE_ID
   node cli.cjs send PANE_ID "Write-Output 'ready'" --enter
   node cli.cjs notify PANE_ID --title "Build finished" --body "Tests passed"
   node cli.cjs rpc workspace.rename '{"workspaceId":"ID","name":"Work"}'
 `;
 function parse(argv) {
   const options = {}, positionals = [];
-  const values = new Set(['data-dir', 'pipe', 'name', 'cwd', 'profile', 'agent', 'title', 'body', 'pane', 'direction']);
+  const values = new Set(['data-dir', 'pipe', 'name', 'cwd', 'profile', 'agent', 'title', 'body', 'pane', 'workspace', 'direction']);
   const booleans = new Set(['enter', 'snapshot', 'json', 'help']);
   for (let i = 0; i < argv.length; i++) {
     const value = argv[i];
@@ -109,6 +113,13 @@ async function main(argv = process.argv.slice(2)) {
     case 'resize': method = 'pane.resize'; params = { paneId, cols: Number(args[1]), rows: Number(args[2]) }; break;
     case 'close': method = 'pane.close'; params = { paneId }; break;
     case 'notify': method = 'notify'; params = { paneId, title: options.title || args[1], body: options.body || args.slice(2).join(' ') }; break;
+    case 'open':
+      if (!args[0]) throw new Error('open requires PATH');
+      return console.log(JSON.stringify(await desktopRequest('file.open', {
+        path:args[0],
+        paneId:options.pane || process.env.WINMUX_PANE_ID,
+        workspaceId:options.workspace,
+      }, { dataDir:connection.dataDir }), null, 2));
     case 'shutdown': method = 'daemon.shutdown'; break;
     case 'rpc': method = args[0]; if (!method) throw new Error('rpc requires METHOD'); params = JSON.parse(args.slice(1).join(' ') || '{}'); break;
     default: throw new Error(`Unknown command: ${command}. Run node cli.cjs help`);

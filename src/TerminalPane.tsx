@@ -6,6 +6,7 @@ import { terminalTheme } from './appearance';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { classifyTerminalLink, createLocalFileLinkProvider, hideFileLinkTooltip, normalizeLocalFileLink, showFileLinkTooltip } from './localFileLinks';
 import { ArrowDown, ArrowUp, Copy, Maximize2, Minimize2, Search, SplitSquareHorizontal, SplitSquareVertical, X } from 'lucide-react';
 import { bridge, errorMessage, readClipboard, writeClipboard, type BackendEvent, type Direction, type Pane, type Settings, type Snapshot } from './types';
 
@@ -40,6 +41,11 @@ export function TerminalPane(props: Props) {
     let pending: Extract<BackendEvent, { type: 'output' }>[] = [];
     let lastSize = '';
     setReady(false); setLoadError('');
+    const openLocalFile = (value: string) => {
+      const target = classifyTerminalLink(value);
+      if (target?.kind === 'file') void bridge().call('file.open', { paneId:pane.id, path:target.value }).catch(error => current.current.onError(errorMessage(error)));
+      else if (target?.kind === 'external') void bridge().openExternal(target.value).catch(error => current.current.onError(errorMessage(error)));
+    };
     const term = new Terminal({
       cols: current.current.pane.cols || 80, rows: current.current.pane.rows || 24,
       fontFamily: `"${current.current.settings.fontFamily}", Consolas, monospace`,
@@ -47,6 +53,12 @@ export function TerminalPane(props: Props) {
       theme: terminalTheme(current.current.settings.theme), cursorBlink: current.current.settings.cursorBlink,
       cursorStyle: current.current.settings.cursorStyle,
       scrollback: current.current.settings.scrollback, allowProposedApi: true, convertEol: false,
+      linkHandler: {
+        allowNonHttpProtocols:true,
+        activate:(_event, value) => openLocalFile(value),
+        hover:(event, value) => { const filePath = normalizeLocalFileLink(value); if (filePath && term.element) showFileLinkTooltip(term.element, event, t('Открыть в Winmux: {0}', filePath)); },
+        leave:() => { if (term.element) hideFileLinkTooltip(term.element); },
+      },
     });
     // The daemon's headless terminal answers device/status queries. A second
     // response from this display would be injected into the shell as input.
@@ -62,6 +74,7 @@ export function TerminalPane(props: Props) {
       if (/^https?:\/\//i.test(url)) void bridge().openExternal(url).catch(error => current.current.onError(errorMessage(error)));
     }));
     term.open(mount.current); terminal.current = term; fit.current = fitAddon; search.current = searchAddon;
+    const localLinks = term.registerLinkProvider(createLocalFileLinkProvider(term, openLocalFile, filePath => t('Открыть в Winmux: {0}', filePath)));
     const resize = () => {
       if (disposed || !hydrated || !mount.current || !current.current.visible || mount.current.clientWidth < 2 || mount.current.clientHeight < 2) return;
       try {
@@ -137,7 +150,7 @@ export function TerminalPane(props: Props) {
       });
     }).catch(error => { if (!disposed) { failed = true; setLoadError(errorMessage(error)); pending = []; } });
     return () => {
-      disposed = true; unsubscribe(); observer.disconnect(); cancelAnimationFrame(frame); input.dispose();
+      disposed = true; unsubscribe(); observer.disconnect(); cancelAnimationFrame(frame); input.dispose(); localLinks.dispose();
       mount.current?.removeEventListener('focusin', onFocus);
       mount.current?.removeEventListener('pointerdown', selectionStart);
       document.removeEventListener('pointerup', selectionEnd);

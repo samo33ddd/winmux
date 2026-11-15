@@ -30,11 +30,11 @@ export function Modal({ title, children, onClose, busy = false, className = '' }
     </div>
   </div>;
 }
-export function CreateWorkspace({ environment, onCreate, onClose }: { environment: Environment; onCreate(values: { name?: string; cwd: string; profileId: string; agentId?: string; agentHooks?: boolean }): Promise<void>; onClose(): void }) {
+export function CreateWorkspace({ environment, defaultAgentHooks = true, onCreate, onClose }: { environment: Environment; defaultAgentHooks?: boolean; onCreate(values: { name?: string; cwd: string; profileId: string; agentId?: string; agentHooks?: boolean }): Promise<void>; onClose(): void }) {
   const initial = environment.profiles.find(profile => profile.available !== false);
   const [profileId, setProfile] = useState(initial?.id ?? '');
   const [agentId, setAgentId] = useState('');
-  const [agentHooks, setAgentHooks] = useState(true);
+  const [agentHooks, setAgentHooks] = useState(defaultAgentHooks);
   const [cwd, setCwd] = useState(initial?.cwd ?? (initial?.environment === 'wsl' ? '~' : environment.defaultCwd));
   const [name, setName] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   const profile = environment.profiles.find(item => item.id === profileId);

@@ -27,7 +27,12 @@ export type BackendEvent = { type: 'state'; state: State }
   | { type: 'notification'; notification: Notice }
   | { type: 'focus-pane'; paneId: string; workspaceId: string }
   | { type: 'connection-error'; message: string }
-  | { type: 'browser-open'; url: string; workspaceId?: string };
+  | { type: 'browser-open'; url: string; workspaceId?: string }
+  | FilePreviewEvent;
+export interface FilePreviewEvent {
+  type: 'file-preview'; name: string; path: string; kind: 'text' | 'image' | 'binary'; size: number;
+  text?: string; dataUrl?: string; mime?: string; truncated?: boolean; workspaceId?: string; paneId?: string;
+}
 export interface Bridge {
   call<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
   onEvent(callback: (event: BackendEvent) => void): () => void;

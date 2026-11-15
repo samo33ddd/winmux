@@ -8,7 +8,7 @@ async function request(method, params = {}, options = {}) {
   const dataDir = options.dataDir || process.env.WINMUX_DATA_DIR || path.join(process.env.LOCALAPPDATA || os.homedir(), 'Winmux');
   let endpoint;
   try { endpoint = JSON.parse(await fs.readFile(path.join(dataDir, 'ui-control.json'), 'utf8')); }
-  catch { throw new Error('Open the Winmux desktop first; its browser service is unavailable.'); }
+  catch { throw new Error('Open the Winmux desktop first; its authenticated UI service is unavailable.'); }
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(endpoint.pipe);
     let buffer = '';
@@ -32,6 +32,7 @@ async function main() {
   if (!method || method === '--help' || method === 'help') {
     console.log(`Winmux browser — controls the desktop's real embedded pages
 Usage: node scripts/browser.cjs METHOD [JSON]
+  file.open  {"path":"./screenshot.png","paneId":"..."}
   open       {"url":"http://localhost:3000","workspaceId":"..."}
   list       {}
   snapshot   {"id":123}

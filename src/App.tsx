@@ -14,6 +14,11 @@ import type { TerminalHandle } from './TerminalPane';
 import { bridge, errorMessage, type Direction, type Environment, type Pane, type Settings, type State, type TerminalTab, type Workspace } from './types';
 
 type Dialog = { type: 'create' } | { type: 'rename'; workspace: Workspace } | { type: 'settings' } | { type: 'shortcuts' } | { type: 'close-pane'; pane: Pane } | { type: 'close-tab'; workspaceId: string; tab: TerminalTab } | { type: 'close-workspace'; workspace: Workspace } | null;
+const agentHooksStorageKey = 'winmux.agent-status-hooks';
+function readAgentHooksPreference() {
+  try { return localStorage.getItem(agentHooksStorageKey) !== 'false'; }
+  catch { return true; }
+}
 export default function App() {
   const language = useSyncExternalStore(subscribeLanguage, getLanguage, getLanguage);
   useEffect(() => { document.documentElement.lang = language; }, [language]);
@@ -29,8 +34,8 @@ export default function App() {
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [browserRequests, setBrowserRequests] = useState<Record<string, { url: string; serial: number }>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true); const [working, setWorking] = useState(false);
-  const [agentHooks, setAgentHooks] = useState(true);
-  const [sidebarWidth,setSidebarWidth] = usePanelWidth('winmux.sidebar-width',224,170,420);
+  const [agentHooks, setAgentHooks] = useState(readAgentHooksPreference);
+  const [sidebarWidth,setSidebarWidth] = usePanelWidth('winmux.sidebar-width',200,170,360);
   const [toolsWidth,setToolsWidth] = usePanelWidth('winmux.tools-width',400,280,1600);
   const [windowWidth,setWindowWidth] = useState(window.innerWidth);
   useEffect(() => { const resize=()=>setWindowWidth(window.innerWidth); window.addEventListener('resize',resize); return ()=>window.removeEventListener('resize',resize); }, []);
@@ -48,6 +53,10 @@ export default function App() {
   const settings: Settings = { ...defaults, ...state?.settings, ...preferences, fontSize:state?.settings.fontSize ?? 14, theme:preferences.theme ?? state?.settings.theme ?? 'dark' };
   const current = useRef({ workspace, activePane, dialog, notificationsOpen }); current.current = { workspace, activePane, dialog, notificationsOpen };
   const reportError = useCallback((message: string) => setError(message), []);
+  const updateAgentHooks = useCallback((value: boolean) => {
+    setAgentHooks(value);
+    try { localStorage.setItem(agentHooksStorageKey, String(value)); } catch { /* The session preference remains usable without storage. */ }
+  }, []);
   const register = useCallback((id: string, handle: TerminalHandle | null) => { if (handle) handles.current.set(id, handle); else handles.current.delete(id); }, []);
   const focusPane = useCallback((id: string) => {
     const owner = stateRef.current?.workspaces.find(item => item.panes.some(pane => pane.id === id));
@@ -133,7 +142,7 @@ export default function App() {
     const palette = paletteFor(settings.theme), root = document.documentElement;
     root.style.colorScheme = palette.scheme;
     for (const key of ['bg','surface','raised','border','text','muted','accent','selection','hover'] as const) root.style.setProperty(`--${key}`,palette[key]);
-    root.style.setProperty('--sidebar',palette.bg);
+    root.style.setProperty('--sidebar',palette.surface);
     root.style.setProperty('--attention',palette.scheme === 'light' ? '#825616' : '#e6bd7b');
     root.style.setProperty('--error',palette.scheme === 'light' ? '#ab3434' : '#f1a09b');
     root.style.setProperty('--backdrop',palette.scheme === 'light' ? '#15251d44' : '#080a0b99');
@@ -212,7 +221,7 @@ export default function App() {
   const actions = useRef({ split, closePane, toggleZoom, navigatePane, createTerminalTab, cycleTerminalTab, selectWorkspace }); actions.current = { split, closePane, toggleZoom, navigatePane, createTerminalTab, cycleTerminalTab, selectWorkspace };
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if (current.current.dialog || event.defaultPrevented) return;
+      if (current.current.dialog || event.defaultPrevented || Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]')).some(element => element.getClientRects().length > 0)) return;
       const key = event.key.toLowerCase(); const pane = current.current.activePane;
       if (event.ctrlKey && key === ',') { event.preventDefault(); setDialog({ type: 'settings' }); return; }
       if (event.ctrlKey && !event.altKey && key === 'tab') { event.preventDefault(); actions.current.cycleTerminalTab(event.shiftKey); return; }
@@ -294,11 +303,6 @@ export default function App() {
           <option value="">{working?t('Открытие…'):t('Запустить агента…')}</option>
           {profiles.map(profile=><optgroup key={profile.id} label={profile.environment==='wsl'?`WSL · ${profile.label}`:profile.label}>{environment?.agents?.filter(agent=>agent.profileId===profile.id).map(agent=><option key={agent.id} value={agent.id} disabled={!agent.available}>{agent.label}{agent.available?'':t(' — не установлен')}</option>)}</optgroup>)}
         </select>
-        <label className="agent-hooks-control" title={t('Хуки только для этого запуска поддерживаемого агента. Глобальные настройки не изменяются.')}>
-          <input type="checkbox" data-testid="agent-status-hooks" checked={agentHooks} disabled={!workspace || !tabsAvailable || !hooksAvailable || working} onChange={event=>setAgentHooks(event.target.checked)} aria-describedby="agent-hooks-description" />
-          <span>{t('Хуки статуса агента')}</span>
-          <span className="sr-only" id="agent-hooks-description">{t('Хуки только для этого запуска поддерживаемого агента. Глобальные настройки не изменяются.')}</span>
-        </label>
         {activePane && <div className="terminal-tab-tools" role="group" aria-label={t('Действия терминала')}>
           <button className="icon-button" aria-label={t("Найти в активном терминале")} title={t("Поиск (Ctrl+Shift+F)")} data-testid="terminal-search" onClick={() => handles.current.get(activePane.id)?.search()}><Search /></button>
           <button className="icon-button" aria-label={t("Разделить активную панель слева направо")} title={t("Разделить слева направо (Ctrl+Shift+D)")} data-testid="split-horizontal" disabled={working} onClick={() => void split(activePane.id, 'horizontal')}><SplitSquareHorizontal /></button>
@@ -321,12 +325,12 @@ export default function App() {
       </div>
       <footer className="statusbar"><span className="status-environment">{activePane ? <>{profileLabel(profiles, activePane.profileId)}<AgentStatus pane={activePane} /></> : <><TerminalSquare />{loading ? t("Подключение…") : state ? t("Готов к работе") : t("Нет подключения")}</>}</span><span className="status-directory" title={activePane ? t('Текущий каталог: {0}', activePane.cwd) : undefined}>{activePane?.cwd}</span><button className="status-help" title={t("Горячие клавиши")} onClick={() => setDialog({ type: 'shortcuts' })}><Keyboard />{t("Горячие клавиши")} <ChevronDown /></button></footer>
     </main>
-    {dialog?.type === 'create' && environment && <CreateWorkspace environment={environment} onClose={() => setDialog(null)} onCreate={async values => { const created = await bridge().call<Workspace>('workspace.create', values); await refresh(); selectWorkspace(created.id, created.panes[0]?.id); }} />}
+    {dialog?.type === 'create' && environment && <CreateWorkspace environment={environment} defaultAgentHooks={agentHooks} onClose={() => setDialog(null)} onCreate={async values => { const created = await bridge().call<Workspace>('workspace.create', values); await refresh(); selectWorkspace(created.id, created.panes[0]?.id); }} />}
     {dialog?.type === 'rename' && <RenameWorkspace name={dialog.workspace.name} onClose={() => setDialog(null)} onSave={async name => { await bridge().call('workspace.rename', { workspaceId: dialog.workspace.id, name }); }} />}
     {dialog?.type === 'close-pane' && <ConfirmClose title={t("Закрыть терминал?")} description={t("Панель «{0}» будет закрыта. {1}", dialog.pane.title, dialog.pane.status === 'running' ? t("Запущенный процесс и его дочерние процессы будут завершены. Несохранённая работа может быть потеряна.") : t("Процесс уже завершён."))} onClose={() => setDialog(null)} onConfirm={async () => { await bridge().call('pane.close', { paneId: dialog.pane.id }); }} />}
     {dialog?.type === 'close-tab' && <ConfirmClose title={t('Закрыть вкладку терминала?')} description={t('Все терминалы вкладки «{0}» будут закрыты, их процессы — завершены. Остальные вкладки сохранятся.', dialog.tab.title)} onClose={() => setDialog(null)} onConfirm={async () => { await bridge().call('tab.close', { workspaceId: dialog.workspaceId, tabId: dialog.tab.id }); await refresh(); }} />}
     {dialog?.type === 'close-workspace' && <ConfirmClose title={t("Закрыть рабочее пространство?")} description={t("Все терминалы пространства «{0}» будут закрыты, их процессы — завершены. Чтобы сохранить сессии, просто закройте окно приложения.", dialog.workspace.name)} onClose={() => setDialog(null)} onConfirm={async () => { await bridge().call('workspace.close', { workspaceId: dialog.workspace.id }); }} />}
     {dialog?.type === 'shortcuts' && <Modal title={t("Горячие клавиши")} onClose={() => setDialog(null)}><div className="shortcut-list">{shortcuts.map(([label, key]) => <div key={key}><span>{label}</span><kbd>{key}</kbd></div>)}</div><p className="dialog-footnote">{t("Ctrl+C остаётся прерыванием процесса в терминале. Двойное нажатие на разделитель выравнивает панели.")}</p></Modal>}
-    {dialog?.type === 'settings' && <SettingsDialog settings={settings} profiles={profiles} workspaces={state?.workspaces ?? []} activeWorkspaceId={workspace?.id} onSkillStarted={async(workspaceId,paneId)=>{await refresh();selectWorkspace(workspaceId,paneId);setDialog(null);}} onChange={updateSettings} onClose={() => setDialog(null)} />}
+    {dialog?.type === 'settings' && <SettingsDialog settings={settings} profiles={profiles} workspaces={state?.workspaces ?? []} activeWorkspaceId={workspace?.id} agentHooks={agentHooks} agentHooksAvailable={Boolean(hooksAvailable)} onAgentHooksChange={updateAgentHooks} onSkillStarted={async(workspaceId,paneId)=>{await refresh();selectWorkspace(workspaceId,paneId);setDialog(null);}} onChange={updateSettings} onClose={() => setDialog(null)} />}
   </div>;
 }

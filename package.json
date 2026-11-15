@@ -15,6 +15,7 @@
     "test:skills":"node --test tests/skills-install-smoke.cjs",
     "test:cookies":"node tests/cookie-import-smoke.cjs",
     "test:workspace":"node tests/workspace-smoke.cjs",
+    "test:file-preview":"node --test tests/local-file-links.cjs && node tests/file-preview-smoke.cjs",
     "browser":"node scripts/browser.cjs",
     "cli":"node scripts/run-electron-node.cjs cli.cjs",
     "rebuild":"electron-rebuild -f -w node-pty",

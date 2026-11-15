@@ -33,7 +33,12 @@ npm run cli -- read PANE_ID
 npm run cli -- read PANE_ID --snapshot
 npm run cli -- key PANE_ID Ctrl+C
 npm run cli -- notify PANE_ID --title "Task finished" --body "Inspect the terminal for results"
+npm run cli -- open ./screenshot.png --pane PANE_ID
 ```
+
+`open PATH` previews a local text or image inside the open Winmux desktop. A relative path uses the selected pane's live cwd. Pass `--pane PANE_ID`, rely on `WINMUX_PANE_ID` from a Winmux shell, or use `--workspace WORKSPACE_ID` when no pane is needed. Absolute Windows paths and local `file://` URLs are accepted. This uses the authenticated desktop UI pipe, not the daemon RPC surface; it is unavailable when only the terminal daemon is running.
+
+Terminal links use the same preview: local path patterns, quoted paths with spaces, `file:line` references, and local `file://` links open in-app. HTTP(S) links retain their external-browser behavior. The command does not install a global `winmux` executable or change Windows file associations. Text is capped at 512 KB and supported images at 12 MB; binary files show metadata only. Remote `file://` hosts and UNC paths are rejected. WSL paths run `python3` with argv-safe arguments in the pane's distribution.
 
 The sidebar represents projects; horizontal terminal tabs stay within their workspace. Use `npm run cli -- tab WORKSPACE_ID --pane PANE_ID` to create a tab inheriting the selected pane's current directory. Add `--agent codex` (or an available catalog ID) to launch an installed agent there. `list` exposes `tabs`, `activeTabId`, and each pane's `tabId`; tab creation returns the tab with its initial leaf pane ID. The generic RPC methods `tab.select` and `tab.close` take `{workspaceId,tabId}`. Closing a tab stops only its panes.
 

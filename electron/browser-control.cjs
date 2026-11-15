@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-async function startBrowserControl({ win, client, dataDir }) {
+async function startBrowserControl({ win, client, dataDir, fileOpen }) {
   const guests = new Map();
   const loads = new Map();
   const failures = new Map();
@@ -25,6 +25,10 @@ async function startBrowserControl({ win, client, dataDir }) {
     return guest;
   }
   async function request(method, params = {}) {
+    if (method === 'file.open') {
+      if (typeof fileOpen !== 'function') throw new Error('File preview is unavailable');
+      return fileOpen(params);
+    }
     if (method === 'open') {
       const url = new URL(params.url);
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('HTTP(S) URL without credentials required');

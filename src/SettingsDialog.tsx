@@ -10,10 +10,10 @@ import { SkillsSettings } from './SkillsSettings';
 function Row({title, detail, children}: {title:string; detail?:string; children:ReactNode}) {
   return <div className="preference-row"><div><strong>{title}</strong>{detail && <p>{detail}</p>}</div>{children}</div>;
 }
-function Toggle({label, checked, onChange, testId}: {label:string; checked:boolean; onChange(value:boolean):void; testId:string}) {
-  return <button className="preference-switch" role="switch" aria-label={label} aria-checked={checked} data-testid={testId} onClick={() => onChange(!checked)}><span /></button>;
+function Toggle({label, checked, onChange, testId, disabled=false}: {label:string; checked:boolean; onChange(value:boolean):void; testId:string; disabled?:boolean}) {
+  return <button className="preference-switch" role="switch" aria-label={label} aria-checked={checked} data-testid={testId} disabled={disabled} onClick={() => onChange(!checked)}><span /></button>;
 }
-export function SettingsDialog({settings, profiles, workspaces, activeWorkspaceId, onSkillStarted, onChange, onClose}: {settings:Settings; profiles:Profile[]; workspaces:Workspace[]; activeWorkspaceId?:string; onSkillStarted(workspaceId:string,paneId:string):void; onChange(values:Partial<Settings>):Promise<void>; onClose():void}) {
+export function SettingsDialog({settings, profiles, workspaces, activeWorkspaceId, agentHooks, agentHooksAvailable, onAgentHooksChange, onSkillStarted, onChange, onClose}: {settings:Settings; profiles:Profile[]; workspaces:Workspace[]; activeWorkspaceId?:string; agentHooks:boolean; agentHooksAvailable:boolean; onAgentHooksChange(value:boolean):void; onSkillStarted(workspaceId:string,paneId:string):void; onChange(values:Partial<Settings>):Promise<void>; onClose():void}) {
   const [tab,setTab] = useState<'appearance'|'terminal'|'behavior'|'browser'|'skills'>('appearance');
   const change = (values:Partial<Settings>) => { void onChange(values); };
   return <Modal title={t('Настройки')} className="preferences-modal" onClose={onClose}>
@@ -42,6 +42,7 @@ export function SettingsDialog({settings, profiles, workspaces, activeWorkspaceI
         <div className="font-preview" aria-label={t('Пример шрифта')} style={{fontFamily:`"${settings.fontFamily}", Consolas, monospace`,fontSize:settings.fontSize,lineHeight:settings.lineHeight}}><span>PS ~/winmux&gt;</span> echo "Hello, Winmux"<br />Hello, Winmux <span>▏</span></div>
       </>}
       {tab === 'behavior' && <>
+        <Row title={t('Хуки статуса агента')} detail={t('Хуки только для этого запуска поддерживаемого агента. Глобальные настройки не изменяются.')}><Toggle label={t('Хуки статуса агента')} testId="agent-status-hooks" checked={agentHooks} disabled={!agentHooksAvailable} onChange={onAgentHooksChange} /></Row>
         <Row title={t('Копировать при выделении')} detail={t('Выделенный мышью текст сразу попадает в буфер обмена.')}><Toggle label={t('Копировать при выделении')} testId="copy-on-select" checked={settings.copyOnSelect} onChange={copyOnSelect => change({copyOnSelect})} /></Row>
         <Row title={t('История прокрутки')} detail={t('Количество строк в окне терминала. Уменьшение удаляет старые строки из просмотра.')}><select aria-label={t('История прокрутки')} data-testid="scrollback" value={settings.scrollback} onChange={e => change({scrollback:Number(e.target.value)})}>{[1000,5000,10000].map(value => <option key={value} value={value}>{value}</option>)}</select></Row>
         <div className="profile-settings"><h3>{t('Среды запуска')}</h3>{profiles.map(profile => <div className="profile-status" key={profile.id}><span>{profile.label}<small>{profile.environment === 'wsl' ? profile.distro ?? 'WSL' : 'Windows'}</small></span><span className={profile.available === false ? 'muted' : 'available'}>{profile.available === false ? t('Недоступен') : t('Доступен')}</span></div>)}</div>

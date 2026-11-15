@@ -1,15 +1,15 @@
 [hidden] { display: none !important; }
-.terminal-pane.has-attention::after { content: ''; position: absolute; top: 16px; right: 16px; width: 6px; height: 6px; border-radius: 50%; background: var(--attention); pointer-events: none; z-index: 6; }
+.terminal-pane.has-attention::after { content: ''; position: absolute; top: 12px; right: 12px; width: 6px; height: 6px; border-radius: 50%; background: var(--attention); pointer-events: none; z-index: 6; }
 .workbench { flex: 1; display: flex; min-height: 0; min-width: 0; overflow: hidden; }
 .workbench .workspace-stage { min-width: 0; }
-.active-tool { color: var(--accent); background: var(--selection); }
-.workspace-tools { flex: 0 0 400px; width: 400px; min-width: 360px; max-width: 70%; min-height: 0; margin-right: 12px; border-radius: 12px; overflow: hidden; background: var(--surface); display: flex; flex-direction: column; }
+.active-tool { color: var(--accent); background: var(--selection); box-shadow: inset 0 -1px var(--accent); }
+.workspace-tools { flex: 0 0 400px; width: 400px; min-width: 360px; max-width: 70%; min-height: 0; margin-right: 0; border: 1px solid var(--border); border-top: 0; border-right: 0; border-bottom: 0; border-radius: 0; overflow: hidden; background: var(--surface); display: flex; flex-direction: column; }
 .workspace-tools.expanded { flex-basis: 70%; width: 70%; }
-.tools-heading { height: 44px; min-height: 44px; display: flex; align-items: center; gap: 3px; padding: 5px 8px; background: var(--surface); }
+.tools-heading { height: 38px; min-height: 38px; display: flex; align-items: center; gap: 3px; padding: 0 5px; background: var(--surface); border-bottom: 1px solid var(--border); }
 .tool-tabs { flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 2px; height: 100%; }
-.tool-tabs button { display: flex; align-items: center; gap: 5px; font-size: 11px; padding: 0 6px; border-radius: 7px; color: var(--muted); }
+.tool-tabs button { display: flex; align-items: center; gap: 5px; font-size: 12px; padding: 0 7px; border-radius: 0; color: var(--muted); box-shadow: inset 0 -2px transparent; }
 .tool-tabs button:hover { color: var(--text); background: var(--hover); }
-.tool-tabs button[aria-selected="true"] { color: var(--accent); background: var(--selection); }
+.tool-tabs button[aria-selected="true"] { color: var(--accent); background: transparent; box-shadow: inset 0 -2px var(--accent); }
 .tool-tabs svg { width: 14px; height: 14px; }
 .tools-heading > .icon-button { width: 24px; height: 25px; }
 .tools-heading > .icon-button svg { width: 14px; height: 14px; }
@@ -20,7 +20,7 @@
 .tool-content-resizer::after { content: ''; position: absolute; inset: 2px 0; background: var(--border); }
 .tool-content-resizer:hover::after, .tool-content-resizer:focus-visible::after, .tool-split.dragging .tool-content-resizer::after { background: var(--accent); }
 .tool-split.dragging { user-select: none; cursor: row-resize; }
-.tool-subheader { height: 35px; min-height: 35px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+.tool-subheader { height: 34px; min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; }
 .tool-subheader > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-subheader > svg { width: 14px; height: 14px; }
 .tool-subheader .icon-button { width: 24px; height: 24px; }
@@ -63,6 +63,7 @@
 .diff-hunk { color: #94b9db; }
 :root[data-theme="light"] .diff-hunk { color: #2b6095; }
 .diff-meta { color: var(--muted); }
+/* Browser controls keep their existing compact layout; only the shared host spacing is flattened. */
 .browser-tabs-heading { display: flex; flex: 0 0 35px; min-width: 0; align-items: center; gap: 4px; padding: 3px 6px; border-bottom: 1px solid var(--border); }
 .browser-tabs { display: flex; flex: 1; min-width: 0; gap: 3px; overflow-x: auto; scrollbar-width: thin; }
 .browser-tab { display: flex; flex: 0 0 auto; min-width: 96px; max-width: 170px; border-radius: 5px; color: var(--muted); }

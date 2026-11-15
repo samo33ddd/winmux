@@ -12,11 +12,17 @@ User-visible changes are recorded here. Release availability and downloadable as
 - A background terminal daemon, reconnectable screen state, and saved workspace layouts and metadata.
 - Notifications linked to terminal panes and a local terminal control CLI.
 - Read-only project files, text and image previews, Git branch/status, and diff views that follow the active PowerShell or WSL Bash directory.
+- Bounded, read-only local file previews inside Winmux, opened from terminal file links or the local CLI.
 - Installed-agent launch inside the current workspace, agent identity and explicit lifecycle/status reporting.
 - An embedded tabbed HTTP(S) browser, domain-scoped cookie import, and desktop-only browser automation with snapshots, click/fill actions, JavaScript evaluation, and screenshots.
 - Project-scoped skill installation from Settings with a preview of the command.
 - Detection of older daemons so unsupported new operations explain the required restart instead of silently doing nothing.
 - English documentation, contribution guidance, and repository-shipped terminal and browser agent skills.
+
+### Changed
+
+- Minimal, flat graphite desktop interface with a slim project sidebar, compact scrollable terminal tabs, subtle separators, and restrained mint focus accents. Native Windows chrome, six themes, custom palettes, and English/Russian controls remain available.
+- Moved the default-enabled agent status hooks option into Settings → Behavior and persist its value locally. Hooks remain limited to supported agents.
 
 ### Fixed
 
@@ -36,4 +42,4 @@ User-visible changes are recorded here. Release availability and downloadable as
 - `Winmux-Setup-0.1.0-x64.exe`
 - `Winmux-Portable-0.1.0-x64.exe`
 
-This entry describes the initial preview scope; it does not certify a completed release or a runtime verification pass. See [verification notes](docs/verification.md) for recorded checks.
+This entry describes the initial preview scope. Release availability is established by the releases page and its downloadable assets. See [verification notes](docs/verification.md) for recorded checks and remaining limits.
