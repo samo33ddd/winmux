@@ -26,3 +26,4 @@ jobs:
       - run: npm run test:cookies
       - run: npm run test:file-preview
       - run: npm run test:desktop
+      - run: node --test tests/release-workflow-regression.cjs

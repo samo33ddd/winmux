@@ -57,7 +57,7 @@ export function WorkspaceView(props: Props) {
   const minimum = zoomed ? { width: 300, height: 160 } : minimumSize(tab.root);
   return <div className="workspace-viewport" id={`terminal-panel-${props.workspace.id}`} role="tabpanel" aria-labelledby={`terminal-tab-${tab.id}`} style={{ display: props.visible ? undefined : 'none' }}><div ref={container} className="workspace-canvas" style={{ minWidth: minimum.width, minHeight: minimum.height }} aria-label={props.workspace.name}>
     {props.workspace.panes.map(pane => <TerminalPane key={pane.id} pane={pane} settings={props.settings}
-      unread={props.unreadPaneIds.includes(pane.id)} active={props.activePane === pane.id} zoomed={zoomed === pane.id} visible={props.visible && rects.has(pane.id) && (!zoomed || zoomed === pane.id)}
+      unread={props.unreadPaneIds.includes(pane.id)} active={props.activePane === pane.id} zoomed={zoomed === pane.id} chrome={Boolean(zoomed) || tab.root.type !== 'leaf'} visible={props.visible && rects.has(pane.id) && (!zoomed || zoomed === pane.id)}
       style={zoomed === pane.id ? { left: 0, top: 0, width: size.width, height: size.height } : rects.get(pane.id) ?? { left: 0, top: 0, width: 0, height: 0 }}
       register={props.register} onFocus={props.onFocus} onSplit={props.onSplit} onClose={props.onClose} onZoom={props.onZoom} onError={props.onError} />)}
     {!zoomed && dividers.map(divider => <div key={divider.id} className={`split-divider ${divider.direction} ${drag?.id === divider.id ? 'dragging' : ''}`}

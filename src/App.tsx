@@ -2,7 +2,7 @@ import { t, subscribeLanguage, getLanguage, dateLocale } from './i18n';
 import { defaults, getPreferences, subscribePreferences, savePreferences, paletteFor } from './appearance';
 import { SettingsDialog } from './SettingsDialog';
 import { BrandMark } from './BrandMark';
-import { AgentStatus, agentName } from './AgentStatus';
+import { AgentStatus, activityLabel, agentName } from './AgentStatus';
 import { activeTab, paneIds, paneTab, selectedPane, terminalTabs } from './workspaceTabs';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { ResizeHandle, usePanelWidth } from './ResizeHandle';
@@ -35,12 +35,16 @@ export default function App() {
   const [browserRequests, setBrowserRequests] = useState<Record<string, { url: string; serial: number }>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true); const [working, setWorking] = useState(false);
   const [agentHooks, setAgentHooks] = useState(readAgentHooksPreference);
-  const [sidebarWidth,setSidebarWidth] = usePanelWidth('winmux.sidebar-width',200,170,360);
+  const [sidebarWidth,setSidebarWidth] = usePanelWidth('winmux.sidebar-width',60,56,360);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [headerMenu, setHeaderMenu] = useState(false);
+  const switcherRef = useRef<HTMLDivElement>(null);
   const [toolsWidth,setToolsWidth] = usePanelWidth('winmux.tools-width',400,280,1600);
   const [windowWidth,setWindowWidth] = useState(window.innerWidth);
   useEffect(() => { const resize=()=>setWindowWidth(window.innerWidth); window.addEventListener('resize',resize); return ()=>window.removeEventListener('resize',resize); }, []);
   const maxToolsWidth=Math.max(280,windowWidth-(sidebarOpen?sidebarWidth+6:0)-300);
   const effectiveToolsWidth=Math.min(toolsExpanded?maxToolsWidth:toolsWidth,maxToolsWidth);
+  const sidebarExpanded = sidebarOpen && sidebarWidth >= 168;
   const handles = useRef(new Map<string, TerminalHandle>());
   const focusRequest = useRef<{ workspaceId: string; paneId: string } | null>(null);
   const initializedSelection = useRef(false);
@@ -51,8 +55,20 @@ export default function App() {
   const hooksAvailable = environment?.capabilities?.sessionAgentHooks === true && environment.agents?.some(agent => agent.available && Boolean(agent.hookAdapter));
   const preferences = useSyncExternalStore(subscribePreferences, getPreferences, getPreferences);
   const settings: Settings = { ...defaults, ...state?.settings, ...preferences, fontSize:state?.settings.fontSize ?? 14, theme:preferences.theme ?? state?.settings.theme ?? 'dark' };
-  const current = useRef({ workspace, activePane, dialog, notificationsOpen }); current.current = { workspace, activePane, dialog, notificationsOpen };
+  const current = useRef({ workspace, activePane, dialog, notificationsOpen, switcherOpen }); current.current = { workspace, activePane, dialog, notificationsOpen, switcherOpen };
   const reportError = useCallback((message: string) => setError(message), []);
+  useEffect(() => {
+    if (!switcherOpen) return;
+    const close = (event: Event) => {
+      if (!switcherRef.current?.contains(event.target as Node)) setSwitcherOpen(false);
+    };
+    document.addEventListener('pointerdown', close, true);
+    document.addEventListener('focusin', close);
+    return () => {
+      document.removeEventListener('pointerdown', close, true);
+      document.removeEventListener('focusin', close);
+    };
+  }, [switcherOpen]);
   const updateAgentHooks = useCallback((value: boolean) => {
     setAgentHooks(value);
     try { localStorage.setItem(agentHooksStorageKey, String(value)); } catch { /* The session preference remains usable without storage. */ }
@@ -226,6 +242,7 @@ export default function App() {
       if (event.ctrlKey && key === ',') { event.preventDefault(); setDialog({ type: 'settings' }); return; }
       if (event.ctrlKey && !event.altKey && key === 'tab') { event.preventDefault(); actions.current.cycleTerminalTab(event.shiftKey); return; }
       if (event.ctrlKey && !event.shiftKey && !event.altKey && key === 't') { event.preventDefault(); void actions.current.createTerminalTab(); return; }
+      if (event.key === 'Escape' && current.current.switcherOpen) { event.preventDefault(); setSwitcherOpen(false); return; }
       if (event.key === 'Escape' && current.current.notificationsOpen) { event.preventDefault(); setNotificationsOpen(false); if (pane) handles.current.get(pane.id)?.focus(); return; }
       if (event.altKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); actions.current.navigatePane(event.key); return; }
       if (!event.ctrlKey || !event.shiftKey) return;
@@ -255,38 +272,52 @@ export default function App() {
   const profiles = environment?.profiles ?? [];
   const unread = state?.notifications.filter(item => !item.read).length ?? 0;
   return <div className={`app-shell ${sidebarOpen ? '' : 'sidebar-hidden'}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--tools-width':`${effectiveToolsWidth}px`} as CSSProperties}>
-    <aside className="sidebar" aria-label={t("Рабочие пространства")}>
-      <div className="sidebar-heading"><div className="wordmark"><BrandMark /><span>winmux</span></div><button className="icon-button" title={t("Новое пространство (Ctrl+Shift+N)")} aria-label={t("Новое рабочее пространство")} data-testid="new-workspace" disabled={!environment || loading} onClick={() => setDialog({ type: 'create' })}><Plus /></button></div>
-      <div className="sidebar-section-label">{t("Рабочие пространства")}</div>
+    <aside className={`sidebar ${sidebarExpanded ? 'expanded' : 'rail'}`} data-testid="workspace-rail" aria-label={t("Рабочие пространства")}>
+      <div className="sidebar-heading"><div className="wordmark"><BrandMark />{sidebarExpanded && <span>winmux</span>}</div>{sidebarExpanded && <button className="icon-button" title={t("Новое пространство (Ctrl+Shift+N)")} aria-label={t("Новое рабочее пространство")} data-testid="new-workspace" disabled={!environment || loading} onClick={() => setDialog({ type: 'create' })}><Plus /></button>}</div>
       <nav className="workspace-list">
         {state?.workspaces.map(item => {
           const unreadWorkspace = state.notifications.some(notice => notice.workspaceId === item.id && !notice.read);
           const agents = item.panes.filter(pane => agentName(pane));
           const selected = selectedPane(item, activePanes);
+          const described = agents.length ? agents : selected ? [selected] : [];
+          const agentLabel = described.map(pane => [agentName(pane), activityLabel(pane)].filter(Boolean).join(' · ')).join('\n');
+          const summary = [item.name, profileLabel(profiles, selected?.profileId ?? item.profileId), agentLabel, t('Терминалов: {0}', item.panes.length), settings.showWorkspacePaths ? (selected?.cwd ?? item.cwd) : ''].filter(Boolean).join('\n');
+          const badge = (selected && agentName(selected) ? selected : agents[0]);
           return <div key={item.id} className={`workspace-row ${workspace?.id === item.id ? 'selected' : ''}`}>
-            <button className="workspace-select" data-testid="workspace-item" data-workspace-id={item.id} aria-current={workspace?.id === item.id ? 'page' : undefined} onClick={() => selectWorkspace(item.id)} title={t("{0}\n{1}\nСтартовый каталог: {2}", item.name, profileLabel(profiles, item.profileId), item.cwd)}>
-              <span className="workspace-name"><Folder /><span>{item.name}</span>{unreadWorkspace && <span className="unread-dot" aria-label={t("Есть непрочитанные уведомления")} />}</span>
-              <span className="workspace-profile"><span>{profileLabel(profiles, selected?.profileId ?? item.profileId)}</span><span className="workspace-pane-count" title={t('Терминалов: {0}', item.panes.length)}>{item.panes.length}</span></span>
-              <span className="workspace-agents">{agents.length ? agents.map(pane => <span key={pane.id} className="workspace-agent" title={`${paneTab(item, pane.id)?.title ?? pane.title} · ${pane.cwd}`}><AgentStatus pane={pane} /></span>) : selected && <AgentStatus pane={selected} />}</span>
-              {settings.showWorkspacePaths && <span className="workspace-path" title={selected?.cwd ?? item.cwd}>{selected?.cwd ?? item.cwd}</span>}
+            <button className="workspace-select" data-testid="workspace-item" data-workspace-id={item.id} aria-current={workspace?.id === item.id ? 'page' : undefined} aria-label={item.name} onClick={() => { selectWorkspace(item.id); setSwitcherOpen(false); }} title={summary}>
+              <span className="workspace-glyph" aria-hidden="true">{item.name.trim().charAt(0).toUpperCase() || 'W'}</span>
+              <span className="sr-only">{item.name} {agentLabel}</span>
+              {sidebarExpanded && <span className="workspace-copy"><span className="workspace-name"><span>{item.name}</span>{unreadWorkspace && <span className="unread-dot" aria-label={t("Есть непрочитанные уведомления")} />}</span><span className="workspace-profile"><span>{profileLabel(profiles, selected?.profileId ?? item.profileId)}</span><span className="workspace-pane-count">{item.panes.length}</span></span>{settings.showWorkspacePaths && <span className="workspace-path">{selected?.cwd ?? item.cwd}</span>}{agents.map(pane => <span key={pane.id} className="workspace-agent"><AgentStatus pane={pane} /></span>)}</span>}
+              {!sidebarExpanded && badge && <span className={`rail-agent-state activity-${badge.agentState ?? 'unknown'}`} title={`${agentName(badge)} · ${activityLabel(badge)}`} />}
+              {!sidebarExpanded && unreadWorkspace && <span className="unread-dot rail-unread" aria-label={t("Есть непрочитанные уведомления")} />}
             </button>
-            <button className="icon-button workspace-close" aria-label={t("Закрыть пространство {0}", item.name)} title={t("Закрыть пространство и завершить процессы")} onClick={() => setDialog({ type: 'close-workspace', workspace: item })}><X /></button>
+            {sidebarExpanded && <button className="icon-button workspace-close" aria-label={t("Закрыть пространство {0}", item.name)} title={t("Закрыть пространство и завершить процессы")} onClick={() => setDialog({ type: 'close-workspace', workspace: item })}><X /></button>}
           </div>;
         })}
-        {state && !state.workspaces.length && <p className="sidebar-empty">{t("Ваши проекты появятся здесь.")}</p>}
+        {state && !state.workspaces.length && <p className="sidebar-empty">{sidebarExpanded ? t("Ваши проекты появятся здесь.") : '·'}</p>}
       </nav>
-      <div className="sidebar-bottom"><button className={`sidebar-action ${notificationsOpen ? 'active' : ''}`} data-testid="notifications-toggle" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(value => !value)}><Bell /><span>{t("Уведомления")}</span>{unread > 0 && <span className="unread-badge" aria-label={t("{0} непрочитанных", unread)}>{unread}</span>}</button><button className="sidebar-action" data-testid="settings-open" onClick={() => setDialog({ type: 'settings' })}><Settings2 /><span>{t("Настройки")}</span><span className="shortcut-hint">Ctrl+,</span></button></div>
+      <div className="sidebar-bottom">
+        {!sidebarExpanded && <button className="icon-button" title={t("Новое пространство (Ctrl+Shift+N)")} aria-label={t("Новое рабочее пространство")} data-testid="new-workspace" disabled={!environment || loading} onClick={() => setDialog({ type: 'create' })}><Plus /></button>}
+        <button className={`sidebar-action ${notificationsOpen ? 'active' : ''}`} data-testid="notifications-toggle" aria-expanded={notificationsOpen} aria-label={t("Уведомления")} title={t("Уведомления")} onClick={() => setNotificationsOpen(value => !value)}><Bell />{sidebarExpanded && <span>{t("Уведомления")}</span>}{unread > 0 && <span className="unread-badge" aria-label={t("{0} непрочитанных", unread)}>{unread}</span>}</button>
+        <button className="sidebar-action" data-testid="settings-open" aria-label={t("Настройки")} title={t("Настройки")} onClick={() => setDialog({ type: 'settings' })}><Settings2 />{sidebarExpanded && <><span>{t("Настройки")}</span><span className="shortcut-hint">Ctrl+,</span></>}</button>
+        <button className="sidebar-action" aria-label={t("Горячие клавиши")} title={t("Горячие клавиши")} onClick={() => setDialog({ type: 'shortcuts' })}><Keyboard />{sidebarExpanded && <span>{t("Горячие клавиши")}</span>}</button>
+        <button className="sidebar-action" data-testid="sidebar-expand" aria-pressed={sidebarExpanded} aria-label={sidebarExpanded ? t('Скрыть названия пространств') : t('Показать названия пространств')} title={sidebarExpanded ? t('Скрыть названия пространств') : t('Показать названия пространств')} onClick={() => setSidebarWidth(sidebarExpanded ? 60 : 240)}>{sidebarExpanded ? <PanelLeftClose /> : <PanelLeftOpen />}</button>
+      </div>
     </aside>
-    {sidebarOpen && <ResizeHandle value={sidebarWidth} min={170} max={420} label={t('Ширина списка пространств')} testId="sidebar-resize" onChange={setSidebarWidth} />}
+    {sidebarOpen && <ResizeHandle value={sidebarWidth} min={56} max={420} label={t('Ширина списка пространств')} testId="sidebar-resize" onChange={setSidebarWidth} />}
     <main className="main-content">
-      <header className="topbar"><button className="icon-button sidebar-toggle" aria-label={sidebarOpen ? t("Скрыть боковую панель") : t("Показать боковую панель")} title={sidebarOpen ? t("Скрыть боковую панель") : t("Показать боковую панель")} onClick={() => setSidebarOpen(value => !value)}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</button>
-        <div className="workspace-heading">{workspace ? <><span className="header-name">{workspace.name}</span><button className="icon-button" aria-label={t("Переименовать пространство")} data-testid="rename-workspace" title={t("Переименовать пространство")} onClick={() => setDialog({ type: 'rename', workspace })}><Pencil /></button><span className="header-path" title={t('Текущий каталог: {0}', activePane?.cwd ?? workspace.cwd)}>{activePane?.cwd ?? workspace.cwd}</span></> : <span className="header-name">{t("Рабочее пространство")}</span>}</div>
-        <div className="topbar-tools" role="group" aria-label={t('Инструменты проекта')}>
-          {workspace && <><button className={`icon-button ${toolTab === 'files' ? 'active-tool' : ''}`} aria-label={t("Файлы проекта")} aria-pressed={toolTab === 'files'} title={t("Файлы проекта")} data-testid="files-toggle" onClick={() => setToolTab(value => value === 'files' ? null : 'files')}><FolderOpen /></button><button className={`icon-button ${toolTab === 'git' ? 'active-tool' : ''}`} aria-label={t("Git проекта")} aria-pressed={toolTab === 'git'} title={t("Git: изменения проекта")} data-testid="git-toggle" onClick={() => setToolTab(value => value === 'git' ? null : 'git')}><GitBranch /></button><button className={`icon-button ${toolTab === 'browser' ? 'active-tool' : ''}`} aria-label={t("Встроенный браузер")} aria-pressed={toolTab === 'browser'} title={t("Встроенный браузер")} data-testid="browser-toggle" onClick={() => setToolTab(value => value === 'browser' ? null : 'browser')}><Globe /></button></>}
-          {!sidebarOpen && <button className={`icon-button ${unread ? 'has-unread' : ''}`} aria-label={t("Уведомления")} onClick={() => setNotificationsOpen(value => !value)}><Bell /></button>}
+      <header className="topbar">
+        <button className="icon-button sidebar-toggle" aria-label={sidebarOpen ? t("Скрыть боковую панель") : t("Показать боковую панель")} title={sidebarOpen ? t("Скрыть боковую панель") : t("Показать боковую панель")} onClick={() => setSidebarOpen(value => !value)}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</button>
+        <div className={`project-switcher ${switcherOpen ? 'open' : ''}`} ref={switcherRef}>
+          <button className="project-switch" data-testid="workspace-switcher" aria-expanded={switcherOpen} aria-haspopup="menu" disabled={!state?.workspaces.length} onClick={() => setSwitcherOpen(value => !value)} title={workspace ? t('{0}\n{1}', workspace.name, activePane?.cwd ?? workspace.cwd) : undefined}>
+            <span className="header-name">{workspace?.name ?? t("Рабочее пространство")}</span>
+          </button>
+          {workspace && <button className="icon-button rename-workspace" aria-label={t("Переименовать пространство")} data-testid="rename-workspace" title={t("Переименовать пространство")} onClick={() => setDialog({ type: 'rename', workspace })}><Pencil /></button>}
+          {switcherOpen && state && <div className="switcher-menu" role="menu">
+            {state.workspaces.map(item => <button key={item.id} role="menuitem" className={workspace?.id === item.id ? 'selected' : ''} onClick={() => { selectWorkspace(item.id); setSwitcherOpen(false); }}>{item.name}</button>)}
+            <button role="menuitem" data-testid="switcher-new-workspace" disabled={!environment || loading} onClick={() => { setSwitcherOpen(false); setDialog({ type: 'create' }); }}>{t("Новое рабочее пространство")}</button>
+          </div>}
         </div>
-      </header>
-      <div className="workspace-tabs-bar">
         <div className="workspace-tabs" role="tablist" aria-label={t('Вкладки терминала')} onKeyDown={event=>{
           if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key) || !(event.target as HTMLElement).matches('[role="tab"]'))return;
           const tabs=Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
@@ -298,7 +329,9 @@ export default function App() {
             <button className="icon-button" data-testid="terminal-tab-close" data-tab-id={tab.id} disabled={!tabsAvailable} aria-label={t('Закрыть вкладку {0}',tab.title)} title={t('Закрыть вкладку и её терминалы')} onClick={()=>setDialog({type:'close-tab',workspaceId:workspace.id,tab})}><X /></button>
           </div>)}
         </div>
+        <div className="header-launch">
         <button className="icon-button" data-testid="new-terminal-tab" title={t('Новая вкладка терминала (Ctrl+T)')} aria-label={t('Новая вкладка терминала')} disabled={!workspace || !tabsAvailable || working || loading} onClick={()=>void createTerminalTab()}><Plus /></button>
+        <div className={`header-secondary ${headerMenu ? 'open' : ''}`}>
         <select className="agent-launch-select" data-testid="launch-agent" aria-label={t('Запустить агента в новой вкладке')} title={t('Запустить агента в новой вкладке')} value="" disabled={!workspace || !tabsAvailable || working || loading} onChange={event=>void launchAgent(event.target.value)}>
           <option value="">{working?t('Открытие…'):t('Запустить агента…')}</option>
           {profiles.map(profile=><optgroup key={profile.id} label={profile.environment==='wsl'?`WSL · ${profile.label}`:profile.label}>{environment?.agents?.filter(agent=>agent.profileId===profile.id).map(agent=><option key={agent.id} value={agent.id} disabled={!agent.available}>{agent.label}{agent.available?'':t(' — не установлен')}</option>)}</optgroup>)}
@@ -308,13 +341,21 @@ export default function App() {
           <button className="icon-button" aria-label={t("Разделить активную панель слева направо")} title={t("Разделить слева направо (Ctrl+Shift+D)")} data-testid="split-horizontal" disabled={working} onClick={() => void split(activePane.id, 'horizontal')}><SplitSquareHorizontal /></button>
           <button className="icon-button" aria-label={t("Разделить активную панель сверху вниз")} title={t("Разделить сверху вниз (Ctrl+Shift+E)")} data-testid="split-vertical" disabled={working} onClick={() => void split(activePane.id, 'vertical')}><SplitSquareVertical /></button>
         </div>}
-      </div>
+        </div>
+        <button className="icon-button header-overflow-toggle" aria-expanded={headerMenu} aria-label={t('Действия терминала')} title={t('Действия терминала')} onClick={() => setHeaderMenu(value => !value)}><ChevronDown /></button>
+        </div>
+        {activePane && <span className="header-agent"><AgentStatus pane={activePane} showName /></span>}
+        <div className="topbar-tools" role="group" aria-label={t('Инструменты проекта')}>
+          {workspace && <><button className={`icon-button ${toolTab === 'files' ? 'active-tool' : ''}`} aria-label={t("Файлы проекта")} aria-pressed={toolTab === 'files'} title={t("Файлы проекта")} data-testid="files-toggle" onClick={() => setToolTab(value => value === 'files' ? null : 'files')}><FolderOpen /></button><button className={`icon-button ${toolTab === 'git' ? 'active-tool' : ''}`} aria-label={t("Git проекта")} aria-pressed={toolTab === 'git'} title={t("Git: изменения проекта")} data-testid="git-toggle" onClick={() => setToolTab(value => value === 'git' ? null : 'git')}><GitBranch /></button><button className={`icon-button ${toolTab === 'browser' ? 'active-tool' : ''}`} aria-label={t("Встроенный браузер")} aria-pressed={toolTab === 'browser'} title={t("Встроенный браузер")} data-testid="browser-toggle" onClick={() => setToolTab(value => value === 'browser' ? null : 'browser')}><Globe /></button></>}
+          {!sidebarOpen && <button className={`icon-button ${unread ? 'has-unread' : ''}`} aria-label={t("Уведомления")} onClick={() => setNotificationsOpen(value => !value)}><Bell /></button>}
+        </div>
+      </header>
       {environment && !tabsAvailable && <div className="upgrade-notice" role="status" data-testid="daemon-upgrade-notice"><CircleAlert /><p><strong>{t('Для новых вкладок и запуска агентов требуется обновление сессии.')}</strong> {t('Текущие терминалы продолжают работать. Когда будете готовы, завершите все сессии и откройте Winmux снова. Закрытие окна или перезагрузка интерфейса не обновляет фоновый процесс.')}</p></div>}
       {error && <div className="error-banner" role="alert"><CircleAlert /><span>{error}</span><button className="text-button" onClick={() => setReload(value => value + 1)}>{t("Переподключить")}</button><button className="icon-button" aria-label={t("Скрыть ошибку")} onClick={() => setError('')}><X /></button></div>}
       <div className="workbench">
       <div className="workspace-stage" aria-busy={loading || working}>
         {state?.workspaces.map(item => <WorkspaceView key={item.id} workspace={item} settings={settings} visible={workspace?.id === item.id} activePane={selectedPane(item, activePanes)?.id} zoomed={zoomed[item.id]} unreadPaneIds={state.notifications.filter(notice => !notice.read && notice.workspaceId === item.id).map(notice => notice.paneId)} register={register} onFocus={focusPane} onSplit={(id, direction) => void split(id, direction)} onClose={closePane} onZoom={toggleZoom} onRatio={saveRatio} onError={reportError} />)}
-        {!state?.workspaces.length && <div className="empty-state" data-testid="empty-state"><div className="empty-symbol"><BrandMark /></div><h1>{loading ? t("Подключение к Winmux") : t("Место для вашей работы")}</h1><p>{loading ? t("Получаем сессии и доступные среды…") : t("Откройте проект, запустите терминал. Разделяйте панели и держите нужные задачи рядом.")}</p>{!loading && <><button className="button primary create-first" data-testid="create-first-workspace" disabled={!environment} onClick={() => setDialog({ type: 'create' })}><Plus />{t("Новое рабочее пространство")}</button><span className="empty-shortcut">Ctrl+Shift+N</span><div className="empty-note"><FolderOpen /><span>{t("Windows и установленные WSL-дистрибутивы.")}<br />{t("Закрытие окна сохраняет запущенные сессии.")}</span></div></>}</div>}
+        {!state?.workspaces.length && <div className="empty-state" data-testid="empty-state"><div className="empty-symbol"><BrandMark /></div><h1>{loading ? t("Подключение к Winmux") : t("Место для вашей работы")}</h1><p>{loading ? t("Получаем сессии и доступные среды…") : t("Откройте проект, запустите терминал. Разделяйте панели и держите нужные задачи рядом.")}</p>{!loading && <><button className="button primary create-first" data-testid="create-first-workspace" disabled={!environment} onClick={() => setDialog({ type: 'create' })}><Plus />{t("Новое рабочее пространство")}</button><span className="empty-shortcut">Ctrl+Shift+N</span></>}</div>}
         {notificationsOpen && <section className="notification-panel" aria-label={t("Уведомления")} data-testid="notification-panel"><div className="notification-heading"><h2>{t("Уведомления")}</h2><button className="icon-button" title={t("Прочитать все")} aria-label={t("Прочитать все уведомления")} disabled={!unread} onClick={() => void bridge().call('notifications.read').catch(error => setError(errorMessage(error)))}><Check /></button><button className="icon-button" aria-label={t("Закрыть уведомления")} onClick={() => setNotificationsOpen(false)}><X /></button></div><div className="notification-list">{state?.notifications.length ? [...state.notifications].sort((a, b) => b.createdAt - a.createdAt).map(notice => {
           const owner = state.workspaces.find(item => item.id === notice.workspaceId); const exists = owner?.panes.some(pane => pane.id === notice.paneId);
           return <button key={notice.id} className={`notification-item ${notice.read ? '' : 'unread'}`} data-testid="notification-item" onClick={() => { if (exists) selectWorkspace(notice.workspaceId, notice.paneId); void bridge().call('notifications.read', { id: notice.id }).catch(error => setError(errorMessage(error))); }}><span className="notification-title">{!notice.read && <span className="unread-dot" />}<strong>{notice.title}</strong><time dateTime={new Date(notice.createdAt).toISOString()}>{new Date(notice.createdAt).toLocaleTimeString(dateLocale(), { hour: '2-digit', minute: '2-digit' })}</time></span>{notice.body && <span className="notification-body">{notice.body}</span>}<span className="notification-source">{owner?.name ?? t("Закрытое пространство")}{!exists ? t(" · панель закрыта") : ''}</span></button>;
@@ -323,8 +364,8 @@ export default function App() {
       {workspace && toolTab && <ResizeHandle value={effectiveToolsWidth} min={280} max={maxToolsWidth} reverse label={t('Ширина панели инструментов')} testId="tools-resize" onChange={width=>{setToolsExpanded(false);setToolsWidth(width);}} />}
       {state?.workspaces.map(item => <WorkspaceTools key={item.id} workspace={item} activePaneId={selectedPane(item, activePanes)?.id} requestedBrowser={browserRequests[item.id]} tab={toolTab} visible={workspace?.id === item.id} expanded={toolsExpanded} onTab={setToolTab} onExpand={() => setToolsExpanded(value => !value)} onClose={() => setToolTab(null)} />)}
       </div>
-      <footer className="statusbar"><span className="status-environment">{activePane ? <>{profileLabel(profiles, activePane.profileId)}<AgentStatus pane={activePane} /></> : <><TerminalSquare />{loading ? t("Подключение…") : state ? t("Готов к работе") : t("Нет подключения")}</>}</span><span className="status-directory" title={activePane ? t('Текущий каталог: {0}', activePane.cwd) : undefined}>{activePane?.cwd}</span><button className="status-help" title={t("Горячие клавиши")} onClick={() => setDialog({ type: 'shortcuts' })}><Keyboard />{t("Горячие клавиши")} <ChevronDown /></button></footer>
     </main>
+
     {dialog?.type === 'create' && environment && <CreateWorkspace environment={environment} defaultAgentHooks={agentHooks} onClose={() => setDialog(null)} onCreate={async values => { const created = await bridge().call<Workspace>('workspace.create', values); await refresh(); selectWorkspace(created.id, created.panes[0]?.id); }} />}
     {dialog?.type === 'rename' && <RenameWorkspace name={dialog.workspace.name} onClose={() => setDialog(null)} onSave={async name => { await bridge().call('workspace.rename', { workspaceId: dialog.workspace.id, name }); }} />}
     {dialog?.type === 'close-pane' && <ConfirmClose title={t("Закрыть терминал?")} description={t("Панель «{0}» будет закрыта. {1}", dialog.pane.title, dialog.pane.status === 'running' ? t("Запущенный процесс и его дочерние процессы будут завершены. Несохранённая работа может быть потеряна.") : t("Процесс уже завершён."))} onClose={() => setDialog(null)} onConfirm={async () => { await bridge().call('pane.close', { paneId: dialog.pane.id }); }} />}
