@@ -1,5 +1,4 @@
 import { t } from './i18n';
-import { AgentStatus } from './AgentStatus';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { terminalTheme } from './appearance';
@@ -12,14 +11,14 @@ import { bridge, errorMessage, readClipboard, writeClipboard, type BackendEvent,
 
 export interface TerminalHandle { focus(): void; search(): void; copy(): Promise<void>; paste(): Promise<void> }
 interface Props {
-  pane: Pane; settings: Settings; visible: boolean; active: boolean; zoomed: boolean; unread: boolean;
+  pane: Pane; settings: Settings; visible: boolean; active: boolean; zoomed: boolean; unread: boolean; chrome?: boolean;
   style: React.CSSProperties; register(id: string, handle: TerminalHandle | null): void;
   onFocus(id: string): void; onSplit(id: string, direction: Direction): void; onClose(id: string): void;
   onZoom(id: string): void; onError(message: string): void;
 }
 
 export function TerminalPane(props: Props) {
-  const { pane, settings, visible, active, zoomed, style } = props;
+  const { pane, settings, visible, active, zoomed, style, chrome = false } = props;
   const current = useRef(props); current.current = props;
   const mount = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
@@ -176,11 +175,10 @@ export function TerminalPane(props: Props) {
     setMatch((previous ? search.current?.findPrevious(query, { incremental: true }) : search.current?.findNext(query, { incremental: true })) ?? false);
   }
   function closeSearch() { setSearchOpen(false); search.current?.clearDecorations(); setMatch(null); terminal.current?.focus(); }
-  return <section className={`terminal-pane ${active ? 'is-active' : ''} ${props.unread ? 'has-attention' : ''}`} style={{ ...style, display: visible ? undefined : 'none' }} data-pane-id={pane.id} data-testid="terminal-pane" aria-label={t("Терминал {0}", pane.title)} onPointerDown={() => props.onFocus(pane.id)}>
-    <div className="pane-header">
+  return <section className={`terminal-pane ${active ? 'is-active' : ''} ${props.unread ? 'has-attention' : ''} ${chrome ? '' : 'is-quiet'}`} style={{ ...style, display: visible ? undefined : 'none' }} data-pane-id={pane.id} data-testid="terminal-pane" aria-label={t("Терминал {0}", pane.title)} onPointerDown={() => props.onFocus(pane.id)}>
+    {chrome && <div className="pane-header">
       <span className={`process-dot ${pane.status}`} title={pane.status === 'running' ? t("Процесс запущен{0}", pane.pid ? ` · PID ${pane.pid}` : '') : t("Процесс завершён · код {0}", pane.exitCode ?? t("неизвестен"))} />
       <span className="pane-title" title={t("{0}\nСтартовый каталог: {1}", pane.title, pane.cwd)}>{pane.title}</span>
-      <AgentStatus pane={pane} />
       {props.unread && <span className="unread-dot" aria-label={t("Непрочитанное уведомление")} title={t("Есть непрочитанное уведомление")} />}
       <div className="pane-tools">
         <button className="icon-button" title={t("Поиск в терминале (Ctrl+Shift+F)")} aria-label={t("Поиск в терминале")} onClick={() => setSearchOpen(value => !value)}><Search /></button>
@@ -190,7 +188,7 @@ export function TerminalPane(props: Props) {
         <button className="icon-button" title={t("Развернуть панель (Ctrl+Shift+Enter)")} aria-label={zoomed ? t("Вернуть раскладку") : t("Развернуть панель")} onClick={() => props.onZoom(pane.id)}>{zoomed ? <Minimize2 /> : <Maximize2 />}</button>
         <button className="icon-button close-tool" title={t("Закрыть панель (Ctrl+Shift+W)")} aria-label={t("Закрыть панель")} onClick={() => props.onClose(pane.id)}><X /></button>
       </div>
-    </div>
+    </div>}
     {searchOpen && <div className="terminal-search" role="search">
       <Search /><input ref={searchInput} aria-label={t("Найти в выводе терминала")} placeholder={t("Найти в терминале")} value={query} onChange={event => { const value = event.target.value; setQuery(value); setMatch(value ? search.current?.findNext(value, { incremental: true }) ?? false : null); if (!value) search.current?.clearDecorations(); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); find(event.shiftKey); } if (event.key === 'Escape') { event.stopPropagation(); closeSearch(); } }} />
       {match === false && <span className="search-miss" role="status">{t("Не найдено")}</span>}

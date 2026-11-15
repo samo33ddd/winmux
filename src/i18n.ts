@@ -258,6 +258,9 @@ const english: Record<string, string> = {
   'Вписать изображение': 'Fit image to window',
   'Показать изображение в масштабе 100%': 'Show image at 100%',
   'Двоичный файл ({0}). Предпросмотр в приложении недоступен.': 'Binary file ({0}). In-app preview is unavailable.',
+  'Показать названия пространств': 'Show workspace names',
+  'Скрыть названия пространств': 'Hide workspace names',
+  'Закрыть список пространств': 'Close workspace list',
 };
 
 /** Russian source strings are stable keys; inserted user content stays untouched. */

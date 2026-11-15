@@ -17,6 +17,7 @@ export function SettingsDialog({settings, profiles, workspaces, activeWorkspaceI
   const [tab,setTab] = useState<'appearance'|'terminal'|'behavior'|'browser'|'skills'>('appearance');
   const change = (values:Partial<Settings>) => { void onChange(values); };
   return <Modal title={t('Настройки')} className="preferences-modal" onClose={onClose}>
+    <div className="preferences-layout">
     <div className="preferences-tabs" role="group" aria-label={t('Раздел настроек')}>
       {(['appearance','terminal','behavior','browser','skills'] as const).map((id,index) => <button key={id} aria-pressed={tab === id} data-testid={`settings-tab-${id}`} onClick={() => setTab(id)}>{[t('Оформление'),t('Терминал'),t('Поведение'),t('Браузер'),t('Навыки')][index]}</button>)}
     </div>
@@ -50,6 +51,7 @@ export function SettingsDialog({settings, profiles, workspaces, activeWorkspaceI
       </>}
       {tab === 'browser' && <BrowserSettings />}
       {tab === 'skills' && <SkillsSettings workspaces={workspaces} activeWorkspaceId={activeWorkspaceId} onStarted={onSkillStarted} />}
+    </div>
     </div>
     <div className="preferences-footer">{t('Изменения применяются сразу и сохраняются автоматически.')}</div>
   </Modal>;

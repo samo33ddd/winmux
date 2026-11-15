@@ -2,6 +2,23 @@
 
 User-visible changes are recorded here. Release availability and downloadable assets are authoritative on the [releases page](https://github.com/samo33ddd/winmux/releases).
 
+## 0.2.0 — Dark workspace redesign
+
+### Changed
+
+- Replaced the separate sidebar, tab strip, and footer chrome with a 60-pixel workspace rail that expands to a resizable 240-pixel project list, giving projects more direct access without spending terminal width (Issue #3).
+- Consolidated project switching, terminal tabs, new-tab and agent-launch actions, confirmed shell or agent status, and project-tool controls into one header (Issue #3).
+- Refined the Files, Git, and Browser inspector and Settings so existing project tools, six themes, custom palettes, and English/Russian controls remain available with less surrounding chrome (Issue #3).
+
+### Fixed
+
+- Release artifacts now download into the publishing root before exact bundle validation, preventing a successful build from failing the four-file release check (Issue #4).
+- Draft releases are now resolved by release ID instead of calling the tag endpoint before publication, allowing the separate write-token job to resume uploads and publish reliably (Issue #4).
+
+### Release status
+
+Release availability and downloadable assets are authoritative on the [releases page](https://github.com/samo33ddd/winmux/releases).
+
 ## 0.1.0 — Initial preview
 
 ### Added

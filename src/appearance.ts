@@ -6,7 +6,7 @@ export interface Palette {
   muted: string; accent: string; selection: string; hover: string;
 }
 export const palettes: Palette[] = [
-  { id:'dark', name:'Graphite', scheme:'dark', bg:'#0d0f10', surface:'#141719', raised:'#1a1e20', border:'#292e30', text:'#dfe5e1', muted:'#8e9993', accent:'#91bea6', selection:'#1d2b24', hover:'#1a1e20' },
+  { id:'dark', name:'Graphite', scheme:'dark', bg:'#101214', surface:'#16191c', raised:'#1c2024', border:'#2a2f33', text:'#e6ebe7', muted:'#8d9691', accent:'#3ecf8e', selection:'#173226', hover:'#22272b' },
   { id:'midnight', name:'Midnight', scheme:'dark', bg:'#101523', surface:'#171f31', raised:'#222d43', border:'#35435d', text:'#e1e9fa', muted:'#a3b4d2', accent:'#99bbff', selection:'#263c61', hover:'#222f49' },
   { id:'nord', name:'Nord', scheme:'dark', bg:'#252c38', surface:'#2e3440', raised:'#3b4252', border:'#4c566a', text:'#eceff4', muted:'#b4c1d4', accent:'#88c0d0', selection:'#3c5261', hover:'#384353' },
   { id:'dracula', name:'Dracula', scheme:'dark', bg:'#20212b', surface:'#282a36', raised:'#343746', border:'#505368', text:'#f8f8f2', muted:'#b8b8d0', accent:'#bd93f9', selection:'#493a60', hover:'#373747' },
@@ -24,7 +24,7 @@ export function paletteFor(id: ThemeId) { return allPalettes().find(item => item
 export function terminalTheme(id: ThemeId): ITheme {
   const p = paletteFor(id), light = p.scheme === 'light';
   return {
-    background:p.surface, foreground:p.text, cursor:p.accent, cursorAccent:p.surface,
+    background:p.bg, foreground:p.text, cursor:p.accent, cursorAccent:p.bg,
     selectionBackground:p.selection, black:light?'#26332c':'#222629',
     red:light?'#a53232':'#f099a3', green:light?'#317045':'#a3d9ad', yellow:light?'#8c681b':'#e8cc91',
     blue:light?'#2b6095':'#9cbfee', magenta:light?'#825494':'#cbb0ef', cyan:light?'#267479':'#95d5d2', white:p.text,

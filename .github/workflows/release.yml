@@ -52,6 +52,7 @@ jobs:
       - run: npm run test:cookies
       - run: npm run test:file-preview
       - run: npm run test:desktop
+      - run: node --test tests/release-workflow-regression.cjs
       - name: Build installer and portable executable without publishing
         run: npm run release:build
       - name: Prepare exact executables, checksums, and release notes
@@ -81,6 +82,7 @@ jobs:
         with:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: release-assets
+          merge-multiple: true
       - name: Verify assets, upload to draft, and publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -133,8 +135,11 @@ jobs:
 
           Confirm-Tag
           # Paginate and distinguish API failures from a genuinely absent release.
-          $pages = Invoke-Gh api --paginate --slurp "repos/$env:GH_REPO/releases?per_page=100" | ConvertFrom-Json -NoEnumerate
-          $existing = @($pages | ForEach-Object { $_ } | Where-Object tag_name -CEQ $tag)
+          function Get-ReleasesForTag {
+            $pages = Invoke-Gh api --paginate --slurp "repos/$env:GH_REPO/releases?per_page=100" | ConvertFrom-Json -NoEnumerate
+            return @($pages | ForEach-Object { @($_) } | Where-Object tag_name -CEQ $tag)
+          }
+          $existing = @(Get-ReleasesForTag)
           if ($existing.Count -gt 1) { throw 'Duplicate releases for tag.' }
           if ($existing.Count -eq 1 -and !$existing[0].draft) {
             throw 'Release is already published; refusing to replace its assets.'
@@ -143,15 +148,26 @@ jobs:
           if ($existing.Count -eq 0) {
             Invoke-Gh release create $tag --verify-tag --draft --title "Winmux $tag" --notes-file $notes
           }
+          # The by-tag endpoint returns 404 for drafts, so list the tag and retain its numeric ID.
+          $draftReleases = if ($existing.Count -eq 1) { @($existing) } else { @(Get-ReleasesForTag) }
+          if ($draftReleases.Count -ne 1) { throw 'Expected exactly one draft release for tag.' }
+          $releaseId = [long]$draftReleases[0].id
+          if ($releaseId -le 0 -or !$draftReleases[0].draft) {
+            throw 'Expected an unpublished draft with a valid release ID.'
+          }
           # A failed upload leaves a draft; a rerun may replace draft assets only.
           $paths = @($assets | ForEach-Object { Join-Path $root $_ })
           Invoke-Gh release upload $tag @paths --clobber
-          $draft = Invoke-Gh api "repos/$env:GH_REPO/releases/tags/$tag" | ConvertFrom-Json
-          if (!$draft.draft) { throw 'Expected an unpublished draft.' }
+          $draft = Invoke-Gh api "repos/$env:GH_REPO/releases/$releaseId" | ConvertFrom-Json
+          if (!$draft.draft -or [long]$draft.id -ne $releaseId -or $draft.tag_name -cne $tag) {
+            throw 'Draft release ID or tag did not match the verified release.'
+          }
           Confirm-Assets $draft
           Confirm-Tag
           Invoke-Gh release edit $tag --draft=false --latest --title "Winmux $tag" --notes-file $notes
           $published = Invoke-Gh api "repos/$env:GH_REPO/releases/tags/$tag" | ConvertFrom-Json
-          if ($published.draft) { throw 'Release is still a draft.' }
+          if ($published.draft -or [long]$published.id -ne $releaseId -or $published.tag_name -cne $tag) {
+            throw 'Published release ID or tag did not match the verified release.'
+          }
           Confirm-Assets $published
           "Published $($published.html_url) with both executables and verified SHA-256 checksums." >> $env:GITHUB_STEP_SUMMARY
