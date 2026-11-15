@@ -1,5 +1,6 @@
 // winmux-omp-extension
-// Project-local OMP extension. This file is copied into <workspace>/.omp/extensions/winmux-status.mjs.
+// Project-local OMP extension. This Node-importable template is installed as
+// <workspace>/.omp/extensions/winmux-status.ts, which OMP discovers as a direct module.
 import { spawn } from 'node:child_process';
 
 const MARKER = 'winmux-omp-extension';

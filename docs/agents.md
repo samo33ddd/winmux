@@ -87,7 +87,7 @@ For lower-level calls, `rpc METHOD JSON` uses the methods documented in [the dae
 
 ## Project-local OMP status extension
 
-When the connected Winmux backend advertises `ompHooks`, **Settings → Behavior → Agent hooks** also offers OMP. For a Windows workspace, **Install OMP hook** writes `.omp/extensions/winmux-status.mjs` and places its helper in the Winmux data directory. It preserves unrelated extensions and refuses to replace an unrelated file at that path. Repeat installation leaves an identical extension unchanged.
+When the connected Winmux backend advertises `ompHooks`, **Settings → Behavior → Agent hooks** also offers OMP. For a Windows workspace, **Install OMP hook** writes `.omp/extensions/winmux-status.ts` and places its helper in the Winmux data directory. It preserves unrelated extensions and refuses to replace an unrelated file at that path. Repeat installation leaves an identical extension unchanged.
 
 Completely restart OMP after installing the extension; Winmux does not restart it. The extension contract was checked against OMP 18.20.2. Install it in the directory where OMP starts, because ancestor-directory discovery is not guaranteed. It requires a stable system Node.js executable, and does not change models, providers, permissions, or global configuration.
 

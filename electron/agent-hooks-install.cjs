@@ -170,7 +170,7 @@ function installOmpHelper(dataDir, helperRoot) {
   const source = path.join(helperRoot, 'winmux-omp-hook.cjs');
   const content = fs.readFileSync(source);
   const target = path.join(root, 'winmux-omp-hook.cjs');
-  const existing = fs.existsSync(target) ? fs.lstatSync(target) : null;
+  const existing = fs.lstatSync(target, { throwIfNoEntry: false });
   if (existing && (!existing.isFile() || existing.isSymbolicLink())) fail('HELPER_UNSAFE', 'The installed Winmux OMP hook helper is not a regular file.');
   if (existing) {
     const current = fs.readFileSync(target);
@@ -186,9 +186,9 @@ function installOmpHelper(dataDir, helperRoot) {
 
 function prepareOmpExtension(projectRoot, helperRoot, helperPath, nodePath, dataDir) {
   const extensionDir = assertContained(projectRoot, path.join(projectRoot, '.omp', 'extensions'), 'OMP extension directory').target;
-  const target = path.join(extensionDir, 'winmux-status.mjs');
-  if (fs.existsSync(target)) {
-    const stat = fs.lstatSync(target);
+  const target = path.join(extensionDir, 'winmux-status.ts');
+  const stat = fs.lstatSync(target, { throwIfNoEntry: false });
+  if (stat) {
     if (!stat.isFile() || stat.isSymbolicLink()) fail('EXTENSION_UNSAFE', 'The OMP Winmux extension is not a regular file.');
     if (stat.size > 1024 * 1024) fail('CONFIG_CONFLICT', 'The OMP Winmux extension exceeds 1 MiB.');
     const current = fs.readFileSync(target, 'utf8');
@@ -205,7 +205,10 @@ function prepareOmpExtension(projectRoot, helperRoot, helperPath, nodePath, data
 
 function installPreparedOmpExtension(prepared) {
   fs.mkdirSync(prepared.extensionDir, { recursive: true, mode: 0o755 });
-  const existing = fs.existsSync(prepared.target);
+  const existing = fs.lstatSync(prepared.target, { throwIfNoEntry: false });
+  if (existing && (!existing.isFile() || existing.isSymbolicLink())) {
+    fail('EXTENSION_UNSAFE', 'The OMP Winmux extension is not a regular file.');
+  }
   if (existing && fs.readFileSync(prepared.target).equals(Buffer.from(prepared.content))) {
     return { status: 'unchanged', configPath: prepared.target };
   }
