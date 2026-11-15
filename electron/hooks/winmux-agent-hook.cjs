@@ -37,6 +37,11 @@ function eventPayload(raw) {
     event,
     sessionId,
     cwd,
+    ...((parsed.hook_event_name === 'PreToolUse' || parsed.hook_event_name === 'PostToolUse') && bounded(parsed.tool_name, 256) && bounded(parsed.tool_use_id, 256) ? {
+      ...(bounded(parsed.tool_name, 256) ? { toolName: bounded(parsed.tool_name, 256) } : {}),
+      ...(bounded(parsed.tool_use_id, 256) ? { toolId: bounded(parsed.tool_use_id, 256) } : {}),
+      phase: parsed.hook_event_name === 'PreToolUse' ? 'start' : 'end',
+    } : {}),
   };
 }
 

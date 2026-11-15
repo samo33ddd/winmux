@@ -8,6 +8,8 @@ const { discover, validateLaunch } = require('./backend/environment.cjs');
 const { cwdFromOsc } = require('./backend/shell-integration.cjs');
 const { terminalEnvironment } = require('./backend/terminal-env.cjs');
 const { createController: createCodexController } = require('./codex-integration.cjs');
+const { createController: createAgentController } = require('./agent-integration.cjs');
+const { ACTIVITY_KINDS, createActivityTracker } = require('./agent-activity.cjs');
 
 function replaceLeaf(node, paneId, replacement) {
   if (node.type === 'leaf') return node.paneId === paneId ? replacement : node;
@@ -52,7 +54,7 @@ function loadState(file) {
       integer(pane.cols, 'cols', 2, 300); integer(pane.rows, 'rows', 1, 200);
       pane.pid = null; pane.status = 'exited'; delete pane.exitCode;
       delete pane.agentId; delete pane.agentLabel; delete pane.agentThreadId; delete pane.agentSessionId; delete pane.agentBinding;
-      pane.agentState = 'unknown'; delete pane.agentExitCode; delete pane.agentUpdatedAt;
+      pane.agentState = 'unknown'; delete pane.agentExitCode; delete pane.agentUpdatedAt; delete pane.agentActivity; delete pane.agentPid;
     }
     const walk = (node, depth) => {
       if (!node || depth > LIMITS.panes) fail('STATE_INVALID', 'Invalid saved layout');
@@ -111,7 +113,7 @@ async function startServer(options = {}) {
     ({ SerializeAddon } = require('@xterm/addon-serialize'));
   } catch (error) { releaseLock(); throw error; }
   const clients = new Set(), runtimes = new Map();
-  let codexController;
+  let codexController, agentController;
   let stopping = false, closePromise, persistTimer, mutationTail = Promise.resolve();
   const publicState = () => structuredClone(state);
   function save() {
@@ -150,7 +152,7 @@ async function startServer(options = {}) {
     pane.shellReady = false;
     const terminal = new Terminal({ cols: pane.cols, rows: pane.rows, scrollback: LIMITS.scrollback, allowProposedApi: true });
     const serializer = new SerializeAddon(); terminal.loadAddon(serializer);
-    const runtime = { terminal, serializer, seq: 0, pending: 0, paused: false, pty: null, disposed: false, lastNotification: 0, subscriptions: [] };
+    const runtime = { terminal, serializer, seq: 0, pending: 0, paused: false, pty: null, disposed: false, lastNotification: 0, subscriptions: [], activity: createActivityTracker() };
     runtimes.set(pane.id, runtime);
     runtime.subscriptions.push(terminal.parser.registerOscHandler(1337, data => {
       const [kind, launchId, state, code] = data.split(';');
@@ -161,7 +163,7 @@ async function startServer(options = {}) {
         if (!/^-?\d{1,10}$/.test(code || '')) return true;
         const exitCode = Number(code);
         if ((state === 'completed') !== (exitCode === 0)) return true;
-        pane.agentExitCode = exitCode; runtime.agentEnded = true;
+        pane.agentExitCode = exitCode; runtime.agentEnded = true; runtime.activity.clear(); delete pane.agentActivity;
         runtime.agentLaunchId = '';
       }
       // The shell can confirm invocation and exit, never model activity.
@@ -230,6 +232,7 @@ async function startServer(options = {}) {
   function spawnPane(pane, launch) {
     const runtime = terminalFor(pane);
     runtime.agentLaunchId = launch.agentLaunchId;
+    runtime.agentSessionHooks = launch.agentSessionHooks === true;
     try {
       // Even an unset name in WSLENV creates an empty variable in Linux.
       const forwardedEnv = (process.env.WSLENV || '').split(':').filter(entry => entry.split('/')[0].toUpperCase() !== 'ELECTRON_RUN_AS_NODE');
@@ -394,7 +397,13 @@ async function startServer(options = {}) {
         if (!AGENT_STATES.has(params.state)) fail('INVALID_ARGUMENT', 'Invalid agent state');
         if (!runtime?.agentLaunchId || runtime.agentEnded || pane.status !== 'running') fail('AGENT_NOT_ACTIVE', 'Pane has no active agent launch');
         if (params.launchId !== runtime.agentLaunchId) fail('STALE_AGENT_LAUNCH', 'Agent launch identity does not match');
+        if (params.phase !== undefined && !['start', 'end'].includes(params.phase)) fail('INVALID_ARGUMENT', 'Invalid activity phase');
+        const toolName = params.toolName === undefined ? undefined : string(params.toolName, 'toolName', 256);
+        const toolId = params.toolId === undefined ? undefined : string(params.toolId, 'toolId', 256);
+        if (params.phase) runtime.activity.update({ phase: params.phase, toolName, toolId });
         pane.agentState = params.state; pane.agentUpdatedAt = Date.now();
+        if (params.state === 'running') pane.agentActivity = runtime.activity.current();
+        else { delete pane.agentActivity; if (params.state !== 'waiting') runtime.activity.clear(); }
         changed(); return { paneId: pane.id, state: pane.agentState, updatedAt: pane.agentUpdatedAt };
       }
       case 'notify': return addNotification(params.paneId, string(params.title, 'title', 256), string(params.body ?? '', 'body', 4096, true));
@@ -412,6 +421,15 @@ async function startServer(options = {}) {
       }
       case 'daemon.shutdown': setTimeout(() => close().catch(error => console.error(error.message)), 30); return { ok: true };
       case 'codex.status': return codexController.status();
+      case 'agent.sessions': return agentController.sessions();
+      case 'agent.bind': {
+        const sessionId = string(params.sessionId, 'sessionId', 128);
+        paneById(params.paneId);
+        await codexController.refreshProcesses();
+        const result = agentController.bind(params.paneId, sessionId);
+        if (!result.applied) fail('INVALID_BINDING', 'Select a current Hermes session and its terminal pane');
+        return result;
+      }
       case 'codex.bind': {
         const threadId = string(params.threadId, 'threadId', 128);
         paneById(params.paneId);
@@ -425,30 +443,41 @@ async function startServer(options = {}) {
         const sessionId = string(params.sessionId, 'sessionId', 128);
         const cwd = params.cwd === undefined ? '' : string(params.cwd, 'cwd', 4096, true);
         const paneId = params.paneId === undefined ? undefined : string(params.paneId, 'paneId', 128);
-        if (paneId) paneById(paneId);
-        if (agentId !== 'codex') return { applied: false, reason: 'agent' };
-        return codexController.hook({ agentId, event, sessionId, cwd, paneId });
+        if (paneId && agentId !== 'hermes') paneById(paneId);
+        const toolName = params.toolName === undefined ? undefined : string(params.toolName, 'toolName', 256);
+        const toolId = params.toolId === undefined ? undefined : string(params.toolId, 'toolId', 256);
+        const phase = params.phase;
+        if (phase !== undefined && !['start', 'end'].includes(phase)) fail('INVALID_ARGUMENT', 'Invalid activity phase');
+        if (agentId === 'codex') return codexController.hook({ agentId, event, sessionId, cwd, paneId, toolName, toolId, phase });
+        if (!['omp', 'claude', 'hermes', 'pi'].includes(agentId)) return { applied: false, reason: 'agent' };
+        const pid = params.pid === undefined ? undefined : integer(params.pid, 'pid', 1, Number.MAX_SAFE_INTEGER);
+        const stamp = params.stamp === undefined ? undefined : string(params.stamp, 'stamp', 32);
+        const emittedAt = params.emittedAt === undefined ? undefined : integer(params.emittedAt, 'emittedAt', 1, Number.MAX_SAFE_INTEGER);
+        const hook = { agentId, event, sessionId, cwd, paneId, pid, stamp, emittedAt, state: params.state, toolName, toolId, phase };
+        if (!agentController.hasCandidate(hook)) await codexController.refreshProcesses();
+        return agentController.hook(hook);
       }
       default: fail('METHOD_NOT_FOUND', `Unknown method: ${method}`);
     }
   }
-  const reads = new Set(['state', 'environment', 'pane.snapshot', 'pane.screen', 'pane.input', 'codex.status']);
+  const reads = new Set(['state', 'environment', 'pane.snapshot', 'pane.screen', 'pane.input', 'codex.status', 'agent.sessions']);
   function codexPanes() {
     return state.workspaces.flatMap(workspace => workspace.panes.map(pane => ({
       id: pane.id, pid: pane.pid, status: pane.status, cwd: pane.cwd, agentId: pane.agentId,
       agentState: pane.agentState, agentThreadId: pane.agentThreadId, agentSessionId: pane.agentSessionId,
-      agentBinding: pane.agentBinding, agentLaunchLocked: Boolean(runtimes.get(pane.id)?.agentLaunchId && !runtimes.get(pane.id)?.agentEnded),
+      agentBinding: pane.agentBinding, agentLaunchLocked: Boolean(runtimes.get(pane.id)?.agentSessionHooks && runtimes.get(pane.id)?.agentLaunchId && !runtimes.get(pane.id)?.agentEnded),
     })));
   }
   function applyCodexIdentity(paneId, identity) {
     let pane;
     try { pane = paneById(paneId).pane; } catch { return; }
     const runtime = runtimes.get(pane.id);
-    if (runtime?.agentLaunchId && !runtime.agentEnded) return;
+    if (runtime?.agentSessionHooks && runtime.agentLaunchId && !runtime.agentEnded) return;
+    if (pane.agentId && pane.agentId !== 'codex' && (!identity || pane.agentPid)) return;
     if (!identity) {
       delete pane.agentId; delete pane.agentLabel; delete pane.agentThreadId;
       delete pane.agentSessionId; delete pane.agentBinding;
-      pane.agentState = 'unknown';
+      pane.agentState = 'unknown'; delete pane.agentActivity;
     } else {
       if (identity.agentId) pane.agentId = identity.agentId;
       if (identity.agentLabel) pane.agentLabel = identity.agentLabel;
@@ -465,11 +494,32 @@ async function startServer(options = {}) {
         else delete pane.agentBinding;
       }
       if (identity.agentState && AGENT_STATES.has(identity.agentState)) pane.agentState = identity.agentState;
+      if (pane.agentState === 'running' && ACTIVITY_KINDS.has(identity.agentActivity)) pane.agentActivity = identity.agentActivity;
+      else delete pane.agentActivity;
     }
     pane.agentUpdatedAt = Date.now(); asyncChanged();
   }
+  function applyAgentIdentity(paneId, identity) {
+    let pane;
+    try { pane = paneById(paneId).pane; } catch { return; }
+    const runtime = runtimes.get(pane.id);
+    if (runtime?.agentSessionHooks && runtime.agentLaunchId && !runtime.agentEnded) return;
+    if (!identity && pane.agentId === 'codex') return;
+    const before = JSON.stringify([pane.agentId, pane.agentLabel, pane.agentPid, pane.agentSessionId, pane.agentState, pane.agentActivity]);
+    for (const key of ['agentId', 'agentLabel', 'agentPid', 'agentSessionId']) {
+      if (identity?.[key]) pane[key] = identity[key]; else delete pane[key];
+    }
+    delete pane.agentThreadId; delete pane.agentBinding;
+    pane.agentState = identity?.agentState || 'unknown';
+    if (pane.agentState === 'running' && ACTIVITY_KINDS.has(identity?.agentActivity)) pane.agentActivity = identity.agentActivity;
+    else delete pane.agentActivity;
+    const after = JSON.stringify([pane.agentId, pane.agentLabel, pane.agentPid, pane.agentSessionId, pane.agentState, pane.agentActivity]);
+    if (after !== before) { pane.agentUpdatedAt = Date.now(); asyncChanged(); }
+  }
+  agentController = createAgentController({ panes: codexPanes, apply: applyAgentIdentity });
   codexController = createCodexController({
     panes: codexPanes, apply: applyCodexIdentity,
+    onProcesses: processes => agentController.scan(processes),
     ...(options.codex ? { connect: options.codex.connect, listProcesses: options.codex.listProcesses, intervalMs: options.codex.intervalMs } : {}),
   });
   const server = net.createServer(socket => {

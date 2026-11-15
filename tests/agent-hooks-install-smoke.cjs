@@ -91,7 +91,7 @@ test('rejects a symlink, bad JSON, and a non-Windows profile without writing', a
     },
   };
   await assert.rejects(() => installAgentHooks(wsl, { workspaceId: 'workspace-1', agent: 'codex' }, { dataDir, nodePath: process.execPath }), { code: 'UNSUPPORTED_ENVIRONMENT' });
-  await assert.rejects(() => installAgentHooks(fixture(root), { workspaceId: 'workspace-1', agent: 'claude' }, { dataDir, nodePath: process.execPath }), { code: 'UNSUPPORTED_AGENT' });
+  await assert.rejects(() => installAgentHooks(fixture(root), { workspaceId: 'workspace-1', agent: 'unknown-agent' }, { dataDir, nodePath: process.execPath }), { code: 'UNSUPPORTED_AGENT' });
 });
 
 test('helper delivers a bounded authenticated agent.hook and drops prompt content', async t => {

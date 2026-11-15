@@ -8,6 +8,9 @@ export interface Pane {
   status: 'running' | 'exited'; exitCode?: number; cols: number; rows: number;
   tabId?: string; agentId?: string; agentLabel?: string;
   agentState?: 'starting' | 'running' | 'waiting' | 'idle' | 'completed' | 'failed' | 'unknown'; agentExitCode?: number;
+  agentActivity?: 'thinking' | 'reading' | 'editing' | 'command' | 'searching' | 'browser' | 'delegating';
+  agentPid?: number;
+  agentSessionId?: string;
   agentThreadId?: string; agentBinding?: 'auto' | 'explicit';
 }
 export interface TerminalTab { id: string; title: string; titleMode?: 'auto' | 'custom'; root: LayoutNode }
@@ -20,7 +23,7 @@ export interface Profile {
   cwd?: string; distro?: string; available?: boolean; unavailableReason?: string;
 }
 export interface Agent { id: string; label: string; profileId: string; environment: 'windows' | 'wsl'; available: boolean | null; command: string | null; distro?: string; hookAdapter?: string }
-export interface Environment { profiles: Profile[]; agents?: Agent[]; defaultCwd: string; platform: string; capabilities?: { terminalTabs?: boolean; liveCwd?: boolean; agentLaunch?: boolean; agentStatus?: boolean; sessionAgentHooks?: boolean; nativeCodex?: boolean; protocolVersion?: number } }
+export interface Environment { profiles: Profile[]; agents?: Agent[]; defaultCwd: string; platform: string; capabilities?: { terminalTabs?: boolean; liveCwd?: boolean; agentLaunch?: boolean; agentStatus?: boolean; sessionAgentHooks?: boolean; nativeCodex?: boolean; ompHooks?: boolean; agentActivity?: boolean; protocolVersion?: number } }
 export interface Snapshot { data: string; seq: number; cols: number; rows: number }
 export type BackendEvent = { type: 'state'; state: State }
   | { type: 'output'; paneId: string; data: string; seq: number }

@@ -70,7 +70,7 @@ async function openFilePreview(params) {
   if (win && !win.isDestroyed()) win.webContents.send('winmux:event', { type:'file-preview', ...preview });
   return previewMetadata(preview);
 }
-const allowedMethods = new Set(['state','environment','workspace.create','workspace.rename','workspace.close','tab.create','tab.select','tab.close','pane.split','pane.close','pane.input','pane.resize','pane.snapshot','pane.screen','agent.status','agent.hook','agent.hooks.install','codex.status','codex.bind','layout.ratio','notify','notifications.read','settings.update']);
+const allowedMethods = new Set(['state','environment','workspace.create','workspace.rename','workspace.close','tab.create','tab.select','tab.close','pane.split','pane.close','pane.input','pane.resize','pane.snapshot','pane.screen','agent.status','agent.hook','agent.hooks.install','agent.sessions','agent.bind','codex.status','codex.bind','layout.ratio','notify','notifications.read','settings.update']);
 function syncWindowTheme(theme) {
   const colors = {dark:['#101315','#e7eeea'],midnight:['#101523','#e1e9fa'],nord:['#252c38','#eceff4'],dracula:['#20212b','#f8f8f2'],light:['#e9eeeb','#202723'],sand:['#eee8dc','#3a3328']};
   const palette = colors[theme];

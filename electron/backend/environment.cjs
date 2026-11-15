@@ -95,7 +95,7 @@ async function discover() {
       agents.push(wslAgent(profile, name, Boolean(command), command));
     }
   }
-  return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, nativeCodex: true, protocolVersion: 3 } };
+  return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, nativeCodex: true, ompHooks: true, agentActivity: true, protocolVersion: 3 } };
 }
 async function validateLaunch(environment, profileId, requestedCwd, agentId, agentHooks) {
   const profile = environment.profiles.find(p => p.id === profileId);
@@ -103,7 +103,7 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
   if (agentHooks !== undefined && typeof agentHooks !== 'boolean') fail('INVALID_ARGUMENT', 'agentHooks must be a boolean');
   const selected = await selectedAgentForLaunch(environment, profile, agentId);
   const agent = selected && withSessionHooks(selected, profile, agentHooks === true);
-  const agentFields = agent ? { agentId: agent.id, agentLabel: agent.label || agent.id, agentLaunchId: randomUUID() } : {};
+  const agentFields = agent ? { agentId: agent.id, agentLabel: agent.label || agent.id, agentLaunchId: randomUUID(), agentSessionHooks: agent.sessionHooks === true } : {};
   let cwd = requestedCwd;
   if (profile.environment === 'wsl') {
     if (cwd === undefined || cwd === '~') {
