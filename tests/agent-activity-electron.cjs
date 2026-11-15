@@ -52,8 +52,13 @@ const environment = {
   platform: process.platform, defaultCwd: fixtureCwd,
   profiles: [{ id: 'powershell', label: 'PowerShell', environment: 'windows', command: 'pwsh.exe', args: [], cwd: fixtureCwd }],
   agents: agents.map(agent => ({ id: agent.id, label: agent.label, profileId: 'powershell', environment: 'windows', available: true, command: null })),
-  capabilities: { terminalTabs: true, agentLaunch: true, agentStatus: true },
+  capabilities: { terminalTabs: true, agentLaunch: true, agentStatus: true, nativeCodex: true, ompHooks: true, agentActivity: true },
 };
+const gatewayStatus = {
+  sessions: [{ agentId: 'hermes', sessionId: 'hermes-root-fixture', cwd: fixtureCwd, pid: 5000, state: 'running', lastSeen: Date.now() }],
+  panes: [{ paneId: 'pane-hermes', agentId: 'hermes', sessionId: null }],
+};
+const bindings = [];
 const sockets = new Set();
 let desktop;
 // Fake only the authenticated daemon boundary. Real Electron preload, IPC,
@@ -69,6 +74,15 @@ const server = net.createServer(socket => {
       let result = { ok: true }, error;
       if (request.method === 'state') result = state;
       else if (request.method === 'environment') result = environment;
+      else if (request.method === 'codex.status') result = { connection: 'disconnected', threads: [], panes: [] };
+      else if (request.method === 'agent.sessions') result = gatewayStatus;
+      else if (request.method === 'agent.bind') {
+        assert.equal(request.params.paneId, 'pane-hermes');
+        assert.equal(request.params.sessionId, 'hermes-root-fixture');
+        bindings.push(request.params);
+        gatewayStatus.panes[0].sessionId = request.params.sessionId;
+        result = { applied: true, ...request.params };
+      }
       else if (request.method === 'pane.snapshot') result = { data: '', seq: 0, cols: 80, rows: 24 };
       else if (request.method === 'pane.screen') result = { text: 'sanitised fixture', cursor: { x: 0, y: 0 } };
       else if (request.method === 'settings.update') Object.assign(state.settings, request.params);
@@ -124,6 +138,26 @@ async function run() {
       assert.equal(await header.locator('[data-testid="agent-action"] span').innerText(), agents[0].action[language]);
       assert.equal(await header.getAttribute('title'), caption(agents[0], language));
     }
+
+    await page.getByTestId('settings-open').click();
+    await page.getByTestId('settings-tab-behavior').click();
+    const choices = page.getByTestId('agent-hooks-agent');
+    assert.deepEqual((await choices.locator('option').evaluateAll(items => items.map(item => item.value))).sort(), ['claude', 'codex', 'hermes', 'omp', 'pi']);
+    for (const agent of agents) {
+      await choices.selectOption(agent.id);
+      assert.equal(await choices.inputValue(), agent.id);
+    }
+    const sessionPicker = page.getByTestId('hermes-bind-pane-hermes');
+    await sessionPicker.focus();
+    assert.equal(await sessionPicker.evaluate(element => document.activeElement === element), true);
+    await page.keyboard.press('Home');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('[data-testid="hermes-bind-pane-hermes"]')?.value === 'hermes-root-fixture');
+    assert.deepEqual(bindings, [{ paneId: 'pane-hermes', sessionId: 'hermes-root-fixture' }]);
+    await choices.selectOption('hermes');
+    await page.screenshot({ path: path.join(artifacts, 'agent-activity-connections.png') });
+    await page.keyboard.press('Escape');
 
     for (const theme of themes) {
       await page.getByTestId('settings-open').click();

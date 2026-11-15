@@ -35,6 +35,7 @@ function payloadFor(ctx, event, state, tool) {
     ...(paneId ? { paneId } : {}),
     pid: process.pid,
     stamp: process.hrtime.bigint().toString(),
+    emittedAt: Date.now(),
     state,
     ...(tool ? { toolName: tool.toolName, toolId: tool.toolId, phase: tool.phase } : {}),
   };

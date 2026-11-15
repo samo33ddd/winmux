@@ -219,6 +219,7 @@ test('helper sends only the exact lifecycle payload over authenticated agent.hoo
       const line = buffer.slice(0, buffer.indexOf('\n'));
       const request = JSON.parse(line);
       received.push(request);
+      socket.write(`${JSON.stringify({ id: 'another-request', error: { code: 'UNRELATED', message: 'Ignore this response' } })}\n`);
       socket.end(`${JSON.stringify({
         id: request.id,
         ...(request.token === token ? { result: { applied: true } } : { error: { code: 'UNAUTHORIZED', message: 'no' } }),
@@ -240,6 +241,7 @@ test('helper sends only the exact lifecycle payload over authenticated agent.hoo
     paneId: 'pane-1',
     pid: 1234,
     stamp: '456789',
+    emittedAt: 1794766200000,
     state: 'waiting',
     toolName: 'read',
     toolId: 'call-1',
@@ -260,6 +262,7 @@ test('helper sends only the exact lifecycle payload over authenticated agent.hoo
     paneId: 'pane-1',
     pid: 1234,
     stamp: '456789',
+    emittedAt: 1794766200000,
     state: 'waiting',
     toolName: 'read',
     toolId: 'call-1',
@@ -312,5 +315,6 @@ test('helper requires matching bounded tool identity without forwarding private 
     args: { command: 'secret' },
   }));
   assert.equal(Object.hasOwn(lifecycle, 'toolName'), false);
+  assert.throws(() => eventPayload(JSON.stringify({ ...lifecycle, emittedAt: '1794766200000' })), { code: 'HOOK_INVALID' });
   assert.equal(JSON.stringify(lifecycle).includes('secret'), false);
 });

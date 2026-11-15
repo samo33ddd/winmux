@@ -157,3 +157,24 @@ test('read-only forwarding and the shared process snapshot add no control calls'
   assert.equal(Number.isNaN(Date.parse(self.createdAt)), false);
   assert.equal(new Date(self.createdAt).toISOString(), self.createdAt);
 });
+
+test('shared process observation stays available while the optional Codex connection is pending', async () => {
+  let release, snapshots = 0, finished = false;
+  const connection = new Promise(resolve => { release = resolve; });
+  const controller = createController({
+    panes: () => [{ id: 'omp-pane', pid: 100, status: 'running', cwd: 'E:/project' }],
+    connect: () => connection,
+    listProcesses: async () => [{ pid: 100, ppid: 1, name: 'pwsh.exe' }],
+    onProcesses: () => { snapshots += 1; },
+  });
+  const pending = controller.refresh().then(() => { finished = true; });
+  await controller.refreshProcesses();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(snapshots, 1, 'concurrent consumers share one process snapshot');
+  assert.equal(finished, false, 'the optional Codex connection is still pending');
+  await controller.refreshProcesses();
+  assert.equal(snapshots, 2, 'other agents can refresh without waiting for Codex');
+  release({ listThreads: async () => ({ data: [] }), listLoaded: async () => ({ data: [] }), onNotification: () => () => {}, close: async () => {} });
+  await pending;
+  await controller.stop();
+});

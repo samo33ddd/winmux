@@ -38,6 +38,7 @@ function eventPayload(raw) {
   const state = bounded(parsed.state, 16);
   const paneId = bounded(parsed.paneId, 128, true);
   const stamp = bounded(parsed.stamp, 30);
+  const emittedAt = parsed.emittedAt;
   const toolName = bounded(parsed.toolName, 128, true);
   const toolId = bounded(parsed.toolId, 256, true);
   const phase = bounded(parsed.phase, 5, true);
@@ -45,12 +46,14 @@ function eventPayload(raw) {
   if (parsed.agentId !== 'omp' || !EVENTS.has(event) || !sessionId || !cwd || !STATES.has(state)
     || (parsed.paneId !== undefined && paneId === undefined)
     || !Number.isSafeInteger(parsed.pid) || parsed.pid <= 0 || !/^\d+$/.test(stamp || '')
+    || (emittedAt !== undefined && (!Number.isSafeInteger(emittedAt) || emittedAt <= 0))
     || (isToolEvent && (!toolName || !toolId || !['start', 'end'].includes(phase)
       || phase !== (event === 'tool_execution_start' ? 'start' : 'end')))) {
     fail('OMP hook input is missing a supported lifecycle field');
   }
   return {
     agentId: 'omp',
+    ...(emittedAt !== undefined ? { emittedAt } : {}),
     event,
     sessionId,
     cwd,
@@ -102,8 +105,9 @@ function pipeName(dataDir, explicit) {
 }
 
 function deliver(pipe, token, params) {
+  const id = crypto.randomUUID();
   const frame = JSON.stringify({
-    id: crypto.randomUUID(),
+    id,
     token,
     method: 'agent.hook',
     params,
@@ -111,35 +115,30 @@ function deliver(pipe, token, params) {
   if (Buffer.byteLength(frame) > MAX_FRAME) fail('Winmux hook frame is too large');
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(pipe);
-    let buffer = '';
+    let buffer = '', done = false;
     const timer = setTimeout(() => socket.destroy(Object.assign(new Error('Winmux hook delivery timed out'), { code: 'ETIMEDOUT' })), 1200);
     const finish = error => {
+      if (done) return;
+      done = true;
       clearTimeout(timer);
       socket.destroy();
       if (error) reject(error);
       else resolve();
     };
     socket.on('error', finish);
+    socket.on('close', () => { if (!done) finish(new Error('Winmux hook connection closed')); });
     socket.on('data', chunk => {
       buffer += chunk.toString('utf8');
-      const index = buffer.indexOf('\n');
-      if (index === -1) {
-        if (Buffer.byteLength(buffer) > MAX_FRAME) {
-          finish(Object.assign(new Error('Winmux hook response is too large'), { code: 'HOOK_TOO_LARGE' }));
-        }
-        return;
+      if (Buffer.byteLength(buffer) > 8 * 1024 * 1024) return finish(Object.assign(new Error('Winmux hook response is too large'), { code: 'HOOK_TOO_LARGE' }));
+      let index;
+      while ((index = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);
+        let message;
+        try { message = JSON.parse(line); }
+        catch { return finish(Object.assign(new Error('Winmux hook response is invalid'), { code: 'HOOK_INVALID' })); }
+        if (message.id !== id) continue;
+        return finish(message.error ? Object.assign(new Error('Winmux rejected the hook'), { code: message.error.code || 'HOOK_REJECTED' }) : undefined);
       }
-      let message;
-      try { message = JSON.parse(buffer.slice(0, index)); }
-      catch {
-        finish(Object.assign(new Error('Winmux hook response is invalid'), { code: 'HOOK_INVALID' }));
-        return;
-      }
-      if (message.error) {
-        finish(Object.assign(new Error(message.error.message || 'Winmux rejected the hook'), {
-          code: message.error.code || 'HOOK_REJECTED',
-        }));
-      } else finish();
     });
     socket.write(frame);
   });

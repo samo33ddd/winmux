@@ -8,6 +8,7 @@ import type { Profile, Settings, Workspace } from './types';
 import { SkillsSettings } from './SkillsSettings';
 import { AgentIntegrationSettings } from './AgentIntegrationSettings';
 import { AgentHooksSettings } from './AgentHooksSettings';
+import { HermesSessionSettings } from './HermesSessionSettings';
 
 function Row({title, detail, children}: {title:string; detail?:string; children:ReactNode}) {
   return <div className="preference-row"><div><strong>{title}</strong>{detail && <p>{detail}</p>}</div>{children}</div>;
@@ -15,7 +16,7 @@ function Row({title, detail, children}: {title:string; detail?:string; children:
 function Toggle({label, checked, onChange, testId, disabled=false}: {label:string; checked:boolean; onChange(value:boolean):void; testId:string; disabled?:boolean}) {
   return <button className="preference-switch" role="switch" aria-label={label} aria-checked={checked} data-testid={testId} disabled={disabled} onClick={() => onChange(!checked)}><span /></button>;
 }
-export function SettingsDialog({settings, profiles, workspaces, activeWorkspaceId, agentHooks, agentHooksAvailable, nativeCodex, ompHooksAvailable = false, onAgentHooksChange, onSkillStarted, onChange, onClose}: {settings:Settings; profiles:Profile[]; workspaces:Workspace[]; activeWorkspaceId?:string; agentHooks:boolean; agentHooksAvailable:boolean; nativeCodex:boolean; ompHooksAvailable?:boolean; onAgentHooksChange(value:boolean):void; onSkillStarted(workspaceId:string,paneId:string):void; onChange(values:Partial<Settings>):Promise<void>; onClose():void}) {
+export function SettingsDialog({settings, profiles, workspaces, activeWorkspaceId, agentHooks, agentHooksAvailable, nativeCodex, ompHooksAvailable = false, agentActivityAvailable = false, onAgentHooksChange, onSkillStarted, onChange, onClose}: {settings:Settings; profiles:Profile[]; workspaces:Workspace[]; activeWorkspaceId?:string; agentHooks:boolean; agentHooksAvailable:boolean; nativeCodex:boolean; ompHooksAvailable?:boolean; agentActivityAvailable?:boolean; onAgentHooksChange(value:boolean):void; onSkillStarted(workspaceId:string,paneId:string):void; onChange(values:Partial<Settings>):Promise<void>; onClose():void}) {
   const [tab,setTab] = useState<'appearance'|'terminal'|'behavior'|'browser'|'skills'>('appearance');
   const change = (values:Partial<Settings>) => { void onChange(values); };
   return <Modal title={t('Настройки')} className="preferences-modal" onClose={onClose}>
@@ -51,8 +52,9 @@ export function SettingsDialog({settings, profiles, workspaces, activeWorkspaceI
         <div className="profile-settings"><h3>{t('Среды запуска')}</h3>{profiles.map(profile => <div className="profile-status" key={profile.id}><span>{profile.label}<small>{profile.environment === 'wsl' ? profile.distro ?? 'WSL' : 'Windows'}</small></span><span className={profile.available === false ? 'muted' : 'available'}>{profile.available === false ? t('Недоступен') : t('Доступен')}</span></div>)}</div>
         <p className="preference-intro">{t('Закрытие окна оставляет терминалы работать в фоне. Закрытие панели или пространства завершает их процессы.')}</p>
         {nativeCodex && <AgentIntegrationSettings />}
+        {agentActivityAvailable && <HermesSessionSettings workspaces={workspaces} />}
         {nativeCodex || ompHooksAvailable
-          ? <AgentHooksSettings workspaces={workspaces} activeWorkspaceId={activeWorkspaceId} ompHooksAvailable={ompHooksAvailable} />
+          ? <AgentHooksSettings workspaces={workspaces} activeWorkspaceId={activeWorkspaceId} ompHooksAvailable={ompHooksAvailable} agentActivityAvailable={agentActivityAvailable} />
           : <p className="preference-intro" data-testid="native-codex-upgrade">{t('Локальный демон Codex станет доступен после завершения текущих сессий и повторного запуска Winmux. Закрытие окна их не останавливает.')}</p>}
       </>}
       {tab === 'browser' && <BrowserSettings />}

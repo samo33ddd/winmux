@@ -280,6 +280,7 @@ function createController(options = {}) {
   let daemon = null;
   let connection = 'disconnected', connectionReason = 'starting';
   let threads = [], loadedIds = [], processes = [], plans = [];
+  let processRefresh = null;
   const activities = new Map();
   const closedTurns = new Set();
   const activityKey = thread => `${thread.id}\0${thread.sessionId || ''}`;
@@ -433,16 +434,26 @@ function createController(options = {}) {
       dropActivities(() => true);
     }
   }
+  async function refreshProcesses() {
+    if (processRefresh) return processRefresh;
+    processRefresh = (async () => {
+      const panes = options.panes?.() || [];
+      try { processes = panes.some(pane => pane.status === 'running' && pane.pid) ? await listProcesses() : []; }
+      catch { processes = []; }
+      if (!stopped) {
+        try { options.onProcesses?.(processes); }
+        catch { try { options.onProcesses?.([]); } catch { /* Detection is optional. */ } }
+      }
+      return processes;
+    })().finally(() => { processRefresh = null; });
+    return processRefresh;
+  }
   async function refresh() {
     if (refreshing) return refreshing;
     refreshing = (async () => {
+      await refreshProcesses();
       await ensure();
       const rawPanes = options.panes?.() || [];
-      try {
-        processes = rawPanes.some(pane => pane.status === 'running' && pane.pid) ? await listProcesses() : [];
-      } catch { processes = []; }
-      try { options.onProcesses?.(processes); }
-      catch { try { options.onProcesses?.([]); } catch { /* Shared detection stays optional. */ } }
       const observedPanes = options.panes?.() || rawPanes;
       const decorated = decoratePanes(rawPanes, processes);
       const currentPanes = observedPanes.map(pane => {
@@ -507,7 +518,7 @@ function createController(options = {}) {
   return {
     start() {
       if (timer || stopped) return;
-      const tick = () => { refresh().catch(() => {}); };
+      const tick = () => { refreshProcesses().catch(() => {}); refresh().catch(() => {}); };
       tick();
       timer = setInterval(tick, intervalMs);
       timer.unref?.();
@@ -521,7 +532,7 @@ function createController(options = {}) {
       try { await current?.close?.(); } catch { /* Closing the proxy must not affect the user daemon. */ }
       try { currentDaemon?.dispose?.(); } catch { /* The proxy is the only process we started. */ }
     },
-    refresh, status: snapshot,
+    refresh, refreshProcesses, status: snapshot,
     async bind(paneId, threadId) {
       await refresh();
       const pane = decoratePanes(options.panes?.() || [], processes).find(item => item.id === paneId);

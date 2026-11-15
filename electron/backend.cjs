@@ -232,6 +232,7 @@ async function startServer(options = {}) {
   function spawnPane(pane, launch) {
     const runtime = terminalFor(pane);
     runtime.agentLaunchId = launch.agentLaunchId;
+    runtime.agentSessionHooks = launch.agentSessionHooks === true;
     try {
       // Even an unset name in WSLENV creates an empty variable in Linux.
       const forwardedEnv = (process.env.WSLENV || '').split(':').filter(entry => entry.split('/')[0].toUpperCase() !== 'ELECTRON_RUN_AS_NODE');
@@ -420,6 +421,15 @@ async function startServer(options = {}) {
       }
       case 'daemon.shutdown': setTimeout(() => close().catch(error => console.error(error.message)), 30); return { ok: true };
       case 'codex.status': return codexController.status();
+      case 'agent.sessions': return agentController.sessions();
+      case 'agent.bind': {
+        const sessionId = string(params.sessionId, 'sessionId', 128);
+        paneById(params.paneId);
+        await codexController.refreshProcesses();
+        const result = agentController.bind(params.paneId, sessionId);
+        if (!result.applied) fail('INVALID_BINDING', 'Select a current Hermes session and its terminal pane');
+        return result;
+      }
       case 'codex.bind': {
         const threadId = string(params.threadId, 'threadId', 128);
         paneById(params.paneId);
@@ -433,7 +443,7 @@ async function startServer(options = {}) {
         const sessionId = string(params.sessionId, 'sessionId', 128);
         const cwd = params.cwd === undefined ? '' : string(params.cwd, 'cwd', 4096, true);
         const paneId = params.paneId === undefined ? undefined : string(params.paneId, 'paneId', 128);
-        if (paneId) paneById(paneId);
+        if (paneId && agentId !== 'hermes') paneById(paneId);
         const toolName = params.toolName === undefined ? undefined : string(params.toolName, 'toolName', 256);
         const toolId = params.toolId === undefined ? undefined : string(params.toolId, 'toolId', 256);
         const phase = params.phase;
@@ -442,26 +452,27 @@ async function startServer(options = {}) {
         if (!['omp', 'claude', 'hermes', 'pi'].includes(agentId)) return { applied: false, reason: 'agent' };
         const pid = params.pid === undefined ? undefined : integer(params.pid, 'pid', 1, Number.MAX_SAFE_INTEGER);
         const stamp = params.stamp === undefined ? undefined : string(params.stamp, 'stamp', 32);
-        const hook = { agentId, event, sessionId, cwd, paneId, pid, stamp, state: params.state, toolName, toolId, phase };
-        if (!agentController.hasCandidate(hook)) await codexController.refresh();
+        const emittedAt = params.emittedAt === undefined ? undefined : integer(params.emittedAt, 'emittedAt', 1, Number.MAX_SAFE_INTEGER);
+        const hook = { agentId, event, sessionId, cwd, paneId, pid, stamp, emittedAt, state: params.state, toolName, toolId, phase };
+        if (!agentController.hasCandidate(hook)) await codexController.refreshProcesses();
         return agentController.hook(hook);
       }
       default: fail('METHOD_NOT_FOUND', `Unknown method: ${method}`);
     }
   }
-  const reads = new Set(['state', 'environment', 'pane.snapshot', 'pane.screen', 'pane.input', 'codex.status']);
+  const reads = new Set(['state', 'environment', 'pane.snapshot', 'pane.screen', 'pane.input', 'codex.status', 'agent.sessions']);
   function codexPanes() {
     return state.workspaces.flatMap(workspace => workspace.panes.map(pane => ({
       id: pane.id, pid: pane.pid, status: pane.status, cwd: pane.cwd, agentId: pane.agentId,
       agentState: pane.agentState, agentThreadId: pane.agentThreadId, agentSessionId: pane.agentSessionId,
-      agentBinding: pane.agentBinding, agentLaunchLocked: Boolean(runtimes.get(pane.id)?.agentLaunchId && !runtimes.get(pane.id)?.agentEnded),
+      agentBinding: pane.agentBinding, agentLaunchLocked: Boolean(runtimes.get(pane.id)?.agentSessionHooks && runtimes.get(pane.id)?.agentLaunchId && !runtimes.get(pane.id)?.agentEnded),
     })));
   }
   function applyCodexIdentity(paneId, identity) {
     let pane;
     try { pane = paneById(paneId).pane; } catch { return; }
     const runtime = runtimes.get(pane.id);
-    if (runtime?.agentLaunchId && !runtime.agentEnded) return;
+    if (runtime?.agentSessionHooks && runtime.agentLaunchId && !runtime.agentEnded) return;
     if (pane.agentId && pane.agentId !== 'codex' && (!identity || pane.agentPid)) return;
     if (!identity) {
       delete pane.agentId; delete pane.agentLabel; delete pane.agentThreadId;
@@ -492,7 +503,7 @@ async function startServer(options = {}) {
     let pane;
     try { pane = paneById(paneId).pane; } catch { return; }
     const runtime = runtimes.get(pane.id);
-    if (runtime?.agentLaunchId && !runtime.agentEnded) return;
+    if (runtime?.agentSessionHooks && runtime.agentLaunchId && !runtime.agentEnded) return;
     if (!identity && pane.agentId === 'codex') return;
     const before = JSON.stringify([pane.agentId, pane.agentLabel, pane.agentPid, pane.agentSessionId, pane.agentState, pane.agentActivity]);
     for (const key of ['agentId', 'agentLabel', 'agentPid', 'agentSessionId']) {

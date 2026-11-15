@@ -93,6 +93,18 @@ Completely restart OMP after installing the extension; Winmux does not restart i
 
 The extension reports only the interactive root agent's lifecycle, asks, approvals, and bounded tool identifiers. It does not forward prompts, tool arguments, commands, or results. The shared backend must verify the process and session before accepting these records. Installing the extension alone does not add backend process detection or activate it in an already-running OMP session.
 
+## Agent status and current action
+
+Windows panes identify the primary Codex, Claude, OMP, Hermes, or Pi process. Nested workers do not replace the terminal's primary agent. A process proves identity only: activity stays unknown until a native Codex notification or a configured adapter reports its lifecycle.
+
+The sidebar and pane header show the agent, state, and a short action with an icon: working on the task, reading files, editing files, running a command, searching, using a browser, or delegating. Actions use bounded tool identifiers; prompts, tool arguments, commands, and results never become status captions. A completed, failed, waiting, idle, or disconnected session hides its old action.
+
+In **Settings → Behavior → Agent hooks**, select the Windows workspace and agent. Codex keeps its `/hooks` trust step. Claude merges `.claude/settings.local.json` without removing other hooks. OMP and Pi install discoverable project extensions; restart the selected CLI after installation. Pi's lifecycle was checked against package source 0.73.1; a live Pi installation was unavailable on the contributor host.
+
+Hermes uses an explicitly selected user/profile plugin. Installation leaves `config.yaml` unchanged; enable `winmux-status` with the displayed command in that Hermes profile and restart Hermes. Only proven root CLI sessions are reported. When a shared Hermes gateway cannot be associated with a terminal by process ancestry, **Hermes sessions** requires an explicit session selection. Cwd alone never selects a gateway conversation. Desktop and chat-platform Hermes sessions are outside this terminal adapter's scope.
+
+Older running Winmux daemons keep their existing sessions. New capabilities take effect after those sessions finish and the updated daemon starts; closing the window alone does not update the daemon. Agent adapters are opt-in, require a stable system Node.js executable, and do not change model, provider, or permission settings. WSL agent activity has not been verified by this Windows implementation.
+
 ## Browser workflow
 
 Keep the desktop open and create a workspace first. `open` accepts an HTTP(S) URL without embedded credentials and an optional workspace ID. Pass `workspaceId` explicitly for deterministic targeting; omission selects the active workspace or falls back to the first workspace.

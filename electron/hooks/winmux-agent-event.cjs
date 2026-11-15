@@ -1,4 +1,5 @@
 'use strict';
+// winmux-agent-event — metadata-only authenticated adapter transport.
 // Standalone copy installed beside agent extensions; no checkout dependency.
 const fs = require('node:fs');
 const net = require('node:net');
@@ -8,13 +9,14 @@ const crypto = require('node:crypto');
 const AGENTS = new Set(['omp', 'pi', 'hermes']);
 const EVENTS = new Set(['session_start', 'session_switch', 'session_shutdown', 'agent_start', 'agent_end', 'tool_execution_start', 'tool_execution_end', 'tool_approval_requested', 'tool_approval_resolved']);
 const STATES = new Set(['running', 'waiting', 'idle', 'completed', 'failed']);
+const CLAUDE_STATES = { SessionStart: 'idle', UserPromptSubmit: 'running', PreToolUse: 'running', PostToolUse: 'running', PostToolUseFailure: 'running', PermissionRequest: 'waiting', Stop: 'completed', StopFailure: 'failed', SessionEnd: 'idle' };
 const bounded = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max && !value.includes('\0') ? value : undefined;
 
 function eventPayload(raw) {
   const input = JSON.parse(raw);
   if (!input || !AGENTS.has(input.agentId) || !EVENTS.has(input.event) || !STATES.has(input.state)
     || !bounded(input.sessionId, 128) || !bounded(input.cwd, 4096)
-    || !Number.isSafeInteger(input.pid) || input.pid < 1 || !/^\d{1,32}$/.test(input.stamp || '')) throw new Error('Invalid Winmux agent event');
+    || !Number.isSafeInteger(input.pid) || input.pid < 1 || typeof input.stamp !== 'string' || !/^\d{1,32}$/.test(input.stamp)) throw new Error('Invalid Winmux agent event');
   const output = { agentId: input.agentId, event: input.event, sessionId: input.sessionId, cwd: input.cwd, pid: input.pid, stamp: input.stamp, state: input.state };
   if (input.paneId !== undefined) {
     if (!bounded(input.paneId, 128)) throw new Error('Invalid Winmux pane identity');
@@ -25,6 +27,17 @@ function eventPayload(raw) {
       || !['start', 'end'].includes(input.phase) || !bounded(input.toolName, 256) || !bounded(input.toolId, 256)) throw new Error('Invalid Winmux tool event');
     Object.assign(output, { phase: input.phase, toolName: input.toolName, toolId: input.toolId });
   }
+  return output;
+}
+function claudePayload(raw, env = process.env) {
+  const input = JSON.parse(raw);
+  if (!input || input.agent_id || input.parent_session_id || input.parent_thread_id) return null;
+  const state = CLAUDE_STATES[input.hook_event_name];
+  if (!state || !bounded(input.session_id, 128) || !bounded(input.cwd, 4096)) return null;
+  const paneId = bounded(env.WINMUX_PANE_ID, 128);
+  const output = { agentId: 'claude', event: input.hook_event_name, sessionId: input.session_id, cwd: input.cwd, stamp: process.hrtime.bigint().toString(), state, ...(paneId ? { paneId } : {}) };
+  const phase = input.hook_event_name === 'PreToolUse' ? 'start' : ['PostToolUse', 'PostToolUseFailure'].includes(input.hook_event_name) ? 'end' : undefined;
+  if (phase && bounded(input.tool_name, 256) && bounded(input.tool_use_id, 256)) Object.assign(output, { phase, toolName: input.tool_name, toolId: input.tool_use_id });
   return output;
 }
 function pipeName(dataDir) {
@@ -64,9 +77,11 @@ async function main(argv = process.argv) {
   const dataDir = path.resolve(selected);
   const token = fs.readFileSync(path.join(dataDir, 'ipc-token'), 'utf8').trim();
   if (!/^[a-f0-9]{64}$/.test(token)) throw new Error('Invalid Winmux capability');
+  const claude = value('--agent') === 'claude';
   let raw = '';
-  for await (const chunk of process.stdin) { raw += chunk; if (Buffer.byteLength(raw) > 16 * 1024) throw new Error('Agent event is too large'); }
-  await deliver(value('--pipe') || pipeName(dataDir), token, eventPayload(raw));
+  for await (const chunk of process.stdin) { raw += chunk; if (Buffer.byteLength(raw) > (claude ? 4 * 1024 * 1024 : 16 * 1024)) throw new Error('Agent event is too large'); }
+  const payload = claude ? claudePayload(raw) : eventPayload(raw);
+  if (payload) await deliver(value('--pipe') || pipeName(dataDir), token, payload);
 }
-module.exports = { eventPayload, deliver };
+module.exports = { eventPayload, claudePayload, deliver };
 if (require.main === module) main().catch(() => { console.error('Winmux agent event could not be delivered'); process.exitCode = 1; });

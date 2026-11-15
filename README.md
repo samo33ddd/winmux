@@ -92,9 +92,13 @@ Closing the window detaches the UI from the background terminal daemon. Closing 
 
 A daemon restart or Windows reboot restores saved layout and metadata with **fresh shells**. It cannot preserve running processes or resume agent conversations, and it never replays previous commands. The process indicator reports whether a shell is running; it does not infer whether an agent is thinking, waiting for approval, or finished.
 
-The unified header and selected workspace item show the agent and its last confirmed state; the collapsed rail uses a smaller state marker. Winmux can detect Codex started manually in a Windows terminal and connect to its existing native daemon. A pane is bound automatically only when its Codex process and directory identify one loaded root thread. Ambiguous threads require an explicit selection in Settings; unavailable activity stays unknown. No model prompt is sent to discover status.
+The unified header and workspace items show Codex, Claude, OMP, Hermes, or Pi with their last confirmed state and a short action caption: reading files, editing files, running a command, searching, using a browser, or delegating. The collapsed rail keeps the details in its tooltip. Nested workers do not replace the primary agent, and completed or waiting sessions hide stale actions. Unavailable activity stays unknown; no model prompt is sent to discover status.
 
-**Agent status hooks** adds session-only hooks for supported Claude Code and modern Codex launches. **Settings → Behavior** also installs project-local Codex hooks, preserving existing hooks and notification commands. This installer requires Windows and a stable Node.js installation; review and trust the new project hook through Codex `/hooks`. WSL project-hook installation is explicitly unsupported. Read [the agent guide](docs/agents.md) for compatibility and upgrade details.
+Codex can connect to its existing native daemon. Automatic binding requires a proven Codex process and one loaded root thread in its directory; ambiguous threads require a selection in Settings. **Agent status hooks** adds session-only hooks for supported Claude Code and modern Codex launches. **Settings → Behavior** also installs project hooks for Codex, Claude, OMP, and Pi, preserving existing hooks and notification commands. Hermes uses an explicitly selected profile plugin with a separate enable step and, for a shared gateway, an explicit session binding. These adapters require Windows, compatible CLIs, and a stable Node.js installation. Codex retains its `/hooks` trust step. WSL project-hook installation is unsupported. Read [the agent guide](docs/agents.md) for compatibility and upgrade details.
+
+![Five agent identities and current action captions in the real Electron renderer with sanitized lifecycle fixtures](docs/screenshots/agent-activity-dark.png)
+
+![The same five agent captions in the light theme](docs/screenshots/agent-activity-light.png)
 
 ![Codex project hook settings after a repeat installation in an isolated test workspace, with local paths masked](docs/screenshots/agent-integrations.png)
 

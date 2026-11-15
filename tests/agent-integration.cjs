@@ -54,6 +54,7 @@ test('foreign panes, child PIDs, old stamps and process generations cannot apply
   f.controller.scan([f.shell, { ...f.omp, createdAt: new Date(1900).toISOString() }]);
   assert.equal(f.panes[0].agentState, 'unknown');
   assert.equal(f.controller.hook(f.event({ stamp: '999900000000' })).reason, 'stale-session');
+  assert.equal(f.controller.hook(f.event({ event: 'session_start', stamp: '999950000000', state: 'idle' })).applied, true, 'an explicit new lifecycle can resume the same session in a fresh process');
 });
 
 test('session switches retire old events and independent primary roots stay ambiguous', () => {
@@ -106,4 +107,14 @@ test('an unrelated process cannot register itself as a Hermes observer', () => {
   f.controller.scan([f.shell, f.omp, { pid: 300, ppid: 1, name: 'node.exe', executable: 'C:/tools/node.exe', commandLine: 'node other.js' }]);
   assert.equal(f.controller.hook(f.event({ agentId: 'hermes', pid: 300 })).applied, false);
   assert.equal(f.controller.sessions().sessions.length, 0);
+});
+
+test('native OMP keeps its own monotonic clock and validates wall-clock process provenance', () => {
+  const f = fixture(); f.controller.scan([f.shell, f.omp]);
+  assert.equal(f.controller.hook(f.event({ stamp: '521211200', emittedAt: 2000 })).applied, true);
+  assert.equal(f.controller.hook(f.event({ stamp: '521211200', emittedAt: 2000 })).reason, 'stale');
+  assert.equal(f.controller.hook(f.event({ stamp: '521211201', emittedAt: 5000 })).reason, 'stale');
+  f.controller.scan([f.shell, { ...f.omp, createdAt: new Date(1900).toISOString() }]);
+  assert.equal(f.controller.hook(f.event({ event: 'session_start', sessionId: 'fresh', stamp: '100', emittedAt: 400 })).reason, 'stale-process');
+  assert.equal(f.controller.hook(f.event({ event: 'session_start', sessionId: 'fresh', stamp: '100', emittedAt: 2000 })).applied, true);
 });

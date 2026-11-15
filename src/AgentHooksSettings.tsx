@@ -4,42 +4,79 @@ import { bridge, errorMessage, type Workspace } from './types';
 
 const text = (en: string, ru: string) => getLanguage() === 'ru' ? ru : en;
 
+type AgentId = 'codex' | 'omp' | 'claude' | 'pi' | 'hermes';
+
 interface InstallResult {
   status: 'installed' | 'updated' | 'unchanged';
-  agent: 'codex' | 'omp';
+  agent: AgentId;
   workspaceId: string;
   paneId?: string;
   configPath: string;
   extensionPath?: string;
+  pluginPath?: string;
   helperPath: string;
   backupPath?: string;
   requiresTrustReview: boolean;
   requiresRestart?: boolean;
+  requiresEnable?: boolean;
+  enableCommand?: string;
 }
 
 export interface AgentHooksSettingsProps {
   workspaces: Workspace[];
   activeWorkspaceId?: string;
   ompHooksAvailable?: boolean;
+  agentActivityAvailable?: boolean;
 }
 
-export function AgentHooksSettings({ workspaces, activeWorkspaceId, ompHooksAvailable = false }: AgentHooksSettingsProps) {
+const AGENT_LABEL: Record<AgentId, string> = {
+  codex: 'Codex',
+  omp: 'OMP',
+  claude: 'Claude',
+  pi: 'Pi',
+  hermes: 'Hermes',
+};
+
+function destinationFor(agentId: AgentId, cwd: string, hermesHome: string) {
+  const separator = cwd.includes('\\') ? '\\' : '/';
+  const root = cwd.replace(/[\\/]+$/, '');
+  if (agentId === 'omp') return `${root}${separator}.omp${separator}extensions${separator}winmux-status.ts`;
+  if (agentId === 'pi') return `${root}${separator}.pi${separator}extensions${separator}winmux-status.ts`;
+  if (agentId === 'claude') return `${root}${separator}.claude${separator}settings.local.json`;
+  if (agentId === 'hermes') {
+    const profile = hermesHome.trim().replace(/[\\/]+$/, '');
+    return profile
+      ? `${profile}${profile.includes('\\') ? '\\' : '/' }plugins${profile.includes('\\') ? '\\' : '/'}winmux-status`
+      : text('default Hermes profile / plugins / winmux-status', 'профиль Hermes по умолчанию / plugins / winmux-status');
+  }
+  return `${root}${separator}.codex${separator}hooks.json`;
+}
+
+export function AgentHooksSettings({
+  workspaces,
+  activeWorkspaceId,
+  ompHooksAvailable = false,
+  agentActivityAvailable = false,
+}: AgentHooksSettingsProps) {
   const id = useId();
   const [workspaceId, setWorkspaceId] = useState(activeWorkspaceId ?? workspaces[0]?.id ?? '');
-  const [agentId, setAgentId] = useState<'codex' | 'omp'>('codex');
+  const [selectedAgent, setSelectedAgent] = useState<AgentId>('codex');
+  const [hermesHome, setHermesHome] = useState('');
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<InstallResult | null>(null);
   const [error, setError] = useState('');
   const inFlight = useRef(false);
+  const agents: AgentId[] = [
+    'codex',
+    ...(ompHooksAvailable ? ['omp' as const] : []),
+    ...(agentActivityAvailable ? ['claude' as const, 'pi' as const, 'hermes' as const] : []),
+  ];
+  const agentId = agents.includes(selectedAgent) ? selectedAgent : 'codex';
   const workspace = workspaces.find(item => item.id === workspaceId)
     ?? workspaces.find(item => item.id === activeWorkspaceId) ?? workspaces[0];
-  const separator = workspace?.cwd.includes('\\') ? '\\' : '/';
-  const destination = workspace
-    ? agentId === 'omp'
-      ? `${workspace.cwd.replace(/[\\/]+$/, '')}${separator}.omp${separator}extensions${separator}winmux-status.ts`
-      : `${workspace.cwd.replace(/[\\/]+$/, '')}${separator}.codex${separator}hooks.json`
-    : '';
-  const agentLabel = agentId === 'omp' ? 'OMP' : 'Codex';
+  const destination = workspace ? destinationFor(agentId, workspace.cwd, hermesHome) : '';
+  const agentLabel = AGENT_LABEL[agentId];
+  const installedLabel = result ? AGENT_LABEL[result.agent] : agentLabel;
 
   async function install(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -48,10 +85,12 @@ export function AgentHooksSettings({ workspaces, activeWorkspaceId, ompHooksAvai
     setPending(true);
     setError('');
     setResult(null);
+    const profile = hermesHome.trim();
     try {
       setResult(await bridge().call<InstallResult>('agent.hooks.install', {
         workspaceId: workspace.id,
         agent: agentId,
+        ...(agentId === 'hermes' && profile ? { hermesHome: profile } : {}),
       }));
     } catch (cause) {
       setError(errorMessage(cause));
@@ -77,14 +116,23 @@ export function AgentHooksSettings({ workspaces, activeWorkspaceId, ompHooksAvai
         </label>
         <label htmlFor={`${id}-agent`}>{text('Agent', 'Агент')}
           <select id={`${id}-agent`} data-testid="agent-hooks-agent" value={agentId} onChange={event => {
-            setAgentId(event.target.value === 'omp' ? 'omp' : 'codex');
+            const next = event.target.value as AgentId;
+            setSelectedAgent(agents.includes(next) ? next : 'codex');
             setResult(null);
             setError('');
           }} style={{ marginTop: 6 }}>
             <option value="codex">Codex</option>
             {ompHooksAvailable && <option value="omp">OMP</option>}
+            {agentActivityAvailable && <>
+              <option value="claude">Claude</option>
+              <option value="pi">Pi</option>
+              <option value="hermes">Hermes</option>
+            </>}
           </select>
         </label>
+        {agentId === 'hermes' && <label htmlFor={`${id}-hermes`}>{text('Hermes profile', 'Профиль Hermes')}
+          <input id={`${id}-hermes`} data-testid="agent-hooks-hermes-home" value={hermesHome} onChange={event => { setHermesHome(event.target.value); setResult(null); setError(''); }} placeholder={text('Absolute directory, optional', 'Абсолютный каталог, необязательно')} spellCheck={false} style={{ marginTop: 6 }} />
+        </label>}
         <p className="field-hint" style={{ overflowWrap: 'anywhere' }} data-testid="agent-hooks-destination">
           {text('Project hook', 'Хук проекта')}: <code>{destination || '—'}</code>
         </p>
@@ -97,11 +145,14 @@ export function AgentHooksSettings({ workspaces, activeWorkspaceId, ompHooksAvai
     </form>
     {result && <div role="status" data-testid="agent-hooks-result" style={{ marginTop: 14 }}>
       <strong>{result.status === 'unchanged'
-        ? text(`${result.agent === 'omp' ? 'OMP' : 'Codex'} hook already installed`, `Хук ${result.agent === 'omp' ? 'OMP' : 'Codex'} уже установлен`)
-        : text(`${result.agent === 'omp' ? 'OMP' : 'Codex'} hook installed`, `Хук ${result.agent === 'omp' ? 'OMP' : 'Codex'} установлен`)}</strong>
-      <p className="field-hint" style={{ overflowWrap: 'anywhere' }}>{result.configPath}</p>
-      {result.requiresTrustReview && <p className="field-hint">{text('Open /hooks in Codex and trust this project hook before it can run.', 'Откройте /hooks в Codex и доверьте этот хук проекта, прежде чем он сможет работать.')}</p>}
-      {result.requiresRestart && <p className="field-hint" data-testid="agent-hooks-restart">{text('Restart OMP completely before this extension can load. Winmux does not restart it automatically.', 'Полностью перезапустите OMP, чтобы расширение загрузилось. Winmux не перезапускает его автоматически.')}</p>}
+        ? text(`${installedLabel} hook already installed`, `Хук ${installedLabel} уже установлен`)
+        : text(`${installedLabel} hook installed`, `Хук ${installedLabel} установлен`)}</strong>
+      <p className="field-hint" style={{ overflowWrap: 'anywhere' }}>{result.pluginPath ?? result.configPath}</p>
+      {result.requiresTrustReview && result.agent === 'codex' && <p className="field-hint">{text('Open /hooks in Codex and trust this project hook before it can run.', 'Откройте /hooks в Codex и доверьте этот хук проекта, прежде чем он сможет работать.')}</p>}
+      {result.requiresTrustReview && result.agent === 'claude' && <p className="field-hint">{text('Trust this project hook in Claude before it can run.', 'Доверьте этот хук проекта в Claude, прежде чем он сможет работать.')}</p>}
+      {result.requiresEnable && <p className="field-hint" data-testid="agent-hooks-enable">{text('The Hermes plugin stays disabled. Enable it yourself:', 'Плагин Hermes остаётся выключенным. Включите его сами:')} <code>{result.enableCommand}</code></p>}
+      {result.requiresRestart && result.agent === 'omp' && <p className="field-hint" data-testid="agent-hooks-restart">{text('Restart OMP completely before this extension can load. Winmux does not restart it automatically.', 'Полностью перезапустите OMP, чтобы расширение загрузилось. Winmux не перезапускает его автоматически.')}</p>}
+      {result.requiresRestart && result.agent !== 'omp' && <p className="field-hint" data-testid="agent-hooks-restart">{text(`Restart ${installedLabel} before this hook can load. Winmux does not restart it.`, `Перезапустите ${installedLabel}, чтобы хук загрузился. Winmux не перезапускает его.`)}</p>}
     </div>}
     {error && <p role="alert" data-testid="agent-hooks-error" style={{ marginTop: 12, color: 'var(--error)', overflowWrap: 'anywhere' }}>{text(`Could not install the ${agentLabel} hook: `, `Не удалось установить хук ${agentLabel}: `)}{error}</p>}
   </section>;

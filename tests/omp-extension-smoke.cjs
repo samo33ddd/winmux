@@ -55,9 +55,11 @@ test('publishes only from the interactive root session', async () => {
     cwd: 'E:\\project',
     pid: process.pid,
     stamp: sent[0].stamp,
+    emittedAt: sent[0].emittedAt,
     state: 'idle',
   });
   assert.match(sent[0].stamp, /^\d{1,30}$/);
+  assert.ok(Number.isSafeInteger(sent[0].emittedAt) && Math.abs(Date.now() - sent[0].emittedAt) < 1000);
 });
 
 test('publishes bounded tool identity and phase for every ordinary tool event', async () => {
