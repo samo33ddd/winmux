@@ -47,6 +47,13 @@ function configFromExtension(content) {
   return JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
 }
 
+function discoverDirectExtensionFiles(extensionDir) {
+  // OMP 18.20.2 discoverExtensionModulePaths scans the direct-file arm with `*.{ts,js}`.
+  return fs.globSync('*.{ts,js}', { cwd: extensionDir })
+    .filter(entry => fs.statSync(path.join(extensionDir, entry)).isFile())
+    .map(entry => path.join(extensionDir, entry));
+}
+
 test('installs atomically, preserves foreign project files, and is idempotent', async t => {
   const root = temp('winmux-omp-project-');
   const dataDir = temp('winmux-omp-data-');
@@ -63,7 +70,7 @@ test('installs atomically, preserves foreign project files, and is idempotent', 
     agent: 'omp',
     paneId: 'pane-omp',
   }, { dataDir, nodePath: process.execPath });
-  const extensionPath = path.join(root, '.omp', 'extensions', 'winmux-status.mjs');
+  const extensionPath = path.join(root, '.omp', 'extensions', 'winmux-status.ts');
   const helperPath = path.join(dataDir, 'hooks', 'winmux-omp-hook.cjs');
   assert.equal(first.status, 'installed');
   assert.equal(first.agent, 'omp');
@@ -76,6 +83,9 @@ test('installs atomically, preserves foreign project files, and is idempotent', 
   assert.equal(fs.readFileSync(path.join(root, '.omp', 'settings.json'), 'utf8'), '{"foreign":true}\n');
   const content = fs.readFileSync(extensionPath, 'utf8');
   assert.match(content, new RegExp(OMP_EXTENSION_MARKER));
+  const discovered = discoverDirectExtensionFiles(path.dirname(extensionPath));
+  assert.ok(discovered.includes(extensionPath), 'installed .ts entrypoint must be returned by OMP direct-file discovery');
+  assert.deepEqual(discovered, [extensionPath]);
   assert.match(fs.readFileSync(helperPath, 'utf8'), new RegExp(OMP_HELPER_MARKER));
   assert.deepEqual(configFromExtension(content), {
     dataDir: fs.realpathSync(dataDir),
@@ -92,7 +102,7 @@ test('installs atomically, preserves foreign project files, and is idempotent', 
   assert.equal(second.status, 'unchanged');
   assert.equal(fs.statSync(extensionPath).mtimeMs, extensionMtime);
   assert.equal(fs.statSync(helperPath).mtimeMs, helperMtime);
-  assert.deepEqual(fs.readdirSync(path.join(root, '.omp', 'extensions')).sort(), ['foreign.mjs', 'winmux-status.mjs']);
+  assert.deepEqual(fs.readdirSync(path.join(root, '.omp', 'extensions')).sort(), ['foreign.mjs', 'winmux-status.ts']);
 });
 
 test('rejects foreign extension conflicts and missing Node without overwriting', async t => {
@@ -102,7 +112,7 @@ test('rejects foreign extension conflicts and missing Node without overwriting',
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
-  const extensionPath = path.join(root, '.omp', 'extensions', 'winmux-status.mjs');
+  const extensionPath = path.join(root, '.omp', 'extensions', 'winmux-status.ts');
   fs.mkdirSync(path.dirname(extensionPath), { recursive: true });
   fs.writeFileSync(extensionPath, 'user extension\n');
   await assert.rejects(() => installAgentHooks(fixture(root), { workspaceId: 'workspace-omp', agent: 'omp' }, {
@@ -135,10 +145,62 @@ test('rejects symlinked or junctioned project roots without writing outside', as
       dataDir,
       nodePath: process.execPath,
     }), { code: 'UNSAFE_PATH' });
-    assert.equal(fs.existsSync(path.join(outside, 'extensions', 'winmux-status.mjs')), false);
+    assert.equal(fs.existsSync(path.join(outside, 'extensions', 'winmux-status.ts')), false);
   } catch (error) {
     if (error.code !== 'EPERM' && error.code !== 'EACCES') throw error;
   }
+});
+
+test('rejects dangling OMP extension and helper symlinks without replacing them', async t => {
+  const roots = [];
+  const makeWorkspace = prefix => {
+    const root = temp(prefix);
+    const dataDir = temp(`${prefix}-data-`);
+    const outside = temp(`${prefix}-outside-`);
+    roots.push(root, dataDir, outside);
+    return { root, dataDir, outside };
+  };
+  t.after(() => {
+    for (const directory of roots) fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  const extensionCase = makeWorkspace('winmux-omp-dangling-extension-');
+  const extensionDir = path.join(extensionCase.root, '.omp', 'extensions');
+  fs.mkdirSync(extensionDir, { recursive: true });
+  const extensionTarget = path.join(extensionDir, 'winmux-status.ts');
+  const missingExtensionTarget = path.join(extensionCase.outside, 'missing-extension.ts');
+  fs.symlinkSync(missingExtensionTarget, extensionTarget, 'file');
+  const extensionLinkBefore = fs.readlinkSync(extensionTarget);
+  await assert.rejects(() => installAgentHooks(fixture(extensionCase.root), {
+    workspaceId: 'workspace-omp',
+    agent: 'omp',
+  }, {
+    dataDir: extensionCase.dataDir,
+    nodePath: process.execPath,
+  }), { code: 'EXTENSION_UNSAFE' });
+  assert.equal(fs.lstatSync(extensionTarget).isSymbolicLink(), true);
+  assert.equal(fs.readlinkSync(extensionTarget), extensionLinkBefore);
+  assert.deepEqual(fs.readdirSync(extensionCase.outside), []);
+  assert.equal(fs.existsSync(path.join(extensionCase.dataDir, 'hooks', 'winmux-omp-hook.cjs')), false);
+
+  const helperCase = makeWorkspace('winmux-omp-dangling-helper-');
+  const helperDir = path.join(helperCase.dataDir, 'hooks');
+  fs.mkdirSync(helperDir, { recursive: true });
+  const helperTarget = path.join(helperDir, 'winmux-omp-hook.cjs');
+  const missingHelperTarget = path.join(helperCase.outside, 'missing-helper.cjs');
+  fs.symlinkSync(missingHelperTarget, helperTarget, 'file');
+  const helperLinkBefore = fs.readlinkSync(helperTarget);
+  await assert.rejects(() => installAgentHooks(fixture(helperCase.root), {
+    workspaceId: 'workspace-omp',
+    agent: 'omp',
+  }, {
+    dataDir: helperCase.dataDir,
+    nodePath: process.execPath,
+  }), { code: 'HELPER_UNSAFE' });
+  assert.equal(fs.lstatSync(helperTarget).isSymbolicLink(), true);
+  assert.equal(fs.readlinkSync(helperTarget), helperLinkBefore);
+  assert.deepEqual(fs.readdirSync(helperCase.outside), []);
+  assert.equal(fs.existsSync(path.join(helperCase.root, '.omp', 'extensions', 'winmux-status.ts')), false);
 });
 
 test('helper sends only the exact lifecycle payload over authenticated agent.hook', async t => {

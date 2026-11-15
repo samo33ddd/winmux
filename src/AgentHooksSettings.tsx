@@ -36,7 +36,7 @@ export function AgentHooksSettings({ workspaces, activeWorkspaceId, ompHooksAvai
   const separator = workspace?.cwd.includes('\\') ? '\\' : '/';
   const destination = workspace
     ? agentId === 'omp'
-      ? `${workspace.cwd.replace(/[\\/]+$/, '')}${separator}.omp${separator}extensions${separator}winmux-status.mjs`
+      ? `${workspace.cwd.replace(/[\\/]+$/, '')}${separator}.omp${separator}extensions${separator}winmux-status.ts`
       : `${workspace.cwd.replace(/[\\/]+$/, '')}${separator}.codex${separator}hooks.json`
     : '';
   const agentLabel = agentId === 'omp' ? 'OMP' : 'Codex';
