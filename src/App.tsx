@@ -346,7 +346,7 @@ export default function App() {
         <div className={`header-secondary ${headerMenu ? 'open' : ''}`}>
         <select className="agent-launch-select" data-testid="launch-agent" aria-label={t('Запустить агента в новой вкладке')} title={t('Запустить агента в новой вкладке')} value="" disabled={!workspace || !tabsAvailable || working || loading} onChange={event=>void launchAgent(event.target.value)}>
           <option value="">{working?t('Открытие…'):t('Запустить агента…')}</option>
-          {profiles.map(profile=><optgroup key={profile.id} label={profile.environment==='wsl'?`WSL · ${profile.label}`:profile.label}>{environment?.agents?.filter(agent=>agent.profileId===profile.id).map(agent=><option key={agent.id} value={agent.id} disabled={!agent.available}>{agent.label}{agent.available?'':t(' — не установлен')}</option>)}</optgroup>)}
+          {profiles.map(profile=><optgroup key={profile.id} label={profile.environment==='wsl'?`WSL · ${profile.label}`:profile.label}>{environment?.agents?.filter(agent=>agent.profileId===profile.id).map(agent=><option key={agent.id} value={agent.id} disabled={agent.available === false}>{agent.label}{agent.available === null ? t(' — проверка при запуске') : agent.available ? '' : t(' — не установлен')}</option>)}</optgroup>)}
         </select>
         {activePane && <div className="terminal-tab-tools" role="group" aria-label={t('Действия терминала')}>
           <button className="icon-button" aria-label={t("Найти в активном терминале")} title={t("Поиск (Ctrl+Shift+F)")} data-testid="terminal-search" onClick={() => handles.current.get(activePane.id)?.search()}><Search /></button>

@@ -4,6 +4,10 @@
 
 `require('../client.cjs').connect(options)` resolves an authenticated client. `request(method, params = {})` returns the RPC result. The client emits `event` with the event object, `close` when the socket closes, and `error` for transport errors. An internal no-op error listener prevents an unobserved `error` event from crashing Electron. Pending calls reject on disconnect. `close()` destroys only the client socket. Neither requests nor mutations are automatically retried.
 
+The client sends at most 32 requests concurrently and accepts up to 128 additional waiting requests, bounded to 4 MiB of queued frames. Requests keep their admission order. The default 20-second deadline includes waiting time; an active request timing out closes that connection and rejects all remaining work, so unsent terminal input cannot replay later. Queue overflow rejects with `LIMIT_REACHED`.
+
+Environment discovery lists installed WSL profiles but probes agent commands only inside distributions already reported as running. Agents in stopped distributions return `available: null` and `command: null`; both launch selectors label these entries as checked on launch. Explicitly launching such an agent resolves it inside the selected distribution and applies the same profile and executable-path validation as other launches. Listing Windows profiles and WSL options alone does not boot a stopped distribution.
+
 ## Wire protocol for independent UI control
 
 Use `require('./shared.cjs').locations(options)` rather than duplicating endpoint construction. It returns `{dataDir, pipeName, tokenFile, stateFile, lockFile}`.
