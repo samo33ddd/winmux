@@ -1,0 +1,156 @@
+name: Windows release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build:
+    name: Verify and build Windows release
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      version: ${{ steps.verify.outputs.version }}
+      commit: ${{ steps.verify.outputs.commit }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Verify tag, versions, merged PR, and green main CI
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-prepare.cjs verify
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:backend
+      - run: npm run test:workspace
+      - run: npm run test:cwd-agent
+      - run: npm run test:profile
+      - run: npm run test:skills
+      - run: npm run test:cookies
+      - run: npm run test:desktop
+      - name: Build installer and portable executable without publishing
+        run: npm run release:build
+      - name: Prepare exact executables, checksums, and release notes
+        env:
+          RELEASE_PR: ${{ steps.verify.outputs.pr }}
+        run: node scripts/release-prepare.cjs bundle
+      - name: Upload release bundle
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: winmux-${{ github.ref_name }}-${{ github.run_attempt }}
+          path: release-assets/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Publish verified Windows executables
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    # No repository checkout or npm/build scripts run with this write token.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: release-assets
+      - name: Verify assets, upload to draft, and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Invoke-Gh {
+            $output = & gh @args
+            if ($LASTEXITCODE -ne 0) { throw "gh failed: $($args -join ' ')" }
+            return $output
+          }
+
+          $tag = $env:RELEASE_TAG
+          $version = $env:RELEASE_VERSION
+          if ($tag -cne "v$version" -or $tag -cnotmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw 'Invalid release tag/version.'
+          }
+          $root = Join-Path $env:GITHUB_WORKSPACE 'release-assets'
+          $executables = @("Winmux-Setup-$version-x64.exe", "Winmux-Portable-$version-x64.exe")
+          $assets = @($executables) + @('SHA256SUMS.txt')
+          $files = @(Get-ChildItem -LiteralPath $root -File)
+          if ($files.Count -ne 4 -or @(Compare-Object ($assets + @('release-notes.md')) $files.Name).Count) {
+            throw 'Release bundle must contain exactly two executables, checksums, and release notes.'
+          }
+          $lines = @(Get-Content -LiteralPath (Join-Path $root 'SHA256SUMS.txt'))
+          if ($lines.Count -ne 2) { throw 'Expected exactly two SHA-256 checksum entries.' }
+          for ($i = 0; $i -lt $executables.Count; $i++) {
+            $digest = (Get-FileHash -LiteralPath (Join-Path $root $executables[$i]) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($lines[$i] -cne "$digest  $($executables[$i])") { throw 'Executable checksum mismatch.' }
+          }
+          if ((Get-Item -LiteralPath (Join-Path $root 'release-notes.md')).Length -eq 0) { throw 'Empty release notes.' }
+
+          function Confirm-Tag {
+            $remote = Invoke-Gh api "repos/$env:GH_REPO/commits/$tag" | ConvertFrom-Json
+            if ($remote.sha -cne $env:RELEASE_COMMIT) { throw 'Remote tag no longer matches the verified commit.' }
+          }
+          function Confirm-Assets($release) {
+            if (@(Compare-Object $assets @($release.assets.name)).Count) { throw 'Unexpected or missing release assets.' }
+            foreach ($name in $assets) {
+              $local = Get-Item -LiteralPath (Join-Path $root $name)
+              $remote = @($release.assets | Where-Object name -CEQ $name)
+              $digest = (Get-FileHash -LiteralPath $local.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($remote.Count -ne 1 -or $remote[0].state -ne 'uploaded' -or $remote[0].size -ne $local.Length -or
+                  $remote[0].digest -cne "sha256:$digest") { throw "Uploaded asset verification failed: $name" }
+            }
+          }
+
+          Confirm-Tag
+          # Paginate and distinguish API failures from a genuinely absent release.
+          $pages = Invoke-Gh api --paginate --slurp "repos/$env:GH_REPO/releases?per_page=100" | ConvertFrom-Json -NoEnumerate
+          $existing = @($pages | ForEach-Object { $_ } | Where-Object tag_name -CEQ $tag)
+          if ($existing.Count -gt 1) { throw 'Duplicate releases for tag.' }
+          if ($existing.Count -eq 1 -and !$existing[0].draft) {
+            throw 'Release is already published; refusing to replace its assets.'
+          }
+          $notes = Join-Path $root 'release-notes.md'
+          if ($existing.Count -eq 0) {
+            Invoke-Gh release create $tag --verify-tag --draft --title "Winmux $tag" --notes-file $notes
+          }
+          # A failed upload leaves a draft; a rerun may replace draft assets only.
+          $paths = @($assets | ForEach-Object { Join-Path $root $_ })
+          Invoke-Gh release upload $tag @paths --clobber
+          $draft = Invoke-Gh api "repos/$env:GH_REPO/releases/tags/$tag" | ConvertFrom-Json
+          if (!$draft.draft) { throw 'Expected an unpublished draft.' }
+          Confirm-Assets $draft
+          Confirm-Tag
+          Invoke-Gh release edit $tag --draft=false --latest --title "Winmux $tag" --notes-file $notes
+          $published = Invoke-Gh api "repos/$env:GH_REPO/releases/tags/$tag" | ConvertFrom-Json
+          if ($published.draft) { throw 'Release is still a draft.' }
+          Confirm-Assets $published
+          "Published $($published.html_url) with both executables and verified SHA-256 checksums." >> $env:GITHUB_STEP_SUMMARY
