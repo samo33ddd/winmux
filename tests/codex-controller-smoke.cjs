@@ -79,6 +79,9 @@ async function main() {
   assert.equal(panes[0].agentBinding, undefined);
   assert.equal(controller.status().connection, 'connected');
   assert.equal(controller.status().panes[0].action, 'ambiguous');
+  const foreignHook = await controller.hook({ agentId: 'codex', event: 'Stop', sessionId: 'session-b', cwd: project });
+  assert.equal(foreignHook.applied, false, 'R1-02 a foreign hook cannot resolve full root ambiguity');
+  assert.equal(panes[0].agentThreadId, undefined);
 
   fixture.threads.splice(1, 1); fixture.threads[0].status = { type: 'idle' };
   await controller.refresh();
@@ -101,8 +104,12 @@ async function main() {
   assert.equal(panes[0].agentThreadId, 'root-a', 'an explicit thread remains selected when the loaded list becomes ambiguous');
   assert.equal(panes[0].agentBinding, 'explicit');
   await assert.rejects(controller.bind('manual', 'missing').then(result => { if (!result.ok) throw Object.assign(new Error(result.code), result); }), error => error.code === 'STALE_THREAD');
+  fixture.notify({ method: 'turn/completed', params: { threadId: 'root-a', turn: { status: 'completed' } } });
+  assert.equal(panes[0].agentState, 'completed');
   const bound = await controller.bind('manual', 'root-b');
   assert.equal(bound.ok, true);
+  assert.equal(bound.state, 'idle', 'R1-05 selecting idle B cannot inherit completed A');
+  assert.equal(panes[0].agentState, 'idle');
   assert.equal(panes[0].agentThreadId, 'root-b');
   assert.equal(panes[0].agentBinding, 'explicit');
   const staleHook = await controller.hook({ agentId: 'codex', event: 'Stop', sessionId: 'session-a', cwd: project, paneId: 'manual' });
@@ -119,6 +126,10 @@ async function main() {
   assert.equal(panes[0].agentState, 'failed');
   await controller.refresh();
   assert.equal(panes[0].agentState, 'failed', 'idle must preserve a real failed turn');
+  fixture.threads[0].sessionId = 'session-b-replacement';
+  await controller.refresh();
+  assert.equal(panes[0].agentState, 'idle', 'R1-05 a replacement session cannot inherit the prior failure');
+  assert.equal(panes[0].agentSessionId, 'session-b-replacement');
   fixture.threads.splice(0, fixture.threads.length);
   await controller.refresh();
   assert.equal(panes[0].agentId, 'codex', 'a missing loaded thread does not hide the running Codex process');

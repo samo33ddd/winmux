@@ -406,26 +406,41 @@ function createCodexDaemon(options = {}) {
     const limit = normalizeLimit(query.limit);
     const cwd = query.cwd == null ? undefined : Array.isArray(query.cwd) ? query.cwd : [query.cwd];
     if (cwd && cwd.some(value => typeof value !== 'string' || !value)) throw unavailable('Codex thread cwd filter is invalid');
-    const [listed, loaded] = await Promise.all([
-      request('thread/list', {
-        limit,
-        ...(cwd ? { cwd } : {}),
-        ...(query.cursor ? { cursor: query.cursor } : {}),
-        useStateDbOnly: true,
-      }, currentGeneration),
-      request('thread/loaded/list', {}, currentGeneration),
-    ]);
+    const pageLimit = Number.isInteger(query.maxPages) ? query.maxPages : 5;
+    if (pageLimit < 1 || pageLimit > 5) throw unavailable('Codex thread enumeration exceeds its page limit');
+    async function enumerate(method, params) {
+      const seenCursors = new Set();
+      const data = [];
+      let cursor = null;
+      for (let index = 0; index < pageLimit; index += 1) {
+        const listed = await request(method, { ...params, limit, ...(cursor ? { cursor } : {}) }, currentGeneration);
+        rejectStale(currentGeneration);
+        if (!Array.isArray(listed?.data)
+          || (listed.nextCursor != null && typeof listed.nextCursor !== 'string')) {
+          throw unavailable('Codex enumeration returned an invalid page');
+        }
+        data.push(...listed.data);
+        cursor = listed.nextCursor || null;
+        if (!cursor) return data;
+        if (seenCursors.has(cursor)) throw unavailable('Codex enumeration repeated a page cursor');
+        seenCursors.add(cursor);
+      }
+      throw unavailable('Codex enumeration is incomplete');
+    }
+    const listed = await enumerate('thread/list', { ...(cwd ? { cwd } : {}), useStateDbOnly: true });
+    const loaded = await enumerate('thread/loaded/list', {});
     rejectStale(currentGeneration);
     loadedIds.clear();
-    for (const id of loaded?.data || []) if (typeof id === 'string') loadedIds.add(id);
-    const page = [];
-    for (const thread of listed?.data || []) {
+    for (const id of loaded) if (typeof id === 'string') loadedIds.add(id);
+    const page = new Map();
+    for (const thread of listed) {
       const normalized = applyThread(thread);
-      if (normalized) page.push(normalized);
+      if (normalized) page.set(normalized.id, normalized);
     }
+    for (const thread of threads.values()) thread.loaded = loadedIds.has(thread.id);
     const state = snapshot();
     emitter.emit('threads', state);
-    return { threads: page, nextCursor: listed?.nextCursor ?? null, loadedThreadIds: state.loadedThreadIds };
+    return { threads: [...page.values()], nextCursor: null, loadedThreadIds: state.loadedThreadIds, complete: true };
   }
 
   async function list(method, params = {}) {

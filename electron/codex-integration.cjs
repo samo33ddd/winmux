@@ -72,14 +72,16 @@ function findCodexDescendants(rootPid, processes, limits = {}) {
   return found;
 }
 
-function agentStateFor(previous, status) {
-  if (!status || status.type === 'notLoaded') return previous === 'completed' || previous === 'failed' ? previous : 'unknown';
+function agentStateFor(previous, status, identity = null) {
+  const previousState = typeof previous === 'string' ? previous : previous?.agentState;
+  const sameIdentity = !identity || (typeof previous === 'object' && previous?.agentThreadId === identity.threadId && (previous.agentSessionId || '') === (identity.sessionId || ''));
+  if (!status || status.type === 'notLoaded') return sameIdentity && (previousState === 'completed' || previousState === 'failed') ? previousState : 'unknown';
   if (status.type === 'systemError') return 'failed';
   if (status.type === 'active') {
     const flags = Array.isArray(status.activeFlags) ? status.activeFlags : [];
     return flags.some(flag => WAITING_FLAGS.has(flag)) ? 'waiting' : 'running';
   }
-  if (status.type === 'idle') return previous === 'completed' || previous === 'failed' ? previous : 'idle';
+  if (status.type === 'idle') return sameIdentity && (previousState === 'completed' || previousState === 'failed') ? previousState : 'idle';
   return 'unknown';
 }
 
@@ -138,12 +140,12 @@ function planBindings({ panes, threads, loadedIds }) {
     if (pane.agentBinding === 'explicit' && pane.agentThreadId) {
       const thread = cwdThreads.find(item => item.id === pane.agentThreadId) || null;
       if (!thread) return { paneId: pane.id, action: 'stale', candidates, state: 'unknown' };
-      return { paneId: pane.id, action: 'keep', thread, candidates, state: agentStateFor(pane.agentState, thread.status) };
+      return { paneId: pane.id, action: 'keep', thread, candidates, state: agentStateFor(pane, thread.status, { threadId: thread.id, sessionId: thread.sessionId || '' }) };
     }
     if ((pane.codexCount || 0) > 1) return { paneId: pane.id, action: 'ambiguous', candidates: [], state: 'unknown' };
     if (cwdPanes.length === 1 && cwdThreads.length === 1) {
       const thread = cwdThreads[0];
-      return { paneId: pane.id, action: 'auto', thread, candidates, state: agentStateFor(pane.agentState, thread.status) };
+      return { paneId: pane.id, action: 'auto', thread, candidates, state: agentStateFor(pane, thread.status, { threadId: thread.id, sessionId: thread.sessionId || '' }) };
     }
     return { paneId: pane.id, action: 'ambiguous', candidates, state: 'unknown' };
   });
@@ -152,28 +154,35 @@ function planBindings({ panes, threads, loadedIds }) {
 function matchHook({ agentId, event, sessionId, cwd, paneId, panes, threads, loadedIds }) {
   const state = hookState(event);
   if (agentId !== 'codex' || !state || typeof sessionId !== 'string' || !sessionId) return { action: 'ignore', reason: 'event' };
-  const roots = loadedRoots(threads, loadedIds).filter(thread => thread.sessionId === sessionId);
-  const codexPanes = (panes || []).filter(pane => pane.codexPid && !pane.agentLaunchLocked);
+  const roots = loadedRoots(threads, loadedIds);
+  const processPanes = (panes || []).filter(pane => pane.codexPid);
+  const codexPanes = processPanes.filter(pane => !pane.agentLaunchLocked);
+  const eligible = pane => pane.codexCount === 1;
   const bound = (id) => {
     const pane = codexPanes.find(item => item.id === id);
-    if (!pane?.agentThreadId) return null;
-    return roots.find(thread => thread.id === pane.agentThreadId) ? pane : null;
+    if (!pane?.agentThreadId || !eligible(pane) || pane.agentSessionId !== sessionId
+      || !['auto', 'explicit'].includes(pane.agentBinding)) return null;
+    const thread = roots.find(item => item.id === pane.agentThreadId && item.sessionId === sessionId
+      && normalizeCwd(item.cwd) && normalizeCwd(item.cwd) === normalizeCwd(pane.cwd));
+    return thread ? pane : null;
   };
   if (paneId) {
     const pane = codexPanes.find(item => item.id === paneId);
     if (!pane) return { action: 'ignore', reason: 'pane' };
     if (pane.agentThreadId) return bound(pane.id) ? { action: 'apply', paneId: pane.id, state } : { action: 'ignore', reason: 'stale' };
-    const samePanes = codexPanes.filter(item => normalizeCwd(item.cwd) && normalizeCwd(item.cwd) === normalizeCwd(pane.cwd));
+    const samePanes = processPanes.filter(item => normalizeCwd(item.cwd) && normalizeCwd(item.cwd) === normalizeCwd(pane.cwd));
     const sameThreads = roots.filter(thread => normalizeCwd(thread.cwd) === normalizeCwd(pane.cwd));
-    if (samePanes.length === 1 && sameThreads.length === 1) return { action: 'apply', paneId: pane.id, state, thread: sameThreads[0] };
+    if (eligible(pane) && samePanes.length === 1 && sameThreads.length === 1 && sameThreads[0].sessionId === sessionId) return { action: 'apply', paneId: pane.id, state, thread: sameThreads[0] };
     return { action: 'ignore', reason: 'ambiguous' };
   }
   const sessionPanes = codexPanes.filter(pane => bound(pane.id));
   if (sessionPanes.length === 1) return { action: 'apply', paneId: sessionPanes[0].id, state };
+  if (sessionPanes.length > 1) return { action: 'ignore', reason: 'ambiguous' };
   const cwdKey = normalizeCwd(cwd);
-  const cwdPanes = codexPanes.filter(pane => normalizeCwd(pane.cwd) === cwdKey);
+  const cwdPanes = processPanes.filter(pane => normalizeCwd(pane.cwd) === cwdKey);
   const cwdThreads = roots.filter(thread => normalizeCwd(thread.cwd) === cwdKey);
-  if (cwdKey && cwdPanes.length === 1 && cwdThreads.length === 1) return { action: 'apply', paneId: cwdPanes[0].id, state, thread: cwdThreads[0] };
+  if (cwdKey && cwdPanes.length === 1 && eligible(cwdPanes[0]) && !cwdPanes[0].agentLaunchLocked && !cwdPanes[0].agentThreadId
+    && cwdThreads.length === 1 && cwdThreads[0].sessionId === sessionId) return { action: 'apply', paneId: cwdPanes[0].id, state, thread: cwdThreads[0] };
   return { action: 'ignore', reason: 'unmapped' };
 }
 
@@ -235,13 +244,20 @@ function connectReadonly(options = {}) {
 async function collectPages(read, params, limit) {
   const data = [];
   let cursor = null;
+  const seen = new Set();
   for (let page = 0; page < 5; page += 1) {
     const result = await read({ ...params, cursor, limit });
-    const rows = Array.isArray(result?.data) ? result.data : [];
+    if (!Array.isArray(result?.data) || (result.nextCursor != null && typeof result.nextCursor !== 'string')) {
+      throw Object.assign(new Error('Codex enumeration returned an invalid page'), { code: 'INCOMPLETE_ENUMERATION' });
+    }
+    const rows = result.data;
     data.push(...rows);
     cursor = result?.nextCursor || null;
-    if (!cursor || rows.length === 0) break;
+    if (!cursor) return data;
+    if (rows.length === 0 || seen.has(cursor)) throw Object.assign(new Error('Codex enumeration is incomplete'), { code: 'INCOMPLETE_ENUMERATION' });
+    seen.add(cursor);
   }
+  if (cursor) throw Object.assign(new Error('Codex enumeration is incomplete'), { code: 'INCOMPLETE_ENUMERATION' });
   return data;
 }
 
@@ -282,7 +298,7 @@ function createController(options = {}) {
       if (!plan) return;
       const panes = options.panes?.() || [];
       const pane = panes.find(item => item.id === plan.paneId);
-      const state = agentStateFor(pane?.agentState, params.status);
+      const state = agentStateFor(pane, params.status, { threadId: plan.thread.id, sessionId: plan.thread.sessionId || '' });
       options.apply?.(plan.paneId, identity(plan.thread, state, plan.action === 'keep' ? 'explicit' : 'auto'));
     }
   }
@@ -290,10 +306,17 @@ function createController(options = {}) {
     if (client || stopped) return;
     if (!connect) {
       try {
-        daemon = openDaemon();
+        daemon = (options.createDaemon || openDaemon)();
+        const currentDaemon = daemon;
+        daemon.on('unavailable', () => {
+          if (daemon !== currentDaemon) return;
+          connection = 'disconnected'; connectionReason = 'unavailable';
+          threads = []; loadedIds = []; plans = [];
+        });
         daemon.on('status', payload => handleNotification({ method: 'thread/status/changed', params: payload }));
         daemon.on('turn', payload => handleNotification({ method: 'turn/completed', params: { threadId: payload.threadId, turn: { status: payload.status } } }));
         await daemon.connect();
+        if (!daemon.readState().available) throw new Error('Codex daemon is disconnected');
         client = daemon; connection = 'connected'; connectionReason = '';
       } catch (error) {
         daemon = null; client = null; connection = 'disconnected';
@@ -323,8 +346,10 @@ function createController(options = {}) {
       let daemonAvailable = false;
       if (client) {
         try {
+          if (daemon && daemon.readState && daemon.readState().available === false) throw Object.assign(new Error('Codex daemon is disconnected'), { code: 'unavailable' });
           if (daemon) {
-            const page = cwds.length ? await daemon.refresh({ cwd: cwds, limit: 100 }) : { threads: [], loadedThreadIds: daemon.readState().loadedThreadIds };
+            const page = cwds.length ? await daemon.refresh({ cwd: cwds, limit: 100, maxPages: 5 }) : { threads: [], loadedThreadIds: daemon.readState().loadedThreadIds, complete: true };
+            if (page.complete === false || page.nextCursor) throw Object.assign(new Error('Codex enumeration is incomplete'), { code: 'INCOMPLETE_ENUMERATION' });
             threads = page.threads || []; loadedIds = page.loadedThreadIds || [];
           } else {
             loadedIds = await collectPages(params => client.listLoaded(params), {}, 100);
@@ -390,7 +415,7 @@ function createController(options = {}) {
       if (!pane.codexPid || pane.agentLaunchLocked) return { ok: false, code: 'CODEX_PROCESS_REQUIRED' };
       const thread = loadedRoots(threads, loadedIds).find(item => item.id === threadId && normalizeCwd(item.cwd) === normalizeCwd(pane.cwd));
       if (!thread) return { ok: false, code: 'STALE_THREAD' };
-      const state = agentStateFor(pane.agentState, thread.status);
+      const state = agentStateFor(pane, thread.status, { threadId: thread.id, sessionId: thread.sessionId || '' });
       options.apply?.(paneId, identity(thread, state, 'explicit'));
       await refresh();
       return { ok: true, paneId, threadId, state };

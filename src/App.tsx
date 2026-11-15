@@ -11,9 +11,11 @@ import { ConfirmClose, CreateWorkspace, Modal, RenameWorkspace, profileLabel } f
 import { WorkspaceView } from './WorkspaceView';
 import { WorkspaceTools, type ToolTab } from './WorkspaceTools';
 import type { TerminalHandle } from './TerminalPane';
+import { subscribePreviewError } from './previewCoordinator';
 import { bridge, errorMessage, type Direction, type Environment, type Pane, type Settings, type State, type TerminalTab, type Workspace } from './types';
 
 type Dialog = { type: 'create' } | { type: 'rename'; workspace: Workspace } | { type: 'settings' } | { type: 'shortcuts' } | { type: 'close-pane'; pane: Pane } | { type: 'close-tab'; workspaceId: string; tab: TerminalTab } | { type: 'close-workspace'; workspace: Workspace } | null;
+type BannerError = { message: string; previewToken?: number };
 const agentHooksStorageKey = 'winmux.agent-status-hooks';
 function readAgentHooksPreference() {
   try { return localStorage.getItem(agentHooksStorageKey) !== 'false'; }
@@ -25,7 +27,8 @@ export default function App() {
   const shortcuts = [ [t('Новая вкладка терминала'), 'Ctrl+T'], [t('Следующая вкладка терминала'), 'Ctrl+Tab'], [t('Предыдущая вкладка терминала'), 'Ctrl+Shift+Tab'], [t("Новое пространство"), 'Ctrl+Shift+N'], [t("Разделить слева направо"), 'Ctrl+Shift+D'], [t("Разделить сверху вниз"), 'Ctrl+Shift+E'], [t("Закрыть панель"), 'Ctrl+Shift+W'], [t("Поиск в терминале"), 'Ctrl+Shift+F'], [t("Копировать выделенное"), 'Ctrl+Shift+C'], [t("Вставить"), 'Ctrl+Shift+V'], [t("Развернуть панель"), 'Ctrl+Shift+Enter'], [t("Перейти к соседней панели"), t("Alt+стрелки")], [t("Последнее непрочитанное уведомление"), 'Ctrl+Shift+U'], [t("Настройки"), 'Ctrl+,'] ];
   const [state, setState] = useState<State | null>(null);
   const [environment, setEnvironment] = useState<Environment | null>(null);
-  const [error, setError] = useState(''); const [loading, setLoading] = useState(true); const [reload, setReload] = useState(0);
+  const [error, setBannerError] = useState<BannerError | null>(null); const [loading, setLoading] = useState(true); const [reload, setReload] = useState(0);
+  const setError = useCallback((message: string) => setBannerError(message ? { message } : null), []);
   const [activeWorkspaceId, setActiveWorkspace] = useState<string>();
   const [activePanes, setActivePanes] = useState<Record<string, string>>({});
   const [zoomed, setZoomed] = useState<Record<string, string | undefined>>({});
@@ -58,6 +61,11 @@ export default function App() {
   const settings: Settings = { ...defaults, ...state?.settings, ...preferences, fontSize:state?.settings.fontSize ?? 14, theme:preferences.theme ?? state?.settings.theme ?? 'dark' };
   const current = useRef({ workspace, activePane, dialog, notificationsOpen, switcherOpen }); current.current = { workspace, activePane, dialog, notificationsOpen, switcherOpen };
   const reportError = useCallback((message: string) => setError(message), []);
+  useEffect(() => subscribePreviewError(event => setBannerError(current => (
+    event.type === 'set'
+      ? { message:event.message, previewToken:event.token }
+      : current?.previewToken === event.token ? null : current
+  ))), []);
   useEffect(() => {
     if (!switcherOpen) return;
     const close = (event: Event) => {
@@ -355,7 +363,7 @@ export default function App() {
         </div>
       </header>
       {environment && !tabsAvailable && <div className="upgrade-notice" role="status" data-testid="daemon-upgrade-notice"><CircleAlert /><p><strong>{t('Для новых вкладок и запуска агентов требуется обновление сессии.')}</strong> {t('Текущие терминалы продолжают работать. Когда будете готовы, завершите все сессии и откройте Winmux снова. Закрытие окна или перезагрузка интерфейса не обновляет фоновый процесс.')}</p></div>}
-      {error && <div className="error-banner" role="alert"><CircleAlert /><span>{error}</span><button className="text-button" onClick={() => setReload(value => value + 1)}>{t("Переподключить")}</button><button className="icon-button" aria-label={t("Скрыть ошибку")} onClick={() => setError('')}><X /></button></div>}
+      {error && <div className="error-banner" role="alert"><CircleAlert /><span>{error.message}</span><button className="text-button" onClick={() => setReload(value => value + 1)}>{t("Переподключить")}</button><button className="icon-button" aria-label={t("Скрыть ошибку")} onClick={() => setError('')}><X /></button></div>}
       <div className="workbench">
       <div className="workspace-stage" aria-busy={loading || working}>
         {state?.workspaces.map(item => <WorkspaceView key={item.id} workspace={item} settings={settings} visible={workspace?.id === item.id} activePane={selectedPane(item, activePanes)?.id} zoomed={zoomed[item.id]} unreadPaneIds={state.notifications.filter(notice => !notice.read && notice.workspaceId === item.id).map(notice => notice.paneId)} register={register} onFocus={focusPane} onSplit={(id, direction) => void split(id, direction)} onClose={closePane} onZoom={toggleZoom} onRatio={saveRatio} onError={reportError} />)}

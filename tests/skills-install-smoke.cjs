@@ -303,6 +303,19 @@ test('Windows fails before writing when the destination escapes through a symlin
   assert.deepEqual(fs.readdirSync(outside), []);
 });
 
+test('a nested client runtime junction cannot write outside the data directory', async t => {
+  const project = tempProject(t);
+  const outside = tempProject(t);
+  const runtime = runtimeOptions(t);
+  const tools = path.join(runtime.dataDir, 'tools');
+  fs.mkdirSync(tools);
+  fs.symlinkSync(outside, path.join(tools, 'winmux-client'), process.platform === 'win32' ? 'junction' : 'dir');
+  const { client } = fixture({ cwd: project, profile: { id: 'powershell', environment: 'windows' } });
+  await assert.rejects(installSkills(client, valid, runtime), { code: 'UNSAFE_RUNTIME' });
+  assert.deepEqual(fs.readdirSync(outside), []);
+  assert.equal(fs.existsSync(path.join(project, '.agents')), false);
+});
+
 const distribution = availableWslDistribution();
 
 test(distribution

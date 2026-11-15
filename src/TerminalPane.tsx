@@ -7,6 +7,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { classifyTerminalLink, createLocalFileLinkProvider, hideFileLinkTooltip, normalizeLocalFileLink, showFileLinkTooltip } from './localFileLinks';
 import { filePreviewErrorMessage } from './filePreviewErrors';
+import { beginPreviewIntent, invalidatePreviewOwner, isPreviewIntentCurrent, reportPreviewError } from './previewCoordinator';
 import { ArrowDown, ArrowUp, Copy, Maximize2, Minimize2, Search, SplitSquareHorizontal, SplitSquareVertical, X } from 'lucide-react';
 import { bridge, errorMessage, readClipboard, writeClipboard, type BackendEvent, type Direction, type Pane, type Settings, type Snapshot } from './types';
 
@@ -34,6 +35,7 @@ export function TerminalPane(props: Props) {
   const [ready, setReady] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
+  const visibilityEpoch = useRef(0);
 
   useEffect(() => {
     if (!mount.current) return;
@@ -45,9 +47,15 @@ export function TerminalPane(props: Props) {
       const target = classifyTerminalLink(value);
       if (target?.kind === 'file') {
         const request = ++fileRequest;
-        current.current.onError('');
+        const intent = beginPreviewIntent(pane.id, visibilityEpoch.current);
         void bridge().call('file.open', { paneId:pane.id, path:target.value }).catch(error => {
-          if (!disposed && current.current.visible && request === fileRequest) current.current.onError(filePreviewErrorMessage(error));
+          if (!disposed
+            && current.current.visible
+            && request === fileRequest
+            && visibilityEpoch.current === intent.visibilityEpoch
+            && isPreviewIntentCurrent(intent, pane.id, visibilityEpoch.current)) {
+            reportPreviewError(intent, filePreviewErrorMessage(error));
+          }
         });
       }
       else if (target?.kind === 'external') void bridge().openExternal(target.value).catch(error => current.current.onError(errorMessage(error)));
@@ -157,6 +165,7 @@ export function TerminalPane(props: Props) {
     }).catch(error => { if (!disposed) { failed = true; setLoadError(errorMessage(error)); pending = []; } });
     return () => {
       disposed = true; fileRequest++; unsubscribe(); observer.disconnect(); cancelAnimationFrame(frame); input.dispose(); localLinks.dispose();
+      invalidatePreviewOwner(pane.id);
       mount.current?.removeEventListener('focusin', onFocus);
       mount.current?.removeEventListener('pointerdown', selectionStart);
       document.removeEventListener('pointerup', selectionEnd);
@@ -164,6 +173,10 @@ export function TerminalPane(props: Props) {
       queryGuards.forEach(guard => guard.dispose());
     };
   }, [pane.id, retry]);
+  useEffect(() => {
+    visibilityEpoch.current += 1;
+    invalidatePreviewOwner(pane.id);
+  }, [pane.id, visible]);
   useEffect(() => {
     if (!terminal.current) return;
     terminal.current.options.theme = terminalTheme(settings.theme);

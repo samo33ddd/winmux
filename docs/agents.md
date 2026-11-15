@@ -8,15 +8,20 @@ The repository ships [winmux-terminal](../skills/winmux-terminal/SKILL.md) and [
 
 Installed skills include a Node.js client wrapper and connection metadata for the Winmux instance that installed them. The client files live in a versioned plain directory under the Winmux data directory, outside the packaged application archive. A Winmux source checkout and a global `winmux` command are unnecessary.
 
-From either installed skill directory, with Node.js on PATH:
+From the installed **winmux-terminal** directory, with Node.js on PATH:
 
 ```powershell
 node scripts/winmux-client.cjs list
 node scripts/winmux-client.cjs environment
-node scripts/winmux-client.cjs browser list
 ```
 
-Other terminal and browser commands below use the same arguments after `node scripts/winmux-client.cjs`. The wrapper is a client: open the matching Winmux desktop to start its terminal daemon, rather than using `start` from an installed skill. Browser control and local file previews require that desktop to remain open. The connection metadata contains paths, not an IPC token.
+From the installed **winmux-browser** directory, the wrapper uses the separate browser service:
+
+```powershell
+node scripts/winmux-client.cjs list
+```
+
+Use terminal commands below with the terminal wrapper and browser commands with the browser wrapper, preserving each command's arguments. Both wrappers are clients: open the matching Winmux desktop to start its terminal daemon, rather than using `start` from an installed skill. Browser control and local file previews require that desktop to remain open. The connection metadata contains paths, not an IPC token.
 
 WSL installation uses the selected WSL project and runs the client through Windows Node.js interop. Windows `node.exe` must be available through WSL interop; `WINMUX_WINDOWS_NODE` can select its executable. The automated checks exercise this bridge in Ubuntu 24.04.
 

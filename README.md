@@ -96,6 +96,8 @@ The unified header and selected workspace item show the agent and its last confi
 
 **Agent status hooks** adds session-only hooks for supported Claude Code and modern Codex launches. **Settings → Behavior** also installs project-local Codex hooks, preserving existing hooks and notification commands. This installer requires Windows and a stable Node.js installation; review and trust the new project hook through Codex `/hooks`. WSL project-hook installation is explicitly unsupported. Read [the agent guide](docs/agents.md) for compatibility and upgrade details.
 
+![Codex project hook settings after a repeat installation in an isolated test workspace, with local paths masked](docs/screenshots/agent-integrations.png)
+
 ![Winmux unified header with terminal tabs and a local fixture agent reporting completed status](docs/screenshots/terminal-tabs-agent.png)
 
 Files and Git follow the active terminal's directory through shell integration. PowerShell keeps the user's profile and prompt; WSL Bash reports its directory through OSC 7. While a foreground program is running, the displayed directory is the last directory reported by its shell. Windows and Linux paths are separate namespaces: the folder picker selects Windows directories; enter Linux paths for WSL profiles.

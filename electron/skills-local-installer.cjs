@@ -153,7 +153,7 @@ function writeTree(root, files) {
 function ensureRuntime(plan) {
   fs.mkdirSync(plan.dataDir, { recursive: true, mode: 0o700 });
   const dataRoot = fs.realpathSync(plan.dataDir);
-  for (const relative of ['tools', 'winmux-client']) {
+  for (const relative of ['tools', path.join('tools', 'winmux-client')]) {
     const current = path.join(dataRoot, relative);
     try {
       const stat = fs.lstatSync(current);

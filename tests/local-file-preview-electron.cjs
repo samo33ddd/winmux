@@ -1,6 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { _electron: electron } = require('playwright');
@@ -21,6 +22,7 @@ const env = { ...process.env, WINMUX_DATA_DIR:dataDir, WINMUX_NO_PROFILE:'1', WI
 delete env.ELECTRON_RUN_AS_NODE;
 let desktop;
 let page;
+let rendererServer;
 const errors = [];
 
 function cli(command) {
@@ -30,6 +32,44 @@ function cli(command) {
     encoding:'utf8',
     timeout:20000,
   });
+}
+
+function cliOpen(file, paneId) {
+  return spawnSync(require('electron'), [path.join(root, 'cli.cjs'), 'open', file, '--pane', paneId], {
+    cwd:root,
+    env:{ ...env, ELECTRON_RUN_AS_NODE:'1' },
+    encoding:'utf8',
+    timeout:20000,
+  });
+}
+
+async function startRendererServer() {
+  const rendererDir = process.env.WINMUX_PREVIEW_DIST_DIR;
+  if (!rendererDir) return;
+  const dist = path.resolve(rendererDir);
+  assert.equal(fs.existsSync(path.join(dist, 'index.html')), true, `Missing preview renderer build: ${dist}`);
+  rendererServer = http.createServer((request, response) => {
+    try {
+      const pathname = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname);
+      const relative = pathname === '/' ? 'index.html' : pathname.slice(1);
+      const target = path.resolve(dist, relative);
+      if (!target.startsWith(dist + path.sep)) throw new Error('Invalid renderer path');
+      const type = target.endsWith('.js') ? 'text/javascript'
+        : target.endsWith('.css') ? 'text/css'
+          : target.endsWith('.html') ? 'text/html; charset=utf-8'
+            : 'application/octet-stream';
+      response.writeHead(200, { 'Content-Type':type });
+      response.end(fs.readFileSync(target));
+    } catch {
+      response.writeHead(404);
+      response.end('Not found');
+    }
+  });
+  await new Promise((resolve, reject) => {
+    rendererServer.once('error', reject);
+    rendererServer.listen(0, '127.0.0.1', resolve);
+  });
+  env.WINMUX_DEV_URL = `http://127.0.0.1:${rendererServer.address().port}`;
 }
 
 async function rpc(method, params = {}) {
@@ -82,7 +122,7 @@ async function screenPoint(paneId, needle) {
 async function assertNoPreviewOrError(stage) {
   await page.waitForTimeout(150);
   assert.equal(await page.locator('.error-banner').count(), 0, `Unexpected preview error after ${stage}`);
-  assert.equal(await page.locator('[data-testid="local-file-preview-modal"]').count(), 0, `Unexpected preview modal after ${stage}`);
+  assert.equal(await page.locator('.local-file-preview-modal').count(), 0, `Unexpected preview modal after ${stage}`);
 }
 
 async function hoverRegisteredLink(paneId, needle) {
@@ -91,15 +131,21 @@ async function hoverRegisteredLink(paneId, needle) {
   await page.mouse.move(5, 5);
   await page.waitForTimeout(25);
   for (const rowOffset of [0, -1, 1, -2, 2, -3, 3, -4, 4]) {
-    const point = { ...base, y:base.y + rowOffset * base.cellHeight };
-    attempts.push({ rowOffset, x:point.x, y:point.y });
-    await page.mouse.move(point.x, point.y);
-    try {
-      await page.locator('.local-file-link-tooltip').waitFor({ timeout:300 });
-      const label = await page.locator('.local-file-link-tooltip').innerText();
-      if (label.includes(needle)) return point;
-    } catch {
-      // Try the adjacent rendered row; headless snapshot and clipped browser rows can differ after layout changes.
+    for (const columnOffset of [0, 0.5, -0.5]) {
+      const point = {
+        ...base,
+        x:base.x + columnOffset * base.cellWidth,
+        y:base.y + rowOffset * base.cellHeight,
+      };
+      attempts.push({ rowOffset, columnOffset, x:point.x, y:point.y });
+      await page.mouse.move(point.x, point.y);
+      try {
+        await page.locator('.local-file-link-tooltip').waitFor({ timeout:300 });
+        const label = await page.locator('.local-file-link-tooltip').innerText();
+        if (label.includes(needle)) return point;
+      } catch {
+        // Try adjacent rendered cells; headless snapshot and clipped browser rows can differ after layout changes.
+      }
     }
   }
   const screen = await rpc('pane.screen', { paneId });
@@ -205,6 +251,7 @@ async function openUi() {
 }
 
 async function main() {
+  await startRendererServer();
   const start = cli('start');
   assert.equal(start.status, 0, start.stderr || start.error?.message || start.stdout);
   await openUi();
@@ -216,7 +263,7 @@ async function main() {
 
   const script = [
     'Clear-Host',
-    "1..50 | ForEach-Object { Write-Output ('filler-' + $_) }",
+    "1..20 | ForEach-Object { Write-Output ('filler-' + $_) }",
     `Write-Output '${missingPath}'`,
     "Write-Output 'valid-preview.txt'",
     "Write-Output ('LOCAL_LINK_' + 'READY')",
@@ -254,7 +301,7 @@ async function main() {
   await page.reload();
   await page.waitForFunction(() => !!window.winmux, { timeout:20000 });
   await page.waitForSelector(`[data-pane-id="${pane.id}"] .xterm-screen`, { timeout:15000 });
-  await waitScreen(pane.id, 'VISIBLE_SPLIT_READY');
+  await waitScreen(pane.id, 'LOCAL_LINK_READY');
   await assertNoPreviewOrError('snapshot reattach');
 
   await installPendingPreviewGate();
@@ -277,6 +324,22 @@ async function main() {
   await releasePreviewGate();
   await assertNoPreviewOrError('switching away from a tab with a pending rejection');
 
+  await rpc('tab.select', { workspaceId:workspace.id, tabId:workspace.activeTabId });
+  await waitPaneVisibility(pane.id, true);
+  await armPreviewGate();
+  point = await hoverRegisteredLink(pane.id, missingPath);
+  await page.mouse.click(point.x, point.y);
+  await waitPreviewGatePending();
+  await rpc('tab.select', { workspaceId:workspace.id, tabId:secondTab.id });
+  await waitPaneVisibility(pane.id, false);
+  await rpc('tab.select', { workspaceId:workspace.id, tabId:workspace.activeTabId });
+  await waitPaneVisibility(pane.id, true);
+  await releasePreviewGate();
+  await assertNoPreviewOrError('hiding and showing a tab before a pending rejection settles');
+
+  await rpc('tab.select', { workspaceId:workspace.id, tabId:secondTab.id });
+  await waitPaneVisibility(secondPane.id, true);
+  await waitPaneVisibility(pane.id, false);
   await rpc('pane.input', {
     paneId:secondPane.id,
     data:`Write-Output '${missingPath}'; Write-Output ('CLOSE_PENDING_' + 'READY')\r`,
@@ -296,9 +359,41 @@ async function main() {
   await waitPaneVisibility(splitPane.id, true);
   await rpc('pane.input', {
     paneId:pane.id,
-    data:`Clear-Host; Write-Output '${missingPath}'; Write-Output 'valid-preview.txt'; Write-Output ('VISIBLE_SPLIT_' + 'READY')\r`,
+    data:`Clear-Host; Write-Output '${missingPath}'; Write-Output 'valid-preview.txt'; Write-Output ('SPLIT_FAILURE_' + 'READY')\r`,
   });
-  await waitScreen(pane.id, 'VISIBLE_SPLIT_READY');
+  await rpc('pane.input', {
+    paneId:splitPane.id,
+    data:`Clear-Host; Write-Output 'valid-preview.txt'; Write-Output ('SPLIT_SUCCESS_' + 'READY')\r`,
+  });
+  await waitScreen(pane.id, 'SPLIT_FAILURE_READY');
+  await waitScreen(splitPane.id, 'SPLIT_SUCCESS_READY');
+
+  await armPreviewGate();
+  point = await hoverRegisteredLink(pane.id, missingPath);
+  await page.mouse.click(point.x, point.y);
+  await waitPreviewGatePending();
+  const successPoint = await hoverRegisteredLink(splitPane.id, 'valid-preview.txt');
+  await page.mouse.click(successPoint.x, successPoint.y);
+  await page.locator('.local-file-preview-modal').waitFor();
+  await releasePreviewGate();
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator('.error-banner').count(), 0, 'An older split-pane rejection must not restore the banner after a newer successful preview');
+  assert.equal(await page.locator('.local-file-preview-modal').count(), 1, 'The newer successful split-pane preview must remain open');
+  await page.keyboard.press('Escape');
+
+  await armPreviewGate();
+  point = await hoverRegisteredLink(pane.id, missingPath);
+  await page.mouse.click(point.x, point.y);
+  await waitPreviewGatePending();
+  await page.getByTestId('files-toggle').click();
+  await page.locator('[data-testid="file-entry"][data-path="valid-preview.txt"]').click();
+  await page.getByTestId('text-preview').waitFor();
+  await releasePreviewGate();
+  await page.waitForTimeout(150);
+  assert.equal(await page.locator('.error-banner').count(), 0, 'A newer successful Files preview must suppress an older pending terminal rejection');
+  assert.equal(await page.getByTestId('text-preview').count(), 1, 'The newer Files preview must remain visible');
+  await page.getByTestId('files-toggle').click();
+
   await armPreviewGate();
   point = await hoverRegisteredLink(pane.id, missingPath);
   await page.mouse.click(point.x, point.y);
@@ -309,25 +404,18 @@ async function main() {
   assert.match(englishError, /File not found: C:\\root\\collision_verdict3/);
   assert.doesNotMatch(englishError, /Error invoking remote method|winmux:call/);
 
-  await page.mouse.move(5, 5);
-  await page.locator('.local-file-link-tooltip').waitFor({ state:'detached' });
-  point = await hoverRegisteredLink(pane.id, 'valid-preview.txt');
-  await page.mouse.click(point.x, point.y);
-  await page.waitForFunction(() => (
-    document.querySelector('[data-testid="local-file-text"]')
-    || document.querySelector('.error-banner')
-  ));
-  const englishRecoveryError = await page.locator('.error-banner').innerText().catch(() => '');
-  assert.equal(englishRecoveryError, '', 'A valid terminal link must open after a missing-file error');
+  const externalPreview = cliOpen(validPath, pane.id);
+  assert.equal(externalPreview.status, 0, externalPreview.stderr || externalPreview.stdout);
   await page.getByTestId('local-file-text').waitFor();
-  assert.equal(await page.locator('.error-banner').count(), 0, 'A valid open after failure must clear the stale error');
+  assert.equal(await page.locator('.local-file-preview-modal').count(), 1, 'A successful CLI preview must open the real modal');
+  assert.equal(await page.locator('.error-banner').count(), 0, 'A Files/CLI preview success must clear the stale terminal preview error');
   await page.keyboard.press('Escape');
 
   await page.evaluate(() => localStorage.setItem('winmux.language', 'ru'));
   await page.reload();
   await page.waitForFunction(() => !!window.winmux, { timeout:20000 });
   await page.waitForSelector(`[data-pane-id="${pane.id}"] .xterm-screen`, { timeout:15000 });
-  await waitScreen(pane.id, 'LOCAL_LINK_READY');
+  await waitScreen(pane.id, 'SPLIT_FAILURE_READY');
 
   point = await screenPoint(pane.id, missingPath);
   await page.mouse.click(point.x, point.y);
@@ -347,6 +435,7 @@ async function main() {
   const russianRecoveryError = await page.locator('.error-banner').innerText().catch(() => '');
   assert.equal(russianRecoveryError, '', 'A valid Russian terminal link must open after a missing-file error');
   await page.getByTestId('local-file-text').waitFor();
+  assert.equal(await page.locator('.local-file-preview-modal').count(), 1, 'The real local preview modal selector must find the Russian preview');
   assert.equal(await page.locator('.error-banner').count(), 0, 'Russian valid open after failure must clear the stale error');
   assert.equal(errors.length, 0, `Renderer errors: ${errors.join('; ')}`);
 
@@ -357,6 +446,7 @@ async function main() {
       'Terminal output, provider hover, scrolling, selection, resize and snapshot reattach did not open a missing file.',
       'The exact missing path remained C:\\root\\collision_verdict3 and was never created or remapped.',
       'A pending rejection stayed hidden after switching away from or closing its owning tab, while the same failure remained visible with two visible split panes.',
+      'A newer successful Files read and a CLI file-preview event both superseded older terminal preview failures.',
       'English and Russian missing-file errors omit the raw Electron IPC wrapper.',
       'A later valid terminal link opens the preview and clears the prior error.',
     ],
@@ -370,5 +460,7 @@ main().catch(error => {
   await closeDesktop().catch(error => console.error(`Desktop close failed: ${error.message}`));
   const stop = cli('shutdown');
   if (stop.status !== 0) console.error(`Isolated daemon shutdown: ${stop.stderr || stop.error?.message || stop.stdout}`);
+  rendererServer?.closeAllConnections();
+  rendererServer?.close();
   await removeFixture();
 });
