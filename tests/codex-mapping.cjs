@@ -41,6 +41,14 @@ test('one descendant and one loaded root binds automatically', () => {
   assert.equal(plans[0].thread.id, 'thread-1');
 });
 
+test('a released selector launch can map a later manual Codex process', () => {
+  const locked = planBindings({ panes: [pane({ agentLaunchLocked: true })], threads: [thread()], loadedIds: ['thread-1'] });
+  assert.equal(locked[0].action, 'skip', 'an active selector launch owns the pane');
+  const released = planBindings({ panes: [pane({ agentLaunchLocked: false, agentState: 'completed' })], threads: [thread()], loadedIds: ['thread-1'] });
+  assert.equal(released[0].action, 'auto', 'return to the shell releases the pane for native mapping');
+  assert.equal(released[0].thread.id, 'thread-1');
+});
+
 test('an explicit binding rejects a stale thread and keeps a current one', () => {
   const explicit = pane({ agentBinding: 'explicit', agentThreadId: 'gone', agentState: 'completed' });
   const stale = planBindings({ panes: [explicit], threads: [thread()], loadedIds: ['thread-1'] });

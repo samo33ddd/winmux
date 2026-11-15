@@ -9,9 +9,23 @@ Verified on Windows 11 x64 with Node.js 24.12.0, Electron 45.3.2, PowerShell 7, 
 - `npm run test:workspace`: Windows and Ubuntu file listings, Unicode text, image bytes, containment, real Git status and diff pass.
 - `npm run test:profile`: normal PowerShell loads the user's profile; custom prompt and `LASTEXITCODE` survive OSC 7 integration.
 - `npm run test:cwd-agent`: Windows and Ubuntu Claude/Codex executable fixtures preserve the exact hook arguments, run the real authenticated helper, report running/waiting/completed states, reject stale launch identities, and report failed exits while leaving the shell alive. Also verifies inactive-tab split/resize/close ownership, cwd inheritance, containment, fresh-shell restoration, and no agent replay. The WSL-to-Windows helper path is exercised by execution, not only string inspection.
-- `npm run test:skills`: nine checks pass, including input validation, shell readiness, command submission, timeout/failure handling, and settings form interaction. These checks do not download third-party skills.
+- `npm run test:skills`: twelve local checks pass, including fixed bundled skill selection, all destination mappings, atomic conflict preservation, unavailable-profile rejection, installed client IPC from unrelated directories, and real Windows/Ubuntu WSL installation and interop. These checks do not download third-party skills.
 - `npm run test:cookies`: cookie input normalization, domain scope, host-only, expiry, SameSite, partition rejection, and invalid input pass.
 - `npm run test:desktop`: real Electron/PowerShell/WSL, Unicode, splits, close/reopen with the same shell PID, six themes, English/Russian labels, custom theme import/export, terminal preferences, and resize pass. Terminal tabs and fixture-agent launch remain within the selected workspace; independent output/PIDs and active selection survive tab switching and renderer reload. Files follow both `cd` and terminal-tab selection. Browser open/snapshot/fill/click/evaluate/screenshot, HttpOnly cookie import, and independent browser-tab state pass. No renderer errors or residual UI error banners were observed.
+
+## Windows 0.2.1 verification
+
+The production renderer build and the backend, workspace, cwd/agent, profile, skills, cookies, desktop, and file-preview checks pass locally. The Electron desktop run verifies live OSC terminal titles, same-workspace tabs and fixture-agent launch, six themes, sidebar controls at the top, terminal-following file roots, and in-app text/image previews without renderer errors. README screenshots are captured from isolated Electron instances using harmless fixtures.
+
+The native integration checks cover WebSocket handshake and request/response separation, active/waiting/idle/completed/failed states, ambiguous and stale mappings, explicit binding, disconnect behavior, terminal title modes, and color preservation through real ConPTY and snapshot reattach. Five project-hook installer/helper checks include running the generated command through `cmd.exe` using literal percent-variable names, spaces, Unicode, and shell metacharacters. The inherited stale `WINMUX_PANE_ID` is excluded from native Codex hook payloads.
+
+A read-only probe with installed Codex 0.167.0 found two loaded root threads and correctly mapped the existing Winmux and hd-helper Codex descendant processes to their respective panes. A third shell in hd-helper had no Codex process and was left unmapped. Candidate status patches were collected only in memory; no input, prompt, approval response, or state mutation was sent to the owner's sessions. This proves native discovery and mapping separately from the fixture event-transition tests.
+
+Local skill checks run all three real Ubuntu 24.04 WSL cases. Hosted Windows CI has no WSL distribution: it runs the Windows and explicit unavailable-profile checks and does not register the three unavailable runtime cases. Its output identifies WSL runtime as unverified on that runner; a green Windows CI result does not claim WSL ran there. Local WSL evidence remains a separate release-candidate check.
+
+Ten release-workflow regressions pass, including new draft visibility lag, bounded exhaustion, API errors, duplicate or published drafts, mismatched tags, and malformed assets. Publication and downloaded executable verification are separate from these local checks.
+
+The original automatic `C:\root\collision_verdict3` request has not been traced from the owner's session. Issue #13 remains the source of that report; readable error handling alone is not evidence that its original trigger was established.
 
 ## Windows 0.2.0 verification
 

@@ -62,7 +62,7 @@ Click local paths printed in a terminal to open the same text or image preview i
 
 ![Winmux Files inspector beside split terminals, showing project folders and an image preview](docs/screenshots/project-tools.png)
 
-![Local image preview inside the packaged Winmux application](docs/screenshots/file-preview.png)
+![Local image preview inside Winmux](docs/screenshots/file-preview.png)
 
 Select terminal text to copy it, or use the copy and paste shortcuts below. **Ctrl+C** still interrupts a terminal process. Open Settings with **Ctrl+,** for language, themes, fonts, cursor, clipboard behavior, cookie import, and project-scoped skill installation. The bell opens notifications; choosing one focuses its terminal and tab.
 

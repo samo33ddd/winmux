@@ -48,13 +48,25 @@ PowerShell starts without user profiles and initializes UTF-8 console input/outp
 
 `workspace.create`, `tab.create`, and `pane.split` accept optional `agentId` and `agentHooks` boolean. The agent must be available and match the chosen profile/environment. Selection launches it once during shell initialization and leaves the shell open after exit. PowerShell honors a same-name function supplied by the user's profile, preserving configured launchers. Shell arguments use quoted literals or positional argument arrays; arbitrary command source is not accepted. Ordinary splits do not inherit agent selection; daemon restoration never relaunches agents.
 
-Pane metadata includes `agentId`, `agentLabel`, `agentState` (`starting`, `running`, `waiting`, `completed`, `failed`, `unknown`), optional `agentExitCode`, and `agentUpdatedAt`. Shell lifecycle confirms invocation/exit; it cannot infer model activity. Session-only Claude/Codex hooks report explicit lifecycle events. `agent.status {paneId,launchId,state}` uses the existing authenticated client and rejects stale launch identities. The helper reads launch context from `WINMUX_*` environment variables, ignores prompt/transcript content, and bounds delivery time. Claude uses additive session settings; Codex uses native hook settings collected from its session layer, without overriding `notify`. Windows session hooks require PowerShell 7.3+.
+Pane metadata includes `agentId`, `agentLabel`, `agentState` (`starting`, `running`, `waiting`, `idle`, `completed`, `failed`, `unknown`), optional `agentExitCode`, and `agentUpdatedAt`. Shell lifecycle confirms invocation/exit; it cannot infer model activity. Session-only Claude/Codex hooks report explicit lifecycle events. `agent.status {paneId,launchId,state}` uses the existing authenticated client and rejects stale launch identities. The helper reads launch context from `WINMUX_*` environment variables, ignores prompt/transcript content, and bounds delivery time. Claude uses additive session settings; Codex uses native hook settings collected from its session layer, without overriding `notify`. Windows session hooks require PowerShell 7.3+.
+
+## Native Codex integration
+
+The Windows backend attaches to the already-running Codex daemon using WebSocket JSON-RPC over `codex app-server proxy`. It first checks `app-server daemon version`; absence or incompatibility gives a disconnected state. Discovery never starts/stops that daemon, submits a model turn, or responds to approvals. Only a verified Codex descendant of a live pane shell can receive native identity.
+
+- `codex.status {}` returns connection readiness and loaded root-thread/pane mapping metadata. It excludes conversation content.
+- `codex.bind {paneId,threadId}` selects an available thread for that pane and its exact directory. Ambiguous candidates stay unbound until explicitly selected.
+- `agent.hook {agentId,event,sessionId,cwd,paneId?}` accepts supported Codex lifecycle events only for a current matching session/mapping. The project helper sends session and cwd instead of inheriting a possibly stale pane ID from the shared Codex daemon.
+
+Mapped panes expose optional `agentThreadId`, `agentSessionId`, and `agentBinding`. These bindings are ephemeral. Idle does not imply a completed turn; completion requires its native turn or hook event. A known Codex process retains its identity with unknown activity when thread mapping or the native connection is unavailable.
+
+The desktop's explicit `agent.hooks.install` action is handled in the main process, not forwarded as a daemon RPC. It merges the selected Windows project's `.codex/hooks.json`, preserves foreign handlers, backs up a changed config, and places a stable helper under the Winmux data directory. System Node.js and Codex `/hooks` trust are prerequisites. WSL project-hook installation is rejected explicitly.
 
 ## Workspace terminal tabs
 
-Each workspace has `tabs: [{id,title,root}]`, `activeTabId`, and a flat `panes` list; each pane has `tabId`. `workspace.root` remains an alias of the active tab's tree for older clients. Saved pre-tab workspaces migrate to a single tab. Layout restoration validates all tabs and pane references.
+Each workspace has `tabs: [{id,title,titleMode?,root}]`, `activeTabId`, and a flat `panes` list; each pane has `tabId`. An automatic title follows the selected pane's live title; `titleMode: 'custom'` preserves an explicitly supplied title. Legacy records without a mode retain the shell-label migration heuristic. `workspace.root` remains an alias of the active tab's tree for older clients. Saved pre-tab workspaces migrate to a single tab. Layout restoration validates all tabs and pane references.
 
-- `tab.create {workspaceId,sourcePaneId?,profileId?,cwd?,agentId?,agentHooks?,title?}` returns the created tab and selects it. By default its shell inherits the source pane's environment and last reported cwd.
+- `tab.create {workspaceId,sourcePaneId?,profileId?,cwd?,agentId?,agentHooks?,title?,titleMode?}` returns the created tab and selects it. By default its shell inherits the source pane's environment and last reported cwd. A supplied title defaults to custom mode; generated shell/agent tabs use automatic mode.
 - `tab.select {workspaceId,tabId}` changes selection without stopping or restarting shells.
 - `tab.close {workspaceId,tabId}` stops only the tab's panes; closing the last tab removes the workspace.
 - `pane.split`, `pane.close`, and `layout.ratio` find the owning tab, including an inactive one, and preserve every other tab's layout/processes.

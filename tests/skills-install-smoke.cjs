@@ -116,11 +116,6 @@ function availableWslDistribution() {
   return decodeWslOutput(result.stdout).split(/\r?\n/).map(line => line.trim()).find(Boolean) || null;
 }
 
-function requireWsl(distribution, check) {
-  assert.ok(distribution, `UNVERIFIED: ${check} requires an installed WSL distribution; wsl.exe reported none.`);
-  return distribution;
-}
-
 function wsl(distribution, args, options = {}) {
   return spawnSync('wsl.exe', ['--distribution', distribution, '--exec', ...args], {
     windowsHide: true,
@@ -308,137 +303,172 @@ test('Windows fails before writing when the destination escapes through a symlin
   assert.deepEqual(fs.readdirSync(outside), []);
 });
 
-test('WSL writes and verifies the exact two skill files in an isolated Linux project', async t => {
-  const distribution = requireWsl(availableWslDistribution(), 'real WSL skill installation');
-  const made = wsl(distribution, ['mktemp', '-d', '/tmp/winmux-skills-test-XXXXXX']);
-  assert.equal(made.status, 0, made.stderr);
-  const project = made.stdout.trim();
-  t.after(() => wsl(distribution, ['rm', '-rf', '--', project]));
+const distribution = availableWslDistribution();
 
-  const preset = wsl(distribution, ['python3', '-c',
-    'import os,sys; p=os.path.join(sys.argv[1],".claude","skills","user-owned"); os.makedirs(p); open(os.path.join(p,"SKILL.md"),"w").write("keep")',
-    project]);
-  assert.equal(preset.status, 0, preset.stderr);
-  const { client } = fixture({
-    cwd: project,
-    profileId: `wsl:${distribution}`,
-    profile: {
-      id: `wsl:${distribution}`,
-      environment: 'wsl',
-      command: 'wsl.exe',
-      args: ['--distribution', distribution],
-      distro: distribution,
-    },
+test(distribution
+  ? 'unavailable WSL profiles reject before writes or Winmux client launch'
+  : 'WSL distribution unavailable: profile rejection is verified; WSL runtime is unverified', async t => {
+  const project = tempProject(t);
+  const dataDir = path.join(project, 'uncreated-runtime');
+  const spawned = t.mock.method(require('node:child_process').ChildProcess.prototype, 'spawn', () => {
+    assert.fail('An unavailable WSL profile must not launch a Winmux client or installer.');
   });
-  const runtime = runtimeOptions(t);
-
-  const firstAgentByDestination = new Map();
-  for (const [agent, relative] of Object.entries(SKILL_DESTINATIONS)) {
-    const result = await installSkills(client, { ...valid, agent }, runtime);
-    assert.equal(result.environment, 'wsl');
-    assert.equal(result.destinationRoot, `${project}/${relative}`);
-    if (firstAgentByDestination.has(relative)) {
-      assert.deepEqual(result.installedSkills, []);
-      assert.deepEqual(result.unchangedSkills, ['winmux-terminal', 'winmux-browser']);
-    } else {
-      firstAgentByDestination.set(relative, agent);
-      assert.deepEqual(result.installedSkills, ['winmux-terminal', 'winmux-browser']);
-      assert.deepEqual(result.unchangedSkills, []);
+  const writers = ['mkdirSync', 'writeFileSync', 'renameSync', 'copyFileSync'].map(method =>
+    t.mock.method(fs, method, () => {
+      assert.fail(`An unavailable WSL profile must not call fs.${method}.`);
+    }));
+  try {
+    for (const profile of [
+      { id: 'wsl:Unavailable', environment: 'wsl', available: false },
+      { id: 'powershell', environment: 'windows', available: true },
+    ]) {
+      const { client, calls } = fixture({ cwd: project, profileId: 'wsl:Unavailable', profile });
+      await assert.rejects(installSkills(client, valid, { dataDir }), { code: 'PROFILE_UNAVAILABLE' });
+      assert.deepEqual(calls, [
+        { method: 'state', params: undefined },
+        { method: 'environment', params: undefined },
+      ]);
     }
+    assert.equal(spawned.mock.callCount(), 0);
+    for (const writer of writers) assert.equal(writer.mock.callCount(), 0);
+    assert.deepEqual(fs.readdirSync(project), []);
+    assert.equal(fs.existsSync(dataDir), false);
+  } finally {
+    spawned.mock.restore();
+    for (const writer of writers) writer.mock.restore();
   }
-  for (const relative of firstAgentByDestination.keys()) {
-    for (const skill of readBundledSkills()) {
-      const installed = wsl(distribution, ['cat', `${project}/${relative}/${skill.name}/SKILL.md`]);
-      assert.equal(installed.status, 0, installed.stderr);
-      assert.deepEqual(Buffer.from(installed.stdout), skill.content);
-    }
-  }
-  const unrelated = wsl(distribution, ['cat', `${project}/.claude/skills/user-owned/SKILL.md`]);
-  assert.equal(unrelated.stdout, 'keep');
 });
 
-test('installed WSL wrapper uses Windows Node interop for authenticated IPC', async t => {
-  const distribution = requireWsl(availableWslDistribution(), 'installed WSL wrapper IPC');
-  const linuxNode = wsl(distribution, ['node', '--version']);
-  assert.equal(linuxNode.status, 0, `UNVERIFIED: installed WSL wrapper IPC requires Node.js in ${distribution}: ${linuxNode.stderr}`);
-  const made = wsl(distribution, ['mktemp', '-d', '/tmp/winmux-installed-wrapper-XXXXXX']);
-  assert.equal(made.status, 0, made.stderr);
-  const project = made.stdout.trim();
-  t.after(() => wsl(distribution, ['rm', '-rf', '--', project]));
-  const daemon = await isolatedDaemon(t);
-  const { client } = fixture({
-    cwd: project,
-    profileId: `wsl:${distribution}`,
-    profile: {
-      id: `wsl:${distribution}`,
-      environment: 'wsl',
-      command: 'wsl.exe',
-      args: ['--distribution', distribution],
-      distro: distribution,
-    },
-  });
-  await installSkills(client, valid, { dataDir: daemon.dataDir, appRoot: path.resolve(__dirname, '..') });
-  const wrapper = `${project}/.agents/skills/winmux-terminal/scripts/winmux-client.cjs`;
+if (distribution) {
+  test('WSL writes and verifies the exact two skill files in an isolated Linux project', async t => {
+    const made = wsl(distribution, ['mktemp', '-d', '/tmp/winmux-skills-test-XXXXXX']);
+    assert.equal(made.status, 0, made.stderr);
+    const project = made.stdout.trim();
+    t.after(() => wsl(distribution, ['rm', '-rf', '--', project]));
 
-  const unsupported = wsl(distribution, ['node', wrapper, 'list'], {
-    env: {
+    const preset = wsl(distribution, ['python3', '-c',
+      'import os,sys; p=os.path.join(sys.argv[1],".claude","skills","user-owned"); os.makedirs(p); open(os.path.join(p,"SKILL.md"),"w").write("keep")',
+      project]);
+    assert.equal(preset.status, 0, preset.stderr);
+    const { client } = fixture({
+      cwd: project,
+      profileId: `wsl:${distribution}`,
+      profile: {
+        id: `wsl:${distribution}`,
+        environment: 'wsl',
+        command: 'wsl.exe',
+        args: ['--distribution', distribution],
+        distro: distribution,
+      },
+    });
+    const runtime = runtimeOptions(t);
+
+    const firstAgentByDestination = new Map();
+    for (const [agent, relative] of Object.entries(SKILL_DESTINATIONS)) {
+      const result = await installSkills(client, { ...valid, agent }, runtime);
+      assert.equal(result.environment, 'wsl');
+      assert.equal(result.destinationRoot, `${project}/${relative}`);
+      if (firstAgentByDestination.has(relative)) {
+        assert.deepEqual(result.installedSkills, []);
+        assert.deepEqual(result.unchangedSkills, ['winmux-terminal', 'winmux-browser']);
+      } else {
+        firstAgentByDestination.set(relative, agent);
+        assert.deepEqual(result.installedSkills, ['winmux-terminal', 'winmux-browser']);
+        assert.deepEqual(result.unchangedSkills, []);
+      }
+    }
+    for (const relative of firstAgentByDestination.keys()) {
+      for (const skill of readBundledSkills()) {
+        const installed = wsl(distribution, ['cat', `${project}/${relative}/${skill.name}/SKILL.md`]);
+        assert.equal(installed.status, 0, installed.stderr);
+        assert.deepEqual(Buffer.from(installed.stdout), skill.content);
+      }
+    }
+    const unrelated = wsl(distribution, ['cat', `${project}/.claude/skills/user-owned/SKILL.md`]);
+    assert.equal(unrelated.stdout, 'keep');
+  });
+
+  test('installed WSL wrapper uses Windows Node interop for authenticated IPC', async t => {
+    const linuxNode = wsl(distribution, ['node', '--version']);
+    assert.equal(linuxNode.status, 0, `UNVERIFIED: installed WSL wrapper IPC requires Node.js in ${distribution}: ${linuxNode.stderr}`);
+    const made = wsl(distribution, ['mktemp', '-d', '/tmp/winmux-installed-wrapper-XXXXXX']);
+    assert.equal(made.status, 0, made.stderr);
+    const project = made.stdout.trim();
+    t.after(() => wsl(distribution, ['rm', '-rf', '--', project]));
+    const daemon = await isolatedDaemon(t);
+    const { client } = fixture({
+      cwd: project,
+      profileId: `wsl:${distribution}`,
+      profile: {
+        id: `wsl:${distribution}`,
+        environment: 'wsl',
+        command: 'wsl.exe',
+        args: ['--distribution', distribution],
+        distro: distribution,
+      },
+    });
+    await installSkills(client, valid, { dataDir: daemon.dataDir, appRoot: path.resolve(__dirname, '..') });
+    const wrapper = `${project}/.agents/skills/winmux-terminal/scripts/winmux-client.cjs`;
+
+    const unsupported = wsl(distribution, ['node', wrapper, 'list'], {
+      env: {
+        ...process.env,
+        WINMUX_WINDOWS_NODE: '/definitely/missing/winmux-node.exe',
+        WINMUX_AGENT_NODE: '',
+        WSLENV: [process.env.WSLENV, 'WINMUX_WINDOWS_NODE'].filter(Boolean).join(':'),
+      },
+    });
+    assert.equal(unsupported.status, 1);
+    assert.match(unsupported.stderr, /Windows Node\.js is unavailable/);
+
+    const wslEnv = {
       ...process.env,
-      WINMUX_WINDOWS_NODE: '/definitely/missing/winmux-node.exe',
+      WINMUX_WINDOWS_NODE: process.execPath,
       WINMUX_AGENT_NODE: '',
       WSLENV: [process.env.WSLENV, 'WINMUX_WINDOWS_NODE'].filter(Boolean).join(':'),
-    },
-  });
-  assert.equal(unsupported.status, 1);
-  assert.match(unsupported.stderr, /Windows Node\.js is unavailable/);
+    };
+    const listed = wsl(distribution, ['node', wrapper, 'list'], { env: wslEnv });
+    assert.equal(listed.status, 0, listed.stderr);
+    const state = JSON.parse(listed.stdout);
+    assert.ok(Array.isArray(state.workspaces));
 
-  const wslEnv = {
-    ...process.env,
-    WINMUX_WINDOWS_NODE: process.execPath,
-    WINMUX_AGENT_NODE: '',
-    WSLENV: [process.env.WSLENV, 'WINMUX_WINDOWS_NODE'].filter(Boolean).join(':'),
-  };
-  const listed = wsl(distribution, ['node', wrapper, 'list'], { env: wslEnv });
-  assert.equal(listed.status, 0, listed.stderr);
-  const state = JSON.parse(listed.stdout);
-  assert.ok(Array.isArray(state.workspaces));
-
-  const metadata = wsl(distribution, ['cat', `${project}/.agents/skills/winmux-terminal/scripts/connection.json`]);
-  assert.equal(metadata.status, 0, metadata.stderr);
-  const connection = JSON.parse(metadata.stdout);
-  assert.deepEqual(Object.keys(connection).sort(), ['cliPath', 'dataDir']);
-  assert.equal(connection.dataDir, daemon.dataDir);
-  assert.doesNotMatch(metadata.stdout, /[a-f0-9]{64}|ipc-token|ui-control/i);
-});
-
-test('WSL conflict validation changes neither the conflicting nor missing skill', async t => {
-  const distribution = requireWsl(availableWslDistribution(), 'WSL conflict preservation');
-  const made = wsl(distribution, ['mktemp', '-d', '/tmp/winmux-skills-conflict-XXXXXX']);
-  assert.equal(made.status, 0, made.stderr);
-  const project = made.stdout.trim();
-  t.after(() => wsl(distribution, ['rm', '-rf', '--', project]));
-  const preset = wsl(distribution, ['python3', '-c',
-    'import os,sys; p=os.path.join(sys.argv[1],".agents","skills","winmux-terminal"); os.makedirs(p); open(os.path.join(p,"SKILL.md"),"w").write("user content")',
-    project]);
-  assert.equal(preset.status, 0, preset.stderr);
-  const { client } = fixture({
-    cwd: project,
-    profileId: `wsl:${distribution}`,
-    profile: {
-      id: `wsl:${distribution}`,
-      environment: 'wsl',
-      command: 'wsl.exe',
-      args: ['--distribution', distribution],
-      distro: distribution,
-    },
+    const metadata = wsl(distribution, ['cat', `${project}/.agents/skills/winmux-terminal/scripts/connection.json`]);
+    assert.equal(metadata.status, 0, metadata.stderr);
+    const connection = JSON.parse(metadata.stdout);
+    assert.deepEqual(Object.keys(connection).sort(), ['cliPath', 'dataDir']);
+    assert.equal(connection.dataDir, daemon.dataDir);
+    assert.doesNotMatch(metadata.stdout, /[a-f0-9]{64}|ipc-token|ui-control/i);
   });
 
-  await assert.rejects(installSkills(client, valid, runtimeOptions(t)), { code: 'SKILL_CONFLICT' });
+  test('WSL conflict validation changes neither the conflicting nor missing skill', async t => {
+    const made = wsl(distribution, ['mktemp', '-d', '/tmp/winmux-skills-conflict-XXXXXX']);
+    assert.equal(made.status, 0, made.stderr);
+    const project = made.stdout.trim();
+    t.after(() => wsl(distribution, ['rm', '-rf', '--', project]));
+    const preset = wsl(distribution, ['python3', '-c',
+      'import os,sys; p=os.path.join(sys.argv[1],".agents","skills","winmux-terminal"); os.makedirs(p); open(os.path.join(p,"SKILL.md"),"w").write("user content")',
+      project]);
+    assert.equal(preset.status, 0, preset.stderr);
+    const { client } = fixture({
+      cwd: project,
+      profileId: `wsl:${distribution}`,
+      profile: {
+        id: `wsl:${distribution}`,
+        environment: 'wsl',
+        command: 'wsl.exe',
+        args: ['--distribution', distribution],
+        distro: distribution,
+      },
+    });
 
-  const conflict = wsl(distribution, ['cat', `${project}/.agents/skills/winmux-terminal/SKILL.md`]);
-  const missing = wsl(distribution, ['test', '!', '-e', `${project}/.agents/skills/winmux-browser`]);
-  assert.equal(conflict.stdout, 'user content');
-  assert.equal(missing.status, 0);
-});
+    await assert.rejects(installSkills(client, valid, runtimeOptions(t)), { code: 'SKILL_CONFLICT' });
+
+    const conflict = wsl(distribution, ['cat', `${project}/.agents/skills/winmux-terminal/SKILL.md`]);
+    const missing = wsl(distribution, ['test', '!', '-e', `${project}/.agents/skills/winmux-browser`]);
+    assert.equal(conflict.stdout, 'user content');
+    assert.equal(missing.status, 0);
+  });
+}
 
 test('settings shows only two fixed skills, submits a fixed payload and reports EN/RU success and failure', async () => {
   const { build } = require('esbuild');
