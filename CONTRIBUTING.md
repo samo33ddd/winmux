@@ -25,9 +25,24 @@ npm start
 
 Use the same variable in every terminal controlling that instance. The default data directory may contain somebody's active work. Closing the window keeps terminal sessions running; `shutdown` stops every session in the selected daemon. Stop only sessions you created for the task.
 
-## Pull requests only
+## Issues and pull requests
 
-All source, documentation, dependency, and release changes go through a pull request. Do not push changes directly to the default branch. Work on a focused branch, open a draft PR early when useful, and make the final PR title and description describe the resulting change.
+This policy takes effect after bootstrap PR #2 is merged. PR #2 does not require a retrospective Issue. Every future change, including code, documentation, dependencies, CI, release preparation, and fixes, starts with a GitHub Issue describing the problem, intended outcome, and acceptance criteria.
+
+Use the relevant type labels on both the Issue and its PR:
+
+| Label | Purpose |
+| --- | --- |
+| `bug` | Report incorrect behavior |
+| `fix` | Repair a defect |
+| `feat` | Add or change a feature |
+| `docs` | Change documentation |
+| `chore` | Maintain dependencies, tooling, or CI |
+| `release` | Prepare release code, versions, or configuration |
+
+Apply more than one type when relevant; keep the Issue and PR labels aligned with the work. A reported bug can retain `bug` alongside `fix` when its repair is delivered.
+
+Work on a focused branch and open a pull request referencing the Issue. Use `Closes #N` only when the PR fully satisfies the Issue's acceptance criteria; otherwise reference it without closing it. Open a draft PR early when useful, and make the final title and description describe the resulting change. Do not push directly to `main`, including for follow-up fixes.
 
 A PR should include:
 
@@ -35,7 +50,7 @@ A PR should include:
 - Relevant checks and their actual results, with the Windows, Node/Electron, and WSL environment when it affects the result.
 - Sanitized screenshots for visible UI changes, plus any known limitation or skipped check.
 
-Request code review and address blocking findings. Merge only after review is complete and all required CI checks are green for the current PR revision. CI alone does not replace code review. An authorized maintainer may merge their own PR after another reviewer has reviewed it and the required checks pass; self-merge does not bypass either requirement. Do not merge while checks are pending or failing.
+Run the relevant checks, obtain independent review, and address blocking findings. Merge only after review is complete and all required CI checks are green for the current PR head commit; a green result on an older revision is insufficient. CI alone does not replace code review. An authorized maintainer may merge their own PR after another reviewer has reviewed it and the required checks pass; self-merge does not bypass either requirement. Do not merge while checks are pending or failing.
 
 ## Verify the change
 
@@ -70,8 +85,8 @@ Never commit capability tokens, `ipc-token`, `ui-control.json`, `.env` secrets, 
 
 ## Versioned releases
 
-Release changes follow the same PR, review, and green-CI requirements as every other change. Prepare the package version, lockfile, changelog, release configuration, and relevant documentation together in a PR. Ensure the version is consistent before merging.
+Release code, version, and configuration changes follow the same Issue, typed-label, PR, independent-review, and green-current-head-CI requirements. Prepare the package version, lockfile, changelog, release configuration, and relevant documentation together in a PR referencing its Issue. Ensure the version is consistent before merging.
 
-After that PR is merged, an authorized maintainer creates a matching `vX.Y.Z` tag on the reviewed commit. Release CI must build and publish the versioned Windows assets from that tag. Verify the published release and its attached executables before announcing availability. A tag or a successful build alone is not proof that users can download the artifacts.
+After that PR is merged and `main` CI is green for the reviewed release commit, an authorized maintainer may create a matching `vX.Y.Z` tag on that commit and publish through the existing release pipeline. Creating the tag or publishing those approved artifacts does not require another Issue or PR; any further code or version change does. Release CI must build and publish the versioned Windows assets from that tag. Verify the published release and its attached executables before announcing availability. A tag or a successful build alone is not proof that users can download the artifacts.
 
 The planned initial preview is `v0.1.0`, with `Winmux-Setup-0.1.0-x64.exe` and `Winmux-Portable-0.1.0-x64.exe`. Later releases should keep the version in both filenames. `npm run package` creates an unpacked app for local inspection; it is not evidence of installer publication. Link users to the repository's [latest release page](https://github.com/samo33ddd/winmux/releases/latest).
