@@ -6,9 +6,9 @@ For developers who live with AI agents, 24/7 on Windows.
 
 Keep your agents, shells, project files, Git changes, and browser previews in one Windows workspace. Winmux is an independent terminal multiplexer inspired by [cmux](https://cmux.com), built with Electron, TypeScript, xterm.js, and ConPTY.
 
-**v0.1.0 is an early preview.** The interface supports English and Russian. See [verification notes](docs/verification.md) for recorded runtime evidence and the limits of agent integration.
+This source tree prepares **0.2.0**, a dark workspace redesign for the existing Windows terminal workspace. The interface supports English and Russian, and all earlier workspace, terminal, process, project-tool, browser, hook, and file-preview capabilities remain available. See [verification notes](docs/verification.md) for recorded runtime evidence and the limits of agent integration.
 
-![Winmux workspace in the dark theme](docs/screenshots/workspace-dark.png)
+![Winmux dark workspace with its collapsed project rail, unified header, and split terminals](docs/screenshots/workspace-dark.png)
 
 ## What is here
 
@@ -21,18 +21,24 @@ Keep your agents, shells, project files, Git changes, and browser previews in on
 - A tabbed HTTP(S) browser with independent pages, domain-scoped cookie import, and local automation for inspecting, clicking, filling, evaluating JavaScript, and screenshots.
 - A local terminal CLI and [repository-shipped agent skills](docs/agents.md).
 
-![Winmux workspace in the light theme](docs/screenshots/workspace-light.png)
+## Workspace layout
+
+Projects live in a compact 60-pixel workspace rail. The rail keeps every workspace one click away and uses unread markers plus confirmed agent state without taking terminal space. Use the **Show workspace names** button at the bottom of the rail to expand it to 240 pixels; the expanded list can be resized with the pointer or keyboard, and the same button collapses it again.
+
+The project switcher in the top header opens the current workspace list directly. The unified header also contains terminal tabs, new-tab and agent-launch controls, the active shell or agent state, and the Files, Git, and Browser tools. The former separate tab strip and status footer are gone, while the inspector still opens beside the terminals when needed.
+
+![Winmux light workspace with a collapsed project rail and unified header](docs/screenshots/workspace-light.png)
 
 ## Download
 
-Use the [latest release page](https://github.com/samo33ddd/winmux/releases/latest) for published Windows builds. The initial v0.1.0 preview is planned to include:
+Use the [latest release page](https://github.com/samo33ddd/winmux/releases/latest) for published Windows builds. When the 0.2.0 release is available, its generated Windows x64 assets will be:
 
 | Asset | Purpose |
 | --- | --- |
-| `Winmux-Setup-0.1.0-x64.exe` | Windows x64 installer |
-| `Winmux-Portable-0.1.0-x64.exe` | Windows x64 portable executable |
+| `Winmux-Setup-0.2.0-x64.exe` | Windows x64 installer |
+| `Winmux-Portable-0.2.0-x64.exe` | Windows x64 portable executable |
 
-A version is available only when its assets appear on the release page. If the initial release has not been published yet, run from source below. Portable describes how the app is launched; local state still defaults to `%LOCALAPPDATA%/Winmux/`.
+A version is available only when its assets appear on the release page. These expected names do not establish publication. Portable describes how the app is launched; local state still defaults to `%LOCALAPPDATA%/Winmux/`.
 
 ## Run from source
 
@@ -48,17 +54,19 @@ After building, you can also double-click `Winmux.cmd`. Use `npm run dev` for re
 
 ## Daily use
 
-Create a workspace with **Ctrl+Shift+N**, choose a shell profile, and select its startup directory. The sidebar switches projects; the horizontal tabs belong to the selected project. Use **Ctrl+T** or the tab-bar plus button to add a terminal that inherits the active terminal's directory. The agent selector opens an agent in another tab of that same workspace. Split terminals with the pane toolbar or shortcuts, drag a divider to resize, and double-click a divider to make its sides equal.
+Create a workspace with **Ctrl+Shift+N**, choose a shell profile, and select its startup directory. Select projects from the workspace rail or the header's project switcher. Terminal tabs in the unified header belong to the selected project. Use **Ctrl+T** or the header plus button to add a terminal that inherits the active terminal's directory. The agent selector opens an agent in another tab of that same workspace. Split terminals with the pane toolbar or shortcuts, drag a divider to resize, and double-click a divider to make its sides equal.
 
 Use the folder, branch, and globe buttons in the top bar to open **Files**, **Git**, and **Browser**. Files shows text and image previews. Git shows the current branch, changed files, and diffs; perform edits, staging, commits, and other Git operations in a terminal. Browser opens a website or a local development server alongside your terminals.
 
 Click local paths printed in a terminal to open the same text or image preview inside Winmux. Windows absolute paths, `./` relative paths, quoted paths with spaces, `file:line` references, and local `file://` links are supported. HTTP(S) links keep their existing external-browser behavior. Winmux never changes Windows file associations or executes the selected file.
 
-![Winmux project tools](docs/screenshots/project-tools.png)
+![Winmux Files inspector beside split terminals, showing project folders and an image preview](docs/screenshots/project-tools.png)
 
 ![Local image preview inside the packaged Winmux application](docs/screenshots/file-preview.png)
 
 Select terminal text to copy it, or use the copy and paste shortcuts below. **Ctrl+C** still interrupts a terminal process. Open Settings with **Ctrl+,** for language, themes, fonts, cursor, clipboard behavior, cookie import, and project-scoped skill installation. The bell opens notifications; choosing one focuses its terminal and tab.
+
+![Winmux Settings showing six color themes, custom theme actions, and language controls](docs/screenshots/settings.png)
 
 Press **Alt** to show the application menu. In its **Winmux** submenu, **Close window** keeps terminal sessions running; **Stop all sessions and exit** asks for confirmation. **View** contains fullscreen and developer tools; **Help** opens the shortcut reference.
 
@@ -84,7 +92,9 @@ Closing the window detaches the UI from the background terminal daemon. Closing 
 
 A daemon restart or Windows reboot restores saved layout and metadata with **fresh shells**. It cannot preserve running processes or resume agent conversations, and it never replays previous commands. The process indicator reports whether a shell is running; it does not infer whether an agent is thinking, waiting for approval, or finished.
 
-The workspace and pane show the selected agent and its last confirmed state. **Agent status hooks** adds session-only hooks for supported Claude Code and modern Codex launches, reporting work, permission/input waits, and completed turns. Existing global/project configuration and Codex notification commands remain intact. Windows session hooks require PowerShell 7.3 or later; older agent versions may not support the hook options. Agents without a supported hook adapter show unknown activity until the shell confirms their exit, rather than guessing from output or silence. Commands typed manually in a shell are not automatically classified as agents.
+The unified header and selected workspace item show the agent and its last confirmed state; the collapsed rail uses a smaller state marker for the same event-derived information. **Agent status hooks** adds session-only hooks for supported Claude Code and modern Codex launches, reporting work, permission/input waits, and completed turns. Existing global/project configuration and Codex notification commands remain intact. Windows session hooks require PowerShell 7.3 or later; older agent versions may not support the hook options. Agents without a supported hook adapter show unknown activity until the shell confirms their exit, rather than guessing from output or silence. Commands typed manually in a shell are not automatically classified as agents.
+
+![Winmux unified header with terminal tabs and a local fixture agent reporting completed status](docs/screenshots/terminal-tabs-agent.png)
 
 Files and Git follow the active terminal's directory through shell integration. PowerShell keeps the user's profile and prompt; WSL Bash reports its directory through OSC 7. While a foreground program is running, the displayed directory is the last directory reported by its shell. Windows and Linux paths are separate namespaces: the folder picker selects Windows directories; enter Linux paths for WSL profiles.
 
