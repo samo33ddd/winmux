@@ -16,22 +16,19 @@ Verified on Windows 11 x64 with Node.js 24.12.0, Electron 45.3.2, PowerShell 7, 
 ## Windows 0.2.0 verification
 
 - `npm run build` passes for package version `0.2.0`.
-- `npm run test:desktop` passes against the implemented workspace UI. The current `.artifacts/desktop-report.json` records `status: passed`, 15 finding groups, and zero renderer errors. It records the 60-pixel rail expanding to 240 pixels, one header replacing the old tab band and status footer, real PowerShell/WSL output, split panes, same-PID reconnect, 1360×900 and 960×640 layouts, the 960-pixel header agent name, and the collapsed-rail agent-state marker. The 390-pixel stress capture is diagnostic; the supported minimum remains 900 pixels.
+- All local checks passed: backend, workspace, cwd-agent, profile, nine skills checks, cookies, six file-preview parser checks plus file-reader coverage, and five release-publishing checks. Build and Desktop also passed separately.
+- `npm run test:desktop` passes against the implemented workspace UI. `.artifacts/desktop-report.json` records `status: passed`, 15 finding groups, and zero renderer errors. It records the 60-pixel rail expanding to 240 pixels, one header replacing the old tab band and status footer, real PowerShell/WSL output, split panes, same-PID reconnect, 1360×900 and 960×640 layouts, the 960-pixel header agent name, and the collapsed-rail agent-state marker. The 390-pixel stress capture is diagnostic; the supported minimum remains 900 pixels.
 - The desktop run retains six themes, English/Russian controls, custom theme import/export, terminal preferences, independent terminal tabs and processes, directory-following Files/Git, embedded browser tabs and cookie scope, supported-agent hooks, and the internal file preview.
 - `node --test tests/release-workflow-regression.cjs` passes all five publishing-boundary checks: flattened artifact download, new-draft publication, existing-draft publication, malformed-asset rejection, and tag-mismatch rejection.
 - No new real-model inference or model-completion claim is made. The agent capture uses a deliberately local executable fixture.
 
-Issue #4 has independent Sol R1 PASS with no findings. The new-UI Sol R1 returned four confirmed findings: I3-R1-01 launcher drag, I3-R1-02 zero-width tabs at 960 pixels with the expanded rail, I3-R1-03 zoom restore hidden, and I3-R1-04 workspace-switcher outside click. Targeted repairs are in progress. The desktop report above predates those repairs, so this document does not claim a new-UI review pass.
+Issue #4 has independent Sol R1 PASS with no findings. Sol's targeted new-UI verification marks I3-R1-01 through I3-R1-04 resolved at source fingerprint `0ef1605365f33a237c92f8d9b7489db950267d49d926c2921fbb4d974192137f`. Its recorded runtime evidence confirms nonzero tab widths at 1360, 900, and expanded-rail 960 layouts, hover and click coverage for the launcher, visible zoom restore followed by both pane headers returning, and workspace-switcher closure on outside click, Escape, and focus loss. It reports zero renderer errors.
 
 ## Local file preview and packaged application
 
-The bounded, read-only local file preview has six link-parser tests and file-reader checks for Windows and Ubuntu. The recorded desktop run includes clicking an actual terminal image path, opening text and images through the real CLI, missing-file failure, Escape dismissal, and no extra BrowserWindow, with no renderer errors.
+The bounded, read-only local file preview passes six link-parser tests and file-reader checks for Windows and Ubuntu. The Desktop run includes clicking an actual terminal image path, opening text and images through the real CLI, missing-file failure, Escape dismissal, and no extra BrowserWindow, with no renderer errors.
 
-A local 0.2.0 packaged pre-repair probe is in progress. The package must be rebuilt from the final repaired source before its result is treated as 0.2.0 evidence. Previous packaged checks do not replace that fresh run. The fresh packaged probe must confirm ConPTY, terminal tabs, and the ASAR-packaged helper, while the CLI opens an image inside the app, returns metadata only, and reports a loaded image. This does not establish installer execution or published release availability.
-
-## Review closure
-
-Sol's targeted verification marks R1-PV-01 through R1-PV-04 resolved at source fingerprint `a1e337ed48c2013b4bbcf0df675d1858880a2504a2c6a3c7572c1781f030b671`. The original R1 findings are also resolved. This is bounded verification of the R1 repairs, not a second full review round.
+After the production build, `npx electron-builder --win nsis portable --x64 --publish never` completed successfully for 0.2.0. The local `node .artifacts/packaged-smoke.cjs` probe completed with `PACKAGED_SMOKE_OK` against the standalone executable. It exercised real ConPTY, terminal tabs, the ASAR hook helper, and the packaged CLI image path. The image opened in-app with metadata-only response data, no data URL in the response, and `naturalWidth > 0`. This verifies the packaged application but does not establish installer execution, signed-binary trust, or published release availability.
 
 ## Real CLI launch observation
 
@@ -39,7 +36,7 @@ Installed Windows Codex and Claude Code were launched through the new daemon wit
 
 ## Screenshots
 
-The six images in `docs/screenshots/` were inspected for private content. The five current 0.2.0 UI captures show the source before the four R1 repairs and will be refreshed after the final runtime pass. `workspace-dark.png` and `workspace-light.png` show the redesigned rail, unified header, status treatment, and split shells in both themes. `project-tools.png` shows the Files inspector beside the terminals. `terminal-tabs-agent.png` shows a local executable fixture reporting completed status, not a model conversation. `settings.png` shows the six themes, custom-theme actions, and language controls. `file-preview.png` remains the packaged v0.1.0 in-app preview capture and will be replaced only after a fresh packaged 0.2.0 probe is built from the repaired source.
+The six images in `docs/screenshots/` were inspected for private content and refreshed from final repaired-source runs. `workspace-dark.png` and `workspace-light.png` show the redesigned rail, unified header, status treatment, and split shells in both themes. `project-tools.png` shows the Files inspector beside the terminals. `terminal-tabs-agent.png` shows a local executable fixture reporting completed status, not a model conversation. `settings.png` shows the six themes, custom-theme actions, and language controls. `file-preview.png` shows the fresh packaged 0.2.0 application displaying Winmux's own logo through the in-app preview.
 
 ## Upgrade and remaining limits
 
