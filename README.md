@@ -1,5 +1,7 @@
 # Winmux
 
+**For developers who live with AI agents, 24/7 on Windows.**
+
 A Windows terminal workspace for AI coding agents, inspired by [cmux](https://cmux.com). An independent Electron + xterm.js + ConPTY implementation.
 
 **Early development.** This repository is being built and tested on Windows. See [verification notes](docs/verification.md) for the scope of actual tests and known gaps; a saved plan does not imply a working feature.
@@ -61,6 +63,14 @@ npm run test:desktop
 ```
 
 The desktop smoke test uses an isolated data directory, opens real Electron windows, exercises shells, and writes screenshots and a report into ignored `.artifacts/`. WSL verification depends on an installed usable distribution. Tests must not stop user sessions.
+
+## Contributing
+
+Contributions are welcome: bug reports, Windows and WSL testing, accessibility improvements, UI refinements, documentation, and agent integrations.
+
+Open an issue to discuss substantial changes, or submit a focused pull request with the problem, the resulting behavior, and the checks you actually ran. Include screenshots for UI changes and reproduction steps for bugs. Keep credentials, local sessions, terminal logs, and private data out of commits and screenshots.
+
+All changes go through pull requests. Complete code review, address blocking feedback, and wait for the required CI checks to pass before merging. Release versions and notes follow the same review process.
 
 ## Roadmap
 
