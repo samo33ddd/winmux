@@ -8,6 +8,7 @@ User-visible changes are recorded here. Release availability and downloadable as
 
 ### Added
 
+- Show verified agent identity, lifecycle state and current action for Codex, Claude, OMP, Hermes and Pi; install project-local adapters from Settings and bind shared Hermes sessions explicitly (Issues #17 and #19, merged before this release).
 - Open file previews to the left of the project tree with a keyboard and pointer resizer. Wrap and edit complete UTF-8 text up to 512 KB, save with Ctrl+S or the Save button, and reject stale external changes (Issue #22).
 - Render Markdown headings, lists, emphasis and fenced code without executing raw HTML or loading remote images. Highlight known source languages while editing and in fenced Markdown blocks (Issues #22 and #26).
 - Create pane/workspace notifications for confirmed completed agent turns, failures and process exits; repeated status observations do not duplicate them (Issue #27).
