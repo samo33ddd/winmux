@@ -1,10 +1,11 @@
-import { t } from './i18n';
+import { getLanguage, t } from './i18n';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { terminalTheme } from './appearance';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { TerminalInputQueue } from './terminalInput';
 import { classifyTerminalLink, createLocalFileLinkProvider, hideFileLinkTooltip, normalizeLocalFileLink, showFileLinkTooltip } from './localFileLinks';
 import { filePreviewErrorMessage } from './filePreviewErrors';
 import { beginPreviewIntent, invalidatePreviewOwner, isPreviewIntentCurrent, reportPreviewError } from './previewCoordinator';
@@ -12,11 +13,16 @@ import { ArrowDown, ArrowUp, Copy, Maximize2, Minimize2, Search, SplitSquareHori
 import { bridge, errorMessage, readClipboard, writeClipboard, type BackendEvent, type Direction, type Pane, type Settings, type Snapshot } from './types';
 
 export interface TerminalHandle { focus(): void; search(): void; copy(): Promise<void>; paste(): Promise<void> }
+export type PaneDropSide = 'left' | 'right' | 'top' | 'bottom';
 interface Props {
   pane: Pane; settings: Settings; visible: boolean; active: boolean; zoomed: boolean; unread: boolean; chrome?: boolean;
+  paneMoveAvailable: boolean; dragging: boolean; dropSide?: PaneDropSide;
   style: React.CSSProperties; register(id: string, handle: TerminalHandle | null): void;
   onFocus(id: string): void; onSplit(id: string, direction: Direction): void; onClose(id: string): void;
-  onZoom(id: string): void; onError(message: string): void;
+  onZoom(id: string): void; onOpenBrowser(url: string): void;
+  onPaneDragStart(event: React.DragEvent<HTMLElement>): void; onPaneDragEnd(): void;
+  onPaneDragOver(event: React.DragEvent<HTMLElement>): void; onPaneDragLeave(event: React.DragEvent<HTMLElement>): void;
+  onPaneDrop(event: React.DragEvent<HTMLElement>): void; onError(message: string): void;
 }
 
 export function TerminalPane(props: Props) {
@@ -43,22 +49,39 @@ export function TerminalPane(props: Props) {
     let pending: Extract<BackendEvent, { type: 'output' }>[] = [];
     let lastSize = '';
     setReady(false); setLoadError('');
+    const inputQueue = new TerminalInputQueue(
+      data => bridge().call('pane.input', { paneId:pane.id, data }),
+      error => { if (!disposed) current.current.onError(errorMessage(error)); },
+    );
     const openLocalFile = (value: string) => {
       const target = classifyTerminalLink(value);
-      if (target?.kind === 'file') {
-        const request = ++fileRequest;
-        const intent = beginPreviewIntent(pane.id, visibilityEpoch.current);
-        void bridge().call('file.open', { paneId:pane.id, path:target.value }).catch(error => {
-          if (!disposed
-            && current.current.visible
-            && request === fileRequest
-            && visibilityEpoch.current === intent.visibilityEpoch
-            && isPreviewIntentCurrent(intent, pane.id, visibilityEpoch.current)) {
-            reportPreviewError(intent, filePreviewErrorMessage(error));
-          }
-        });
-      }
-      else if (target?.kind === 'external') void bridge().openExternal(target.value).catch(error => current.current.onError(errorMessage(error)));
+      if (target?.kind !== 'file') return;
+      const request = ++fileRequest;
+      const intent = beginPreviewIntent(pane.id, visibilityEpoch.current);
+      void bridge().call('file.open', { paneId:pane.id, path:target.value }).catch(error => {
+        if (!disposed
+          && current.current.visible
+          && request === fileRequest
+          && visibilityEpoch.current === intent.visibilityEpoch
+          && isPreviewIntentCurrent(intent, pane.id, visibilityEpoch.current)) {
+          reportPreviewError(intent, filePreviewErrorMessage(error));
+        }
+      });
+    };
+    const activateWebLink = (event: MouseEvent, value: string) => {
+      if (!event.ctrlKey || event.button !== 0 || !/^https?:\/\//i.test(value)) return;
+      event.preventDefault();
+      current.current.onOpenBrowser(value);
+    };
+    const activateTerminalLink = (event: MouseEvent, value: string) => {
+      const target = classifyTerminalLink(value);
+      if (target?.kind === 'file') openLocalFile(target.value);
+      else if (target?.kind === 'external') activateWebLink(event, target.value);
+    };
+    const showBrowserLinkTooltip = (event: MouseEvent, value: string) => {
+      if (term.element) showFileLinkTooltip(term.element, event, getLanguage() === 'ru'
+        ? `Ctrl+Click — открыть во встроенном браузере: ${value}`
+        : `Ctrl+Click to open in the embedded browser: ${value}`);
     };
     const term = new Terminal({
       cols: current.current.pane.cols || 80, rows: current.current.pane.rows || 24,
@@ -69,8 +92,12 @@ export function TerminalPane(props: Props) {
       scrollback: current.current.settings.scrollback, allowProposedApi: true, convertEol: false,
       linkHandler: {
         allowNonHttpProtocols:true,
-        activate:(_event, value) => openLocalFile(value),
-        hover:(event, value) => { const filePath = normalizeLocalFileLink(value); if (filePath && term.element) showFileLinkTooltip(term.element, event, t('Открыть в Winmux: {0}', filePath)); },
+        activate:(event, value) => activateTerminalLink(event, value),
+        hover:(event, value) => {
+          const filePath = normalizeLocalFileLink(value);
+          if (filePath && term.element) showFileLinkTooltip(term.element, event, t('Открыть в Winmux: {0}', filePath));
+          else if (/^https?:\/\//i.test(value)) showBrowserLinkTooltip(event, value);
+        },
         leave:() => { if (term.element) hideFileLinkTooltip(term.element); },
       },
     });
@@ -84,9 +111,10 @@ export function TerminalPane(props: Props) {
     ];
     const fitAddon = new FitAddon(); const searchAddon = new SearchAddon();
     term.loadAddon(fitAddon); term.loadAddon(searchAddon);
-    term.loadAddon(new WebLinksAddon((_event, url) => {
-      if (/^https?:\/\//i.test(url)) void bridge().openExternal(url).catch(error => current.current.onError(errorMessage(error)));
-    }));
+    term.loadAddon(new WebLinksAddon(
+      (event, url) => activateWebLink(event, url),
+      { hover:(event, url) => showBrowserLinkTooltip(event, url), leave:() => { if (term.element) hideFileLinkTooltip(term.element); } },
+    ));
     term.open(mount.current); terminal.current = term; fit.current = fitAddon; search.current = searchAddon;
     const localLinks = term.registerLinkProvider(createLocalFileLinkProvider(term, openLocalFile, filePath => t('Открыть в Winmux: {0}', filePath)));
     const resize = () => {
@@ -113,15 +141,15 @@ export function TerminalPane(props: Props) {
     const unsubscribe = bridge().onEvent(event => {
       // A CLI or another window may close the pane before React unmounts it.
       // Retire pending input/resize callbacks as soon as removal is observed.
-      if (event.type === 'state' && !event.state.workspaces.some(workspace => workspace.panes.some(item => item.id === pane.id))) { disposed = true; return; }
+      if (event.type === 'state' && !event.state.workspaces.some(workspace => workspace.panes.some(item => item.id === pane.id))) {
+        disposed = true; inputQueue.close(); return;
+      }
       if (event.type !== 'output' || event.paneId !== pane.id || disposed || failed) return;
       if (!hydrated) pending.push(event); else writeOutput(event);
     });
     const input = term.onData(data => {
       if (hydrated && current.current.pane.status === 'running') {
-        void bridge().call('pane.input', { paneId: pane.id, data }).catch(error => {
-          if (!disposed) current.current.onError(errorMessage(error));
-        });
+        inputQueue.enqueue(data);
       }
     });
     let selecting = false;
@@ -164,7 +192,7 @@ export function TerminalPane(props: Props) {
       });
     }).catch(error => { if (!disposed) { failed = true; setLoadError(errorMessage(error)); pending = []; } });
     return () => {
-      disposed = true; fileRequest++; unsubscribe(); observer.disconnect(); cancelAnimationFrame(frame); input.dispose(); localLinks.dispose();
+      disposed = true; inputQueue.close(); fileRequest++; unsubscribe(); observer.disconnect(); cancelAnimationFrame(frame); input.dispose(); localLinks.dispose();
       invalidatePreviewOwner(pane.id);
       mount.current?.removeEventListener('focusin', onFocus);
       mount.current?.removeEventListener('pointerdown', selectionStart);
@@ -195,8 +223,13 @@ export function TerminalPane(props: Props) {
     setMatch((previous ? search.current?.findPrevious(query, { incremental: true }) : search.current?.findNext(query, { incremental: true })) ?? false);
   }
   function closeSearch() { setSearchOpen(false); search.current?.clearDecorations(); setMatch(null); terminal.current?.focus(); }
-  return <section className={`terminal-pane ${active ? 'is-active' : ''} ${props.unread ? 'has-attention' : ''} ${chrome ? '' : 'is-quiet'}`} style={{ ...style, display: visible ? undefined : 'none' }} data-pane-id={pane.id} data-testid="terminal-pane" aria-label={t("Терминал {0}", pane.title)} onPointerDown={() => props.onFocus(pane.id)}>
-    {chrome && <div className="pane-header">
+  return <section className={`terminal-pane ${active ? 'is-active' : ''} ${props.unread ? 'has-attention' : ''} ${chrome ? '' : 'is-quiet'} ${props.dragging ? 'is-dragging' : ''}`} style={{ ...style, display: visible ? undefined : 'none' }} data-pane-id={pane.id} data-testid="terminal-pane" aria-label={t("Терминал {0}", pane.title)} onPointerDown={() => props.onFocus(pane.id)} onDragOver={props.onPaneDragOver} onDragLeave={props.onPaneDragLeave} onDrop={props.onPaneDrop}>
+    {props.dropSide && <div className={`pane-drop-preview ${props.dropSide}`} aria-hidden="true" />}
+    {chrome && <div className="pane-header" draggable={props.paneMoveAvailable} onDragStart={event => {
+      if (!props.paneMoveAvailable) { event.preventDefault(); return; }
+      if ((event.target as HTMLElement).closest('.pane-tools')) { event.preventDefault(); return; }
+      props.onPaneDragStart(event);
+    }} onDragEnd={props.onPaneDragEnd}>
       <span className={`process-dot ${pane.status}`} title={pane.status === 'running' ? t("Процесс запущен{0}", pane.pid ? ` · PID ${pane.pid}` : '') : t("Процесс завершён · код {0}", pane.exitCode ?? t("неизвестен"))} />
       <span className="pane-title" title={t("{0}\nСтартовый каталог: {1}", pane.title, pane.cwd)}>{pane.title}</span>
       {props.unread && <span className="unread-dot" aria-label={t("Непрочитанное уведомление")} title={t("Есть непрочитанное уведомление")} />}

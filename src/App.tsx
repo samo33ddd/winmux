@@ -5,18 +5,19 @@ import { BrandMark } from './BrandMark';
 import { AgentStatus, activityLabel, agentActionLabel, agentName } from './AgentStatus';
 import { assertFilesNotSaving, pruneFileDrafts } from './fileDrafts';
 import { activeTab, paneIds, paneTab, selectedPane, terminalTabLabel, terminalTabs } from './workspaceTabs';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent } from 'react';
 import { ResizeHandle, usePanelWidth } from './ResizeHandle';
 import { Bell, Check, ChevronDown, CircleAlert, Folder, FolderOpen, GitBranch, Globe, Keyboard, Minus, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Search, Settings2, SplitSquareHorizontal, SplitSquareVertical, Sun, TerminalSquare, X } from 'lucide-react';
 import { ConfirmClose, CreateWorkspace, Modal, RenameWorkspace, profileLabel } from './Dialogs';
 import { WorkspaceView } from './WorkspaceView';
 import { WorkspaceTools, type ToolTab } from './WorkspaceTools';
-import type { TerminalHandle } from './TerminalPane';
+import type { PaneDropSide, TerminalHandle } from './TerminalPane';
 import { subscribePreviewError } from './previewCoordinator';
 import { bridge, errorMessage, type Direction, type Environment, type Pane, type Settings, type State, type TerminalTab, type Workspace } from './types';
 
 type Dialog = { type: 'create' } | { type: 'rename'; workspace: Workspace } | { type: 'settings' } | { type: 'shortcuts' } | { type: 'close-pane'; pane: Pane } | { type: 'close-tab'; workspaceId: string; tab: TerminalTab } | { type: 'close-workspace'; workspace: Workspace } | null;
 type BannerError = { message: string; previewToken?: number };
+type PaneDrag = { workspaceId: string; paneId: string };
 const agentHooksStorageKey = 'winmux.agent-status-hooks';
 function readAgentHooksPreference() {
   try { return localStorage.getItem(agentHooksStorageKey) !== 'false'; }
@@ -34,6 +35,7 @@ export default function App() {
   const [activeWorkspaceId, setActiveWorkspace] = useState<string>();
   const [activePanes, setActivePanes] = useState<Record<string, string>>({});
   const [zoomed, setZoomed] = useState<Record<string, string | undefined>>({});
+  const [paneDrag, setPaneDrag] = useState<PaneDrag | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null); const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [toolTab, setToolTab] = useState<ToolTab | null>(null);
   const [toolsExpanded, setToolsExpanded] = useState(false);
@@ -53,16 +55,30 @@ export default function App() {
   const handles = useRef(new Map<string, TerminalHandle>());
   const focusRequest = useRef<{ workspaceId: string; paneId: string } | null>(null);
   const initializedSelection = useRef(false);
+  const dragTabSwitch = useRef<string | null>(null);
   const stateRef = useRef(state); stateRef.current = state;
   const workspace = state?.workspaces.find(item => item.id === activeWorkspaceId) ?? state?.workspaces[0];
   const activePane = workspace ? selectedPane(workspace, activePanes) : undefined;
   const tabsAvailable = environment?.capabilities?.terminalTabs === true;
+  const paneMoveAvailable = environment?.capabilities?.paneMove === true;
+  useEffect(() => {
+    if (!paneDrag) return;
+    const owner = state?.workspaces.find(item => item.id === paneDrag.workspaceId);
+    if (!paneMoveAvailable || !owner?.panes.some(pane => pane.id === paneDrag.paneId)) {
+      dragTabSwitch.current = null;
+      setPaneDrag(null);
+    }
+  }, [state, paneDrag, paneMoveAvailable]);
   const hooksAvailable = environment?.capabilities?.sessionAgentHooks === true && environment.agents?.some(agent => agent.available && Boolean(agent.hookAdapter));
   const nativeCodex = environment?.capabilities?.nativeCodex === true;
   const preferences = useSyncExternalStore(subscribePreferences, getPreferences, getPreferences);
   const settings: Settings = { ...defaults, ...state?.settings, ...preferences, fontSize:state?.settings.fontSize ?? 14, theme:preferences.theme ?? state?.settings.theme ?? 'dark' };
   const current = useRef({ workspace, activePane, dialog, notificationsOpen, switcherOpen }); current.current = { workspace, activePane, dialog, notificationsOpen, switcherOpen };
   const reportError = useCallback((message: string) => setError(message), []);
+  const openBrowser = useCallback((workspaceId: string, url: string) => {
+    setActiveWorkspace(workspaceId); setToolTab('browser'); setNotificationsOpen(false); setDialog(null);
+    setBrowserRequests(previous => ({ ...previous, [workspaceId]: { url, serial: (previous[workspaceId]?.serial ?? 0) + 1 } }));
+  }, []);
   useEffect(() => subscribePreviewError(event => setBannerError(current => (
     event.type === 'set'
       ? { message:event.message, previewToken:event.token }
@@ -94,6 +110,66 @@ export default function App() {
     }
   }, []);
   const focusTerminal = (id?: string) => { if (id) requestAnimationFrame(() => handles.current.get(id)?.focus()); };
+  function endPaneDrag() {
+    dragTabSwitch.current = null;
+    setPaneDrag(null);
+  }
+  function startPaneDrag(workspaceId: string, paneId: string, event: DragEvent<HTMLElement>) {
+    const owner = stateRef.current?.workspaces.find(item => item.id === workspaceId);
+    if (!paneMoveAvailable || !owner?.panes.some(pane => pane.id === paneId)) {
+      event.preventDefault();
+      return;
+    }
+    dragTabSwitch.current = null;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-winmux-pane', paneId);
+    setPaneDrag({ workspaceId, paneId });
+  }
+  function startTabDrag(workspaceId: string, tabId: string, event: DragEvent<HTMLButtonElement>) {
+    const owner = stateRef.current?.workspaces.find(item => item.id === workspaceId);
+    const tab = owner && terminalTabs(owner).find(item => item.id === tabId);
+    const pane = owner && tab && selectedPane({ ...owner, activeTabId:tab.id }, activePanes);
+    if (!pane) {
+      event.preventDefault();
+      return;
+    }
+    startPaneDrag(workspaceId, pane.id, event);
+  }
+  async function switchDragTab(workspaceId: string, tabId: string) {
+    if (!paneMoveAvailable || paneDrag?.workspaceId !== workspaceId) return;
+    const owner = stateRef.current?.workspaces.find(item => item.id === workspaceId);
+    const tab = owner && terminalTabs(owner).find(item => item.id === tabId);
+    if (!owner || !tab || activeTab(owner).id === tabId) return;
+    const key = `${workspaceId}:${tabId}`;
+    if (dragTabSwitch.current === key) return;
+    dragTabSwitch.current = key;
+    try {
+      await bridge().call('tab.select', { workspaceId, tabId });
+      await refresh();
+    } catch (error) {
+      setError(errorMessage(error));
+    } finally {
+      if (dragTabSwitch.current === key) dragTabSwitch.current = null;
+    }
+  }
+  async function movePane(workspaceId: string, paneId: string, targetPaneId: string, side: PaneDropSide) {
+    endPaneDrag();
+    const owner = stateRef.current?.workspaces.find(item => item.id === workspaceId);
+    if (!paneMoveAvailable || !owner || paneId === targetPaneId
+      || !owner.panes.some(pane => pane.id === paneId)
+      || !owner.panes.some(pane => pane.id === targetPaneId)) return;
+    try {
+      await bridge().call('pane.move', { paneId, targetPaneId, side });
+      const next = await refresh();
+      const movedOwner = next.workspaces.find(item => item.id === workspaceId);
+      const targetTab = movedOwner && paneTab(movedOwner, targetPaneId);
+      if (movedOwner && targetTab && movedOwner.panes.some(pane => pane.id === paneId)) {
+        await selectTerminalTab(workspaceId, targetTab.id, paneId);
+      }
+    } catch (error) {
+      setError(errorMessage(error));
+    }
+  }
   async function updateSettings(values: Partial<Settings>) {
     try {
       const {fontSize, activeWorkspaceId, ...appearance} = values;
@@ -142,10 +218,8 @@ export default function App() {
         else if (event.type === 'connection-error') setError(event.message);
         else if (event.type === 'browser-open') {
           const id = event.workspaceId ?? current.current.workspace?.id ?? stateRef.current?.workspaces[0]?.id;
-          if (id) {
-            setActiveWorkspace(id); setToolTab('browser'); setNotificationsOpen(false); setDialog(null);
-            setBrowserRequests(previous => ({ ...previous, [id]: { url: event.url, serial: (previous[id]?.serial ?? 0) + 1 } }));
-          } else setError(t("Сначала создайте рабочее пространство для браузера."));
+          if (id) openBrowser(id, event.url);
+          else setError(t("Сначала создайте рабочее пространство для браузера."));
         }
         else if (event.type === 'focus-pane') {
           focusRequest.current = { workspaceId: event.workspaceId, paneId: event.paneId };
@@ -163,7 +237,7 @@ export default function App() {
       }).catch(error => { if (alive) setError(errorMessage(error)); }).finally(() => { if (alive) setLoading(false); });
     } catch (error) { setError(errorMessage(error)); setLoading(false); }
     return () => { alive = false; unsubscribe(); };
-  }, [reload]);
+  }, [reload, openBrowser]);
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme;
     const palette = paletteFor(settings.theme), root = document.documentElement;
@@ -338,7 +412,9 @@ export default function App() {
           {workspace && terminalTabs(workspace).map(tab => {
             const label = tabLabel(workspace, tab);
             return <div key={tab.id} className={`workspace-top-tab ${activeTab(workspace).id===tab.id?'selected':''}`}>
-            <button id={`terminal-tab-${tab.id}`} role="tab" aria-selected={activeTab(workspace).id===tab.id} aria-controls={`terminal-panel-${workspace.id}`} tabIndex={activeTab(workspace).id===tab.id?0:-1} data-testid="terminal-tab" data-tab-id={tab.id} data-workspace-id={workspace.id} title={label} onClick={event=>void selectTerminalTab(workspace.id,tab.id,undefined,event.detail > 0)}><TerminalSquare /><span>{label}</span>{state?.notifications.some(notice => !notice.read && paneIds(tab.root).includes(notice.paneId)) && <span className="unread-dot" aria-label={t('Есть непрочитанные уведомления')} />}</button>
+            <button id={`terminal-tab-${tab.id}`} role="tab" aria-selected={activeTab(workspace).id===tab.id} aria-controls={`terminal-panel-${workspace.id}`} tabIndex={activeTab(workspace).id===tab.id?0:-1} data-testid="terminal-tab" data-tab-id={tab.id} data-workspace-id={workspace.id} title={label} draggable={paneMoveAvailable}
+              onDragStart={event => startTabDrag(workspace.id, tab.id, event)} onDragEnter={() => void switchDragTab(workspace.id, tab.id)} onDragEnd={endPaneDrag}
+              onClick={event=>void selectTerminalTab(workspace.id,tab.id,undefined,event.detail > 0)}><TerminalSquare /><span>{label}</span>{state?.notifications.some(notice => !notice.read && paneIds(tab.root).includes(notice.paneId)) && <span className="unread-dot" aria-label={t('Есть непрочитанные уведомления')} />}</button>
             <button className="icon-button" data-testid="terminal-tab-close" data-tab-id={tab.id} disabled={!tabsAvailable} aria-label={t('Закрыть вкладку {0}',label)} title={t('Закрыть вкладку и её терминалы')} onClick={()=>setDialog({type:'close-tab',workspaceId:workspace.id,tab})}><X /></button>
           </div>;
           })}
@@ -368,7 +444,7 @@ export default function App() {
       {error && <div className="error-banner" role="alert"><CircleAlert /><span>{error.message}</span><button className="text-button" onClick={() => setReload(value => value + 1)}>{t("Переподключить")}</button><button className="icon-button" aria-label={t("Скрыть ошибку")} onClick={() => setError('')}><X /></button></div>}
       <div className="workbench">
       <div className="workspace-stage" aria-busy={loading || working}>
-        {state?.workspaces.map(item => <WorkspaceView key={item.id} workspace={item} settings={settings} visible={workspace?.id === item.id} activePane={selectedPane(item, activePanes)?.id} zoomed={zoomed[item.id]} unreadPaneIds={state.notifications.filter(notice => !notice.read && notice.workspaceId === item.id).map(notice => notice.paneId)} register={register} onFocus={focusPane} onSplit={(id, direction) => void split(id, direction)} onClose={closePane} onZoom={toggleZoom} onRatio={saveRatio} onError={reportError} />)}
+        {state?.workspaces.map(item => <WorkspaceView key={item.id} workspace={item} settings={settings} visible={workspace?.id === item.id} activePane={selectedPane(item, activePanes)?.id} zoomed={zoomed[item.id]} unreadPaneIds={state.notifications.filter(notice => !notice.read && notice.workspaceId === item.id).map(notice => notice.paneId)} register={register} onFocus={focusPane} onSplit={(id, direction) => void split(id, direction)} onClose={closePane} onZoom={toggleZoom} onRatio={saveRatio} onOpenBrowser={url => openBrowser(item.id, url)} paneMoveAvailable={paneMoveAvailable} draggingPaneId={paneDrag?.workspaceId === item.id ? paneDrag.paneId : undefined} onPaneDragStart={(paneId,event) => startPaneDrag(item.id,paneId,event)} onPaneDragEnd={endPaneDrag} onMovePane={(paneId,targetPaneId,side) => void movePane(item.id,paneId,targetPaneId,side)} onError={reportError} />)}
         {!state?.workspaces.length && <div className="empty-state" data-testid="empty-state"><div className="empty-symbol"><BrandMark /></div><h1>{loading ? t("Подключение к Winmux") : t("Место для вашей работы")}</h1><p>{loading ? t("Получаем сессии и доступные среды…") : t("Откройте проект, запустите терминал. Разделяйте панели и держите нужные задачи рядом.")}</p>{!loading && <><button className="button primary create-first" data-testid="create-first-workspace" disabled={!environment} onClick={() => setDialog({ type: 'create' })}><Plus />{t("Новое рабочее пространство")}</button><span className="empty-shortcut">Ctrl+Shift+N</span></>}</div>}
         {notificationsOpen && <section className="notification-panel" aria-label={t("Уведомления")} data-testid="notification-panel"><div className="notification-heading"><h2>{t("Уведомления")}</h2><button className="icon-button" title={t("Прочитать все")} aria-label={t("Прочитать все уведомления")} disabled={!unread} onClick={() => void bridge().call('notifications.read').catch(error => setError(errorMessage(error)))}><Check /></button><button className="icon-button" aria-label={t("Закрыть уведомления")} onClick={() => setNotificationsOpen(false)}><X /></button></div><div className="notification-list">{state?.notifications.length ? [...state.notifications].sort((a, b) => b.createdAt - a.createdAt).map(notice => {
           const owner = state.workspaces.find(item => item.id === notice.workspaceId); const exists = owner?.panes.some(pane => pane.id === notice.paneId);

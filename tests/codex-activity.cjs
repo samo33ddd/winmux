@@ -138,6 +138,36 @@ test('an exact hook updates the shared tracker and a non-running state clears it
   await controller.stop();
 });
 
+test('a terminal failure clears hook tool activity even while hook state owns the pane', async () => {
+  const panes = [pane()];
+  const { controller, emit } = harness(panes);
+  await controller.refresh();
+  const prompt = await controller.hook({
+    agentId: 'codex', event: 'UserPromptSubmit', sessionId: 'session-1', paneId: 'pane',
+  });
+  assert.equal(prompt.applied, true);
+  const read = await controller.hook({
+    agentId: 'codex', event: 'PreToolUse', sessionId: 'session-1', paneId: 'pane',
+    phase: 'start', toolName: 'Read', toolId: 'read-1',
+  });
+  assert.equal(read.applied, true);
+  assert.equal(panes[0].agentActivity, 'reading');
+
+  emit({ method: 'turn/started', params: { threadId: root.id, turn: { id: 'turn-1' } } });
+  assert.equal(panes[0].agentActivity, 'reading', 'native turn start cannot replace hook-owned activity');
+  emit({ method: 'turn/completed', params: { threadId: root.id, turn: { id: 'turn-1', status: 'failed' } } });
+  assert.equal(panes[0].agentState, 'failed');
+  assert.equal(panes[0].agentActivity, undefined);
+
+  const next = await controller.hook({
+    agentId: 'codex', event: 'UserPromptSubmit', sessionId: 'session-1', paneId: 'pane',
+  });
+  assert.equal(next.applied, true);
+  assert.equal(panes[0].agentState, 'running');
+  assert.equal(panes[0].agentActivity, 'thinking', 'a new turn cannot inherit the completed Read action');
+  await controller.stop();
+});
+
 test('read-only forwarding and the shared process snapshot add no control calls', async () => {
   const seen = [];
   const daemon = new EventEmitter();

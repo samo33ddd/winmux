@@ -4,6 +4,29 @@ const { fileURLToPath } = require('node:url');
 const { fail, string } = require('./shared.cjs');
 
 const psQuote = value => `'${value.replace(/'/g, "''")}'`;
+const WINDOWS_COMMAND_LINE_LIMIT = 30000;
+
+function windowsQuote(value) {
+  if (!/[\s"]/.test(value)) return value;
+  let quoted = '"', slashes = 0;
+  for (const character of value) {
+    if (character === '\\') { slashes += 1; continue; }
+    if (character === '"') { quoted += '\\'.repeat(slashes * 2 + 1) + '"'; slashes = 0; continue; }
+    quoted += '\\'.repeat(slashes) + character;
+    slashes = 0;
+  }
+  return quoted + '\\'.repeat(slashes * 2) + '"';
+}
+
+function windowsCommandLineLength(command, args) {
+  return windowsQuote(command).length + (args.length ? 1 + args.map(windowsQuote).reduce((total, value) => total + value.length + 1, 0) : 0);
+}
+
+function boundWindowsCommandLine(command, args) {
+  const length = windowsCommandLineLength(command, args);
+  if (length > WINDOWS_COMMAND_LINE_LIMIT) fail('AGENT_LAUNCH_TOO_LARGE', `Windows agent launch is ${length} UTF-16 units; the safe limit is ${WINDOWS_COMMAND_LINE_LIMIT}`);
+  return args;
+}
 const powershellInit = String.raw`[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
@@ -96,7 +119,8 @@ try {
   $global:LASTEXITCODE = $winmuxCode
 }` : '';
   const script = powershellInit + invocation;
-  return ['-NoLogo', ...(profile.args.includes('-NoProfile') ? ['-NoProfile'] : []), '-NoExit', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
+  const args = ['-NoLogo', ...(profile.args.includes('-NoProfile') ? ['-NoProfile'] : []), '-NoExit', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
+  return boundWindowsCommandLine(profile.command, args);
 }
 function cwdFromOsc(data, environment) {
   if (typeof data !== 'string' || data.length > 16384) return null;
@@ -117,4 +141,4 @@ function cwdFromOsc(data, environment) {
     return cwd.length <= 4096 && !/[\x00-\x1f\x7f]/.test(cwd) ? cwd : null;
   } catch { return null; }
 }
-module.exports = { selectedAgent, shellArgs, cwdFromOsc };
+module.exports = { selectedAgent, shellArgs, cwdFromOsc, windowsCommandLineLength };

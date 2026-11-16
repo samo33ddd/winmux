@@ -14,6 +14,8 @@ const { connect } = require('../electron/client.cjs');
 const execFileAsync = promisify(execFile); // Run the CLI directly with argument arrays.
 const root = path.resolve(__dirname, '..');
 const dataDir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'winmux-smoke-'));
+const stateFile = path.join(dataDir, 'state.json');
+const stateMaxBytes = 4 * 1024 * 1024;
 const pipeName = process.platform === 'win32' ? `\\\\.\\pipe\\winmux-smoke-${randomUUID()}` : path.join(dataDir, 'ipc.sock');
 const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', WINMUX_NO_PROFILE: '1', WINMUX_DATA_DIR: dataDir, WINMUX_PIPE_NAME: pipeName };
 const options = { dataDir, pipeName };
@@ -56,6 +58,13 @@ async function cli(...args) {
 async function screenContains(paneId, marker) {
   return eventually(async () => { const screen = await client.request('pane.screen', { paneId }); return screen.text.includes(marker) && screen; }, `screen contains ${marker}`);
 }
+async function readPtyByte(paneId, byte, marker) {
+  const command = `node -e "process.stdin.setRawMode(true); process.stdout.write('${marker}_' + 'READY\\n'); process.stdin.once('data', b => { console.log('${marker}_BYTE_' + b[0]); process.exit(0); })"\r`;
+  await client.request('pane.input', { paneId, data: command });
+  await screenContains(paneId, `${marker}_READY`);
+  await client.request('pane.input', { paneId, data: byte });
+  await screenContains(paneId, `${marker}_BYTE_${byte.charCodeAt(0)}`);
+}
 async function raw(frame) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(pipeName); sockets.add(socket); let text = '';
@@ -80,7 +89,16 @@ async function run() {
   await client.request('state'); log('unauthorized / malformed Unicode token / oversized frame isolation');
   await assert.rejects(client.request('workspace.create', { cwd: path.join(dataDir, 'missing') }), { code: 'INVALID_CWD' });
   await assert.rejects(client.request('workspace.create', { profileId: 'nonexistent' }), { code: 'PROFILE_UNAVAILABLE' });
-  log('actual cwd and profile validation');
+  const longCwd = path.join(dataDir, 'b'.repeat(121));
+  fs.mkdirSync(longCwd);
+  const longWorkspace = await client.request('workspace.create', { cwd: longCwd });
+  assert.equal(longWorkspace.name, 'b'.repeat(120));
+  const whitespaceCwd = path.join(dataDir, `${' '.repeat(121)}Tail`);
+  fs.mkdirSync(whitespaceCwd);
+  const whitespaceWorkspace = await client.request('workspace.create', { cwd: whitespaceCwd });
+  assert.equal(whitespaceWorkspace.name, 'Tail');
+  await client.request('workspace.close', { workspaceId: whitespaceWorkspace.id });
+  log('actual cwd and profile validation + bounded automatic workspace names');
 
   const workspace = JSON.parse(await cli('new', '--name', 'Backend smoke', '--cwd', dataDir));
   const pane = workspace.panes[0], pid = pane.pid;
@@ -98,10 +116,17 @@ async function run() {
   assert.equal(resized.cols, 91); assert.equal(resized.rows, 27);
   await assert.rejects(client.request('pane.resize', { paneId: pane.id, cols: 999, rows: 27 }), { code: 'INVALID_ARGUMENT' });
   await assert.rejects(client.request('pane.input', { paneId: pane.id, data: 'x'.repeat(65537) }), { code: 'INVALID_ARGUMENT' });
+  await assert.rejects(client.request('pane.input', { paneId: pane.id, data: '🙂'.repeat(16385) }), { code: 'LIMIT_REACHED' });
   log('resize + input bounds');
 
   // Cursor movement, Unicode and alternate screen must be interpreted, not replayed as text.
   if (windows) {
+    await client.request('pane.input', { paneId: pane.id, data: "Write-Output ('NUL_KEY_' + 'READY'); $k=[Console]::ReadKey($true); Write-Output ('NUL_KEY_' + [int]$k.KeyChar)\r" });
+    await screenContains(pane.id, 'NUL_KEY_READY');
+    await client.request('pane.input', { paneId: pane.id, data: '\0' });
+    await screenContains(pane.id, 'NUL_KEY_0');
+    await readPtyByte(pane.id, '\x01', 'SOH');
+    log('real ConPTY NUL console-key event and SOH byte delivery');
     await client.request('pane.input', { paneId: pane.id, data: '[Console]::Write("`e[?1049h`e[2J`e[HOLD`e[HNEW`e[2;1H" + [char]0x0416 + [char]0x6F22 + [char]::ConvertFromUtf32(0x1F642) + "`r`n")\r' });
     await screenContains(pane.id, 'Ж漢🙂');
     const alternate = await client.request('pane.screen', { paneId: pane.id }); assert.ok(alternate.text.includes('NEW')); assert.ok(!alternate.text.includes('OLD'));
@@ -154,10 +179,34 @@ async function run() {
   const second = JSON.parse(await cli('split', pane.id, 'vertical'));
   let current = (await client.request('state')).workspaces.find(w => w.id === workspace.id);
   assert.equal(current.root.direction, 'vertical');
+  const movingTab = await client.request('tab.create', { workspaceId:workspace.id, sourcePaneId:pane.id });
+  const movedPane = (await client.request('state')).workspaces.find(w => w.id === workspace.id).panes.find(p => p.id === movingTab.root.paneId);
+  await client.request('pane.input', { paneId:movedPane.id, data:windows ? "Write-Output ('MOVE_' + 'READY')\r" : "printf 'MOVE_%s\\n' READY\r" });
+  await screenContains(movedPane.id, 'MOVE_READY');
+  const layoutBeforeInvalid = JSON.stringify((await client.request('state')).workspaces.map(w => w.tabs));
+  for (const params of [
+    { paneId:pane.id, targetPaneId:pane.id, side:'left' },
+    { paneId:pane.id, targetPaneId:longWorkspace.panes[0].id, side:'left' },
+    { paneId:pane.id, targetPaneId:second.id, side:'middle' },
+    { paneId:pane.id, targetPaneId:'missing', side:'right' },
+  ]) await assert.rejects(client.request('pane.move', params));
+  assert.equal(JSON.stringify((await client.request('state')).workspaces.map(w => w.tabs)), layoutBeforeInvalid);
+  const moved = await client.request('pane.move', { paneId:movedPane.id, targetPaneId:second.id, side:'right' });
+  assert.equal(moved.workspaceId, workspace.id);
+  current = (await client.request('state')).workspaces.find(w => w.id === workspace.id);
+  assert.equal(current.tabs.length, 1);
+  assert.equal(current.panes.find(p => p.id === movedPane.id).pid, movedPane.pid);
+  await client.request('pane.move', { paneId:movedPane.id, targetPaneId:pane.id, side:'top' });
+  current = (await client.request('state')).workspaces.find(w => w.id === workspace.id);
+  assert.equal(current.root.first.first.paneId, movedPane.id);
+  assert.equal(current.panes.find(p => p.id === pane.id).pid, pid);
+  assert.equal(current.panes.find(p => p.id === second.id).pid, second.pid);
+  await screenContains(movedPane.id, 'MOVE_READY');
+  log('same-tab and cross-tab pane.move preserve IDs, PIDs and output; invalid moves leave layouts unchanged');
   await client.request('layout.ratio', { workspaceId: workspace.id, splitId: current.root.id, ratio: 0.62 });
   await cli('rpc', 'workspace.rename', JSON.stringify({ workspaceId: workspace.id, name: 'Restored workspace' }));
   await client.request('settings.update', { theme: 'light', fontSize: 16, activeWorkspaceId: workspace.id });
-  const notification = JSON.parse(await cli('notify', pane.id, '--title', 'CLI notification', '--body', 'Ready'));
+  let notification = JSON.parse(await cli('notify', pane.id, '--title', 'CLI notification', '--body', 'Ready'));
   await client.request('notifications.read', { id: notification.id });
   assert.ok((await client.request('state')).notifications.find(n => n.id === notification.id).read);
   if (windows) {
@@ -165,6 +214,18 @@ async function run() {
     await eventually(async () => (await client.request('state')).notifications.some(n => n.title === 'OSC smoke'), 'OSC notification');
   }
   log('split/layout/rename/settings/CLI notifications/OSC');
+
+  const escapedBody = '\x01'.repeat(4096);
+  for (let index = 0; index < 200; index++) {
+    await client.request('notify', { paneId: pane.id, title: `Escaped ${index}`, body: escapedBody });
+  }
+  const escapedNotifications = (await client.request('state')).notifications;
+  assert.ok(escapedNotifications.length > 0 && escapedNotifications.length < 200);
+  assert.ok(escapedNotifications.every(notification => notification.body.length <= 4096));
+  assert.ok(fs.statSync(stateFile).size <= stateMaxBytes);
+  log('escaped notification history retained within serialized byte budget', `${escapedNotifications.length} notifications`);
+  notification = await client.request('notify', { paneId:pane.id, title:'Retained after budget', body:'Ready' });
+  await client.request('notifications.read', { id:notification.id });
 
   const wsl = environment.profiles.find(p => p.environment === 'wsl');
   if (wsl) {
@@ -182,10 +243,29 @@ async function run() {
   const vanished = path.join(dataDir, 'vanished'); fs.mkdirSync(vanished);
   const missingWorkspace = await client.request('workspace.create', { name: 'Missing on restore', cwd: vanished });
   const oldSecondPid = second.pid;
-  await stop(); fs.rmdirSync(vanished); await launch();
+  await stop();
+  const legacyState = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  legacyState.state.workspaces.find(workspace => workspace.id === longWorkspace.id).name = 'b'.repeat(121);
+  for (let index = 0; index < 200; index++) {
+    legacyState.state.notifications.push({
+      id: randomUUID(), paneId: pane.id, workspaceId: workspace.id, title: `Legacy escaped ${index}`,
+      body: escapedBody, createdAt: Date.now() + index, read: false,
+    });
+  }
+  legacyState.state.notifications.push({ ...notification, read:true });
+  fs.writeFileSync(stateFile, JSON.stringify(legacyState), 'utf8');
+  assert.ok(fs.statSync(stateFile).size > stateMaxBytes);
+  fs.rmdirSync(vanished);
+  await launch();
   const restored = await client.request('state');
   current = restored.workspaces.find(w => w.id === workspace.id);
-  assert.equal(current.name, 'Restored workspace'); assert.equal(current.panes.length, 2); assert.equal(current.root.ratio, 0.62);
+  const recoveredLongWorkspace = restored.workspaces.find(w => w.id === longWorkspace.id);
+  assert.equal(recoveredLongWorkspace.name, 'b'.repeat(120));
+  assert.ok(fs.statSync(stateFile).size <= stateMaxBytes);
+  assert.ok(fs.readdirSync(dataDir).some(name => name.startsWith('state.json.recovery-')));
+  assert.equal(current.name, 'Restored workspace'); assert.equal(current.panes.length, 3); assert.equal(current.root.ratio, 0.62);
+  assert.equal(current.root.first.first.paneId, movedPane.id);
+  assert.notEqual(current.panes.find(p => p.id === movedPane.id).pid, movedPane.pid);
   assert.equal(current.panes[0].id, pane.id); assert.notEqual(current.panes[0].pid, pid); assert.notEqual(current.panes[1].pid, oldSecondPid);
   assert.equal(restored.settings.theme, 'light'); assert.equal(restored.settings.fontSize, 16);
   assert.ok(restored.notifications.some(n => n.id === notification.id && n.read));
@@ -195,6 +275,7 @@ async function run() {
   assert.ok(!(await client.request('pane.screen', { paneId: pane.id })).text.includes(floodEnd));
   log('daemon restart restores IDs/layout/settings/notifications with fresh shells; invalid cwd is visible');
 
+  await client.request('pane.close', { paneId:movedPane.id });
   await client.request('pane.input', { paneId: second.id, data: 'exit 7\r' });
   await eventually(async () => (await client.request('state')).workspaces.find(w => w.id === workspace.id).panes.find(p => p.id === second.id).status === 'exited', 'process exit');
   const exitedPane = (await client.request('state')).workspaces.find(w => w.id === workspace.id).panes.find(p => p.id === second.id);
@@ -203,6 +284,7 @@ async function run() {
   await client.request('pane.close', { paneId: second.id });
   assert.equal((await client.request('state')).workspaces.find(w => w.id === workspace.id).root.type, 'leaf');
   await client.request('pane.close', { paneId: pane.id });
+  await client.request('workspace.close', { workspaceId: longWorkspace.id });
   await client.request('workspace.close', { workspaceId: missingWorkspace.id });
   assert.equal((await client.request('state')).workspaces.length, 0);
   log('exit code + closed-input rejection + split collapse + last pane removes workspace');
