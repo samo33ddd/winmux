@@ -102,6 +102,11 @@ record; read the new task from `list` or call `task.open` with its `taskId` when
 needed. `task.open` reuses an open workspace or opens a ready task, restoring a
 clean archived worktree from its retained branch.
 
+If an interrupted attach remains in `phase: "creating"`, inspect the worktree
+and archive the incomplete task before attaching it again. The old metadata
+remains archived; its imported worktree and branch are retained. Ready task
+records still reserve their worktree even when archived.
+
 Close the task workspace before archiving it. Use the desktop close action when
 file drafts may be unsaved: it checks drafts and pending saves. The raw
 `workspace.close` RPC does not perform that desktop check and stops its panes.

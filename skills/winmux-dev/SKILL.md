@@ -109,6 +109,8 @@ The task RPC surface is:
 - `task.open` returns an existing workspace, opens a ready task, or restores a
   removed managed worktree on its retained branch. It must reject incomplete
   tasks and missing branches without fabricating replacement history.
+  Archive an interrupted incomplete attach to release that failed reservation
+  before attaching again. Ready archived tasks retain their reservation.
 - `task.archive` requires the task workspace and delivery operation to be
   inactive. It removes a managed worktree only when ownership is unambiguous and
   the worktree is clean, including tracked, untracked, and ignored data. Index
@@ -144,6 +146,10 @@ refer to `$winmux-terminal` and the delivery RPCs. Other agents may still call
 the RPC, but task state marks them `deliverySupport: "unsupported"` and must not
 claim automatic delivery instructions were installed. Agent completion is not
 PR readiness, review, CI, or merge evidence.
+
+Daemon restoration starts fresh shells without agent replay, but preserves
+`WINMUX_TASK_ID` for panes in an active task workspace. Verify both Windows and
+WSL after changing restore or terminal environment construction.
 
 Exercise these checks when this contract changes:
 

@@ -134,8 +134,7 @@ async function startServer(options = {}) {
     ({ Terminal } = require('@xterm/headless'));
     ({ SerializeAddon } = require('@xterm/addon-serialize'));
   } catch (error) { releaseLock(); throw error; }
-  const clients = new Set(), runtimes = new Map(), deliveries = new Set(), archives = new Set(), taskOperations = new Set(), deliveryRequests = new Set();
-  const taskOperationToken = Symbol('taskOperation');
+  const clients = new Set(), runtimes = new Map(), deliveries = new Set(), archives = new Set(), deliveryRequests = new Set();
   const ownership = {
     get: id => state.tasks.find(task => task.id === id)?.ownership,
     set: (id, record) => { const task = state.tasks.find(item => item.id === id); if (!task) fail('NOT_FOUND', 'Task not found'); task.ownership = record; changed(); },
@@ -167,11 +166,6 @@ async function startServer(options = {}) {
   function asyncChanged() { safeSave(); broadcast({ type: 'state', state: publicState() }); }
   function workspaceById(id) { const w = state.workspaces.find(w => w.id === id); if (!w) fail('NOT_FOUND', 'Workspace not found'); return w; }
   function taskById(id) { const task = state.tasks.find(item => item.id === id); if (!task) fail('NOT_FOUND', 'Task not found'); return task; }
-  async function withTaskOperation(id, action) {
-    if (taskOperations.has(id)) fail('TASK_IN_USE', 'Another task operation is running');
-    taskOperations.add(id);
-    try { return await action(); } finally { taskOperations.delete(id); }
-  }
   function projectContext(project) {
     const profile = environment.profiles.find(item => item.id === project.profileId);
     if (!profile || profile.available === false) fail('PROFILE_UNAVAILABLE', 'Project shell environment is unavailable');
@@ -391,7 +385,7 @@ async function startServer(options = {}) {
         const agentHooks = Boolean(environment.agents?.find(agent => agent.id === agentId)?.hookAdapter);
         await validateLaunch(environment, profileId, inspected.root, agentId, agentHooks);
         const profile = environment.profiles.find(item => item.id === profileId);
-        const identity = value => profile.environment === 'windows' ? value.toLowerCase() : value;
+        const identity = value => profile.environment === 'windows' ? path.win32.normalize(value).toLowerCase() : path.posix.normalize(value);
         let project = state.projects.find(item => {
           const projectProfile = environment.profiles.find(candidate => candidate.id === item.profileId);
           return identity(item.commonDir || '') === identity(inspected.commonDir) && projectProfile?.environment === profile.environment && projectProfile.distro === profile.distro;
@@ -410,7 +404,7 @@ async function startServer(options = {}) {
           const found = inspected.worktrees.find(item => identity(item.path) === identity(cwd));
           if (!found || found.primary || found.detached || !found.branch) fail('INVALID_ARGUMENT', 'Select a linked worktree with a branch');
           branch = found.branch; cwd = found.path;
-          if (state.tasks.some(item => item.projectId === project.id && identity(item.cwd) === identity(cwd))) fail('ALREADY_EXISTS', 'This worktree is already attached to a task');
+          if (state.tasks.some(item => (!item.archived || item.phase === 'ready') && item.projectId === project.id && identity(item.cwd) === identity(cwd))) fail('ALREADY_EXISTS', 'This worktree is already attached to a task');
         }
         const task = { id, name, projectId:project.id, cwd, branch, base, agentId, managed:params.mode === 'new', archived:false, phase:'creating', deliverySupport:['claude','omp'].includes(agentId.split(':').pop()) ? 'instructions' : 'unsupported' };
         state.tasks.push(task); changed();
@@ -425,7 +419,6 @@ async function startServer(options = {}) {
       }
       case 'task.open': {
         const task = taskById(params.taskId), project = state.projects.find(item => item.id === task.projectId);
-        return withTaskOperation(task.id, async () => {
         if (!project) fail('NOT_FOUND', 'Task project not found');
         const existing = state.workspaces.find(item => item.id === task.workspaceId);
         if (existing) return structuredClone(existing);
@@ -434,13 +427,11 @@ async function startServer(options = {}) {
           await taskGit.createWorktree({ ...projectContext(project), path:task.cwd, branch:task.branch, base:task.base, taskId:task.id, restore:true });
           task.removed = false; changed();
         }
-        const workspace = await dispatch('workspace.create', {name:task.name,cwd:task.cwd,profileId:project.profileId,taskId:task.id,[taskOperationToken]:true});
+        const workspace = await dispatch('workspace.create', {name:task.name,cwd:task.cwd,profileId:project.profileId,taskId:task.id});
         delete task.error; changed(); return workspace;
-        });
       }
       case 'task.archive': {
         const task = taskById(params.taskId), project = state.projects.find(item => item.id === task.projectId);
-        return withTaskOperation(task.id, async () => {
         if (!project) fail('NOT_FOUND', 'Task project not found');
         if (deliveries.has(task.id)) fail('TASK_IN_USE', 'Wait for the task delivery operation to finish');
         if (state.workspaces.some(item => item.id === task.workspaceId)) fail('TASK_IN_USE', 'Close task terminals before archiving');
@@ -457,7 +448,6 @@ async function startServer(options = {}) {
         }
         task.archived = true; task.archiveReason = reason; changed(); return { archived:true, removed:task.removed === true, reason };
         } finally { archives.delete(task.id); }
-        });
       }
       case 'task.delivery.context': {
         const task = taskById(params.taskId), project = state.projects.find(item => item.id === task.projectId);
@@ -480,10 +470,6 @@ async function startServer(options = {}) {
         } finally { deliveries.delete(task.id); }
       }
       case 'workspace.create': {
-        if (params.taskId !== undefined && !params[taskOperationToken]) {
-          const task = taskById(params.taskId);
-          return withTaskOperation(task.id, () => dispatch('workspace.create', { ...params, [taskOperationToken]:true }));
-        }
         if (runtimes.size >= LIMITS.panes) fail('LIMIT_REACHED', 'Maximum number of terminal panes reached');
         const profileId = params.profileId ?? 'powershell'; string(profileId, 'profileId', 256);
         const name = params.name === undefined ? null : string(params.name, 'name', 120).trim();
@@ -783,13 +769,19 @@ async function startServer(options = {}) {
   }
   try {
     // Restore identifiers/layout and start fresh shells. No command history is replayed.
-    for (const workspace of state.workspaces) for (const pane of workspace.panes) {
-      try { const launch = await validateLaunch(environment, pane.profileId, pane.cwd); spawnPane(pane, launch); }
-      catch (error) {
-        pane.pid = null; pane.status = 'exited'; pane.exitCode = -1;
-        const runtime = runtimes.get(pane.id) || terminalFor(pane);
-        queueOutput(pane, runtime, `\r\n[Winmux could not restore this terminal]\r\n${error.message}\r\n`);
-        addNotification(pane.id, 'Terminal could not be restored', error.message.slice(0, 4096));
+    for (const workspace of state.workspaces) {
+      const task = state.tasks.find(item => item.workspaceId === workspace.id && !item.archived);
+      for (const pane of workspace.panes) {
+        try {
+          const launch = await validateLaunch(environment, pane.profileId, pane.cwd);
+          if (task) launch.taskId = task.id;
+          spawnPane(pane, launch);
+        } catch (error) {
+          pane.pid = null; pane.status = 'exited'; pane.exitCode = -1;
+          const runtime = runtimes.get(pane.id) || terminalFor(pane);
+          queueOutput(pane, runtime, `\r\n[Winmux could not restore this terminal]\r\n${error.message}\r\n`);
+          addNotification(pane.id, 'Terminal could not be restored', error.message.slice(0, 4096));
+        }
       }
     }
     safeSave();
