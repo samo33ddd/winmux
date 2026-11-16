@@ -8,6 +8,7 @@ const { randomUUID } = require('node:crypto');
 const { fail, string } = require('./shared.cjs');
 const { selectedAgent, shellArgs } = require('./shell-integration.cjs');
 const { withSessionHooks } = require('./agent-hooks.cjs');
+const { taskInstructionArgs } = require('./task-instructions.cjs');
 const execFileAsync = promisify(execFile); // Argument arrays only; no shell interpolation.
 const agentNames = ['claude', 'codex', 'hermes', 'omp', 'pi'];
 const wslDiscoveryScript = 'PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; for name in claude codex hermes omp pi; do location=$(command -v "$name" 2>/dev/null) || location=; printf "%s\\t%s\\n" "$name" "$location"; done';
@@ -97,12 +98,6 @@ async function discover() {
   }
   return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { paneMove: true, terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, nativeCodex: true, ompHooks: true, agentActivity: true, projectTasks: true, protocolVersion: 3 } };
 }
-function taskInstructionArgs(agent, taskId) {
-  if (!taskId) return [];
-  const name = agent?.id?.split(':').pop();
-  if (!['claude', 'omp'].includes(name)) return [];
-  return ['--append-system-prompt', `This terminal belongs to Winmux task ${taskId}. Follow the repository instructions. When the user's task is complete, use the installed winmux-terminal skill and task.delivery RPCs to create a PR into the primary branch, obtain independent review, resolve findings, wait for required CI on the current PR head, then merge through task.delivery.merge. Never push directly to the primary branch or bypass protection. If the skill, review, CI, or permissions are unavailable, explain the blocker. Do not treat agent completion as task delivery.`];
-}
 async function validateLaunch(environment, profileId, requestedCwd, agentId, agentHooks, hookContext, taskId) {
   const profile = environment.profiles.find(p => p.id === profileId);
   if (!profile) fail('PROFILE_UNAVAILABLE', `Terminal profile is unavailable: ${profileId}`);
@@ -110,13 +105,23 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
   const selected = await selectedAgentForLaunch(environment, profile, agentId);
   const paneId = randomUUID();
   const agentLaunchId = selected ? randomUUID() : undefined;
-  const prepare = context => selected && withSessionHooks(selected, profile, agentHooks === true, context);
+  const context = selected && {
+    paneId,
+    launchId: agentLaunchId,
+    dataDir: hookContext?.dataDir,
+    pipeName: hookContext?.pipeName,
+    ...(taskId === undefined ? {} : { taskId }),
+  };
+  const prepare = () => selected && withSessionHooks(selected, profile, agentHooks === true, context);
   const fields = agent => agent ? {
     agentId: agent.id, agentLabel: agent.label || agent.id, agentLaunchId,
     agentSessionHooks: agent.sessionHooks === true, hookArtifacts: agent.hookArtifacts, cleanupHooks: agent.cleanupHooks,
   } : {};
   const argsFor = (agent, bashAvailable) => {
-    try { if (agent && taskId) agent.args.push(...taskInstructionArgs(agent, taskId)); return shellArgs(profile, agent, bashAvailable); }
+    try {
+      if (agent) agent = { ...agent, args: [...(agent.args || []), ...taskInstructionArgs(agent, taskId)] };
+      return shellArgs(profile, agent, bashAvailable);
+    }
     catch (error) { agent?.cleanupHooks?.(); throw error; }
   };
   let cwd = requestedCwd;
@@ -141,8 +146,7 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
   if (!path.isAbsolute(cwd)) fail('INVALID_CWD', 'A terminal startup directory must be an absolute path');
   try { if (!fs.statSync(cwd).isDirectory()) throw new Error('not directory'); fs.accessSync(cwd, fs.constants.R_OK); }
   catch { fail('INVALID_CWD', `Directory does not exist or is inaccessible: ${cwd}`); }
-  const context = selected && { paneId, launchId: agentLaunchId, dataDir: hookContext?.dataDir, pipeName: hookContext?.pipeName };
-  const agent = prepare(context);
+  const agent = prepare();
   return { paneId, profile, cwd: path.resolve(cwd), ...fields(agent), spawnCwd: path.resolve(cwd), args: argsFor(agent) };
 }
 module.exports = { discover, validateLaunch, executable, taskInstructionArgs };

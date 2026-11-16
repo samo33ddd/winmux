@@ -344,15 +344,26 @@ app.whenReady().then(() => {
     git('init', '-b', 'main'); git('add', '.'); git('-c', 'user.name=Winmux Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'fixture'); git('remote', 'add', 'origin', 'https://github.com/fixture/project.git');
     for (const profile of [environment.profiles.find(p => p.id === 'powershell'), wsl].filter(Boolean)) {
       const cwd = profile.environment === 'wsl' ? linuxPath(taskRepo) : taskRepo;
+      const taskAgent = `hook:${profile.id}:codex`;
       const inspected = await client.request('project.inspect', {cwd, profileId:profile.id});
       assert(inspected.branches.includes('main'));
-      const opened = await client.request('task.create', {projectDirectory:cwd, profileId:profile.id, name:`Task ${profile.id}`, baseBranch:'main', primaryBranch:'main', agentId:`fixture:${profile.id}`, mode:'new'});
+      const opened = await client.request('task.create', {projectDirectory:cwd, profileId:profile.id, name:`Task ${profile.id}`, baseBranch:'main', primaryBranch:'main', agentId:taskAgent, mode:'new'});
       const item = (await client.request('state')).tasks.find(task => task.workspaceId === opened.id);
       assert(item && item.managed && item.branch.startsWith('winmux/'));
+      assert.equal(item.deliverySupport, 'hooks');
+      const hookBase = path.join(dataDir, 'hook-' + opened.panes[0].id);
+      await eventually(() => fs.existsSync(hookBase + '.json'), `${profile.id} task Codex launch context`);
+      const taskHook = JSON.parse(fs.readFileSync(hookBase + '.json', 'utf8'));
+      const contextPath = path.join(dataDir, 'hooks', 'session', `codex-${taskHook.env.WINMUX_AGENT_LAUNCH_ID}.json`);
+      assert.equal(JSON.parse(fs.readFileSync(contextPath, 'utf8')).taskId, item.id);
+      assert(!taskHook.args.some(arg => /developer_instructions|\bnotify\s*=/.test(arg)));
+      if (profile.environment === 'wsl') assert(taskHook.args.some(arg => arg.includes('--context-file')));
+      fs.writeFileSync(hookBase + '.exit', '0');
       await eventually(async () => (await paneState(opened.panes[0].id)).agentState === 'completed', `${profile.id} task fixture completion`);
       await checkTaskEnv(opened.panes[0].id, profile.environment === 'wsl', item.id);
       const beforeTaskRestore = {windows:runs('windows-runs.txt'), wsl:runs('wsl-runs.txt'), pid:opened.panes[0].pid};
       await stop(); await launch();
+      assert.equal(fs.existsSync(contextPath), false, `${profile.id} task hook context must be removed with its pane`);
       const restoredTask = (await client.request('state')).tasks.find(task => task.id === item.id);
       const restoredWorkspace = (await client.request('state')).workspaces.find(workspace => workspace.id === restoredTask.workspaceId);
       assert(restoredWorkspace, 'task workspace must survive daemon restart');

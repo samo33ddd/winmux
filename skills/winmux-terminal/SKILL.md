@@ -78,11 +78,21 @@ node scripts/winmux-client.cjs rpc project.inspect '{"cwd":"C:/path/to/project",
 
 The result contains `root`, `commonDir`, local `branches`, a detected `primary` branch, and linked `worktrees`. Primary detection uses `origin/HEAD`, then `main` or `master`. If `primary` is empty, pass an existing local branch as `primaryBranch`. `baseBranch` must always be an existing local branch.
 
-`task.create` currently requires an installed `agentId` that belongs to the selected profile. Inspect `environment.agents` first. Claude and OMP launches receive task-delivery system instructions; other agents can still use the RPC explicitly and are marked `deliverySupport: "unsupported"` in task state. The command starts the task workspace and exports `WINMUX_TASK_ID` to its task-agent panes:
+`task.create` currently requires an installed `agentId` that belongs to the selected profile. Inspect `environment.agents` first. Claude and OMP launches receive task-delivery system instructions. Codex uses a trusted Winmux `UserPromptSubmit` hook and is marked `deliverySupport: "hooks"`; other agents can still call the RPC explicitly and are marked `"unsupported"`. The command starts the task workspace and exports `WINMUX_TASK_ID` to its task-agent panes:
 
 ```powershell
 node scripts/winmux-client.cjs rpc task.create '{"projectDirectory":"C:/path/to/project","name":"Issue 41","profileId":"powershell","agentId":"codex","baseBranch":"main","primaryBranch":"main","mode":"new"}'
 ```
+
+Before entering a task request in Codex, open `/hooks`, select `UserPromptSubmit`,
+and enable and trust the Winmux handler after reviewing its command. Winmux never
+approves hook trust automatically. A disabled, untrusted, or modified handler does
+not deliver task instructions. The hook adds bounded developer context to the
+user's explicit turn; it neither sends a user prompt nor replaces existing
+developer instructions, hooks, notify settings, model, provider, or permissions.
+Per-launch context identifies the task even if a shared Codex daemon has stale
+environment variables. Ordinary Codex sessions without a task emit no delivery
+context. A new task launch can require a fresh hook trust decision.
 
 For `mode: "new"`, Winmux creates a sibling worktree under
 `<project-name>.winmux-worktrees/<task-id>` and a new

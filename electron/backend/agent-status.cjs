@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { connect } = require('../client.cjs');
 const { LIMITS } = require('./shared.cjs');
+const { codexUserPromptSubmitOutput, validTaskId } = require('./task-instructions.cjs');
 
 function claudeState(event) {
   if (['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(event?.hook_event_name)) return 'running';
@@ -28,14 +29,16 @@ function hookActivity(event) {
   return { phase, toolName, toolId };
 }
 function validContext(value) {
-  const keys = ['dataDir', 'launchId', 'paneId', 'pipeName', 'version'];
+  const required = ['dataDir', 'launchId', 'paneId', 'pipeName', 'version'];
   const validId = item => typeof item === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(item);
   if (!value || typeof value !== 'object' || Array.isArray(value)
-    || Object.keys(value).sort().join('\0') !== keys.join('\0')
+    || Object.keys(value).some(key => !required.includes(key) && key !== 'taskId')
+    || required.some(key => !Object.hasOwn(value, key))
     || value.version !== 1
     || !validId(value.paneId) || !validId(value.launchId)
     || typeof value.dataDir !== 'string' || !path.win32.isAbsolute(value.dataDir) || value.dataDir.length > 4096 || value.dataDir.includes('\0')
-    || typeof value.pipeName !== 'string' || !value.pipeName || value.pipeName.length > 260 || value.pipeName.includes('\0')) {
+    || typeof value.pipeName !== 'string' || !value.pipeName || value.pipeName.length > 260 || value.pipeName.includes('\0')
+    || (value.taskId !== undefined && !validTaskId(value.taskId))) {
     throw new Error('Winmux hook context is invalid');
   }
   return value;
@@ -67,20 +70,24 @@ async function report(state, env = process.env, activity = {}, context = null) {
   finally { client.close(); }
 }
 async function main() {
-  let state, activity = {}, context = null;
+  let state, activity = {}, context = null, event = null, mode;
   if (['--claude', '--codex'].includes(process.argv[2])) {
+    mode = process.argv[2];
     const contextIndex = process.argv.indexOf('--context-file');
     if (contextIndex !== -1) context = readContextFile(process.argv[contextIndex + 1]);
     let input = '';
     for await (const chunk of process.stdin) { input += chunk; if (Buffer.byteLength(input) > LIMITS.request) throw new Error('Hook input is too large'); }
-    const event = JSON.parse(input);
-    if ((process.argv[2] === '--claude' && event.agent_id) || event.parent_thread_id || event.parent_session_id) return;
-    state = (process.argv[2] === '--claude' ? claudeState : codexState)(event);
+    event = JSON.parse(input);
+    if (event.agent_id || event.parent_thread_id || event.parent_session_id) return;
+    state = (mode === '--claude' ? claudeState : codexState)(event);
     activity = hookActivity(event);
     if (!state) return;
   } else if (process.argv[2] === '--state') state = process.argv[3];
   else throw new Error('Expected --claude/--codex (JSON on stdin) or --state <state>');
   await report(state, process.env, activity, context);
+  if (mode === '--codex' && event?.hook_event_name === 'UserPromptSubmit' && context?.taskId !== undefined) {
+    process.stdout.write(`${JSON.stringify(codexUserPromptSubmitOutput(context.taskId))}\n`);
+  }
 }
 module.exports = { report, claudeState, codexState, hookActivity, readContextFile };
 if (require.main === module) {

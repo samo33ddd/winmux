@@ -208,9 +208,20 @@ deletion bypasses. Re-read the PR after any uncertain submit or merge response
 and reconcile instead of retrying a mutation blindly.
 
 Task-created Claude and OMP launches receive appended system instructions that
-refer to `$winmux-terminal` and the delivery RPCs. Other agents may still call
-the RPC, but task state marks them `deliverySupport: "unsupported"` and must not
-claim automatic delivery instructions were installed. Agent completion is not
+refer to `$winmux-terminal` and the delivery RPCs. Codex receives the same bounded
+text as `hookSpecificOutput.additionalContext` from its root `UserPromptSubmit`
+hook, after authenticated lifecycle reporting. An optional validated task ID in
+the per-launch context file takes precedence over inherited environment, including
+WSL task launches through the Windows helper. Never serialize prompt or transcript
+content into the daemon status request.
+
+Codex task state uses `deliverySupport: "hooks"`: the user must enable and trust
+the Winmux `UserPromptSubmit` handler in `/hooks` before entering the task request.
+Do not bypass trust, approve foreign handlers, write owner config, override
+`developer_instructions`, or manufacture a user turn. Unsupported or disabled
+hooks are a visible delivery limitation. Non-task sessions emit no task context;
+nested sessions and other events must not inject it. Other agents may still call
+the RPC but are marked `deliverySupport: "unsupported"`. Agent completion is not
 PR readiness, review, CI, or merge evidence.
 
 Daemon restoration starts fresh shells without agent replay, but preserves
@@ -223,6 +234,15 @@ Exercise these checks when this contract changes:
 node --test tests/task-git.cjs tests/task-delivery.cjs tests/task-state.cjs tests/task-instructions.cjs
 npm run test:cwd-agent
 ```
+
+For an installed Windows Codex, set `WINMUX_CODEX_EXECUTABLE` to its absolute
+native `.exe` and run `npm run test:codex-task-context`. The optional runtime test
+creates a disposable Codex home, trusts only its own synthetic handlers, and
+captures a request at a local HTTP fixture without model inference. It checks
+that existing developer instructions and a foreign hook survive, the task text
+arrives as developer context, stale shared-daemon environment is ignored, and no
+turn starts before explicit fixture input. Without the executable it reports a
+skip; default hosted CI does not prove installed Codex behavior.
 
 The task Git test covers managed and imported worktrees, dirty/untracked/ignored
 preservation, and real WSL when available. The delivery test mocks `gh` and

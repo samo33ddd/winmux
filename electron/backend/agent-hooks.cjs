@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { fail } = require('./shared.cjs');
+const { validTaskId } = require('./task-instructions.cjs');
 
 const psQuote = value => `'${value.replace(/'/g, "''")}'`;
 const shQuote = value => `'${value.replace(/'/g, "'\\''")}'`;
@@ -13,7 +14,7 @@ const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 function completeHookContext(context) {
   if (!context || typeof context !== 'object' || Array.isArray(context)) fail('AGENT_HOOKS_CONTEXT', 'Session hook context is required');
-  const { paneId, launchId, dataDir, pipeName } = context;
+  const { paneId, launchId, dataDir, pipeName, taskId } = context;
   if (!IDENTIFIER.test(paneId || '') || !IDENTIFIER.test(launchId || '')) {
     fail('AGENT_HOOKS_CONTEXT', 'Session hook pane and launch identities are invalid');
   }
@@ -24,7 +25,8 @@ function completeHookContext(context) {
   if (typeof pipeName !== 'string' || !pipeName || pipeName.length > 260 || pipeName.includes('\0')) {
     fail('AGENT_HOOKS_CONTEXT', 'Session hook pipe name is invalid');
   }
-  return { version: 1, paneId, launchId, dataDir, pipeName };
+  if (taskId !== undefined && !validTaskId(taskId)) fail('AGENT_HOOKS_CONTEXT', 'Session hook task ID is invalid');
+  return { version: 1, paneId, launchId, dataDir, pipeName, ...(taskId === undefined ? {} : { taskId }) };
 }
 
 function cleanupCodexHookArtifacts(artifacts) {
@@ -33,7 +35,7 @@ function cleanupCodexHookArtifacts(artifacts) {
   }
 }
 
-function prepareCodexHookArtifacts(context) {
+function prepareCodexHookArtifacts(context, withWrapper = true) {
   if (process.platform !== 'win32') fail('AGENT_HOOKS_CONTEXT', 'Windows session hook artifacts require Windows');
   const value = completeHookContext(context);
   const root = path.resolve(value.dataDir, 'hooks', 'session');
@@ -41,10 +43,11 @@ function prepareCodexHookArtifacts(context) {
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) fail('AGENT_HOOKS_CONTEXT', 'Session hook directory is outside the Winmux data directory');
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const contextPath = path.join(root, `codex-${value.launchId}.json`);
-  const wrapperPath = path.join(root, `codex-${value.launchId}.ps1`);
-  const artifacts = { contextPath, wrapperPath, files: [contextPath, wrapperPath] };
+  const wrapperPath = withWrapper ? path.join(root, `codex-${value.launchId}.ps1`) : null;
+  const artifacts = { contextPath, wrapperPath, files: [contextPath, ...(wrapperPath ? [wrapperPath] : [])] };
   try {
     fs.writeFileSync(contextPath, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+    if (!wrapperPath) return artifacts;
     const wrapper = [
       "$ErrorActionPreference = 'Stop'",
       "$env:ELECTRON_RUN_AS_NODE = '1'",
@@ -95,7 +98,10 @@ function withSessionHooks(agent, profile, enabled, context) {
     if (agent.hookAdapter === 'claude') args.push('--settings', JSON.stringify(claudeSettings(profile)));
     else if (agent.hookAdapter === 'codex') {
       if (process.platform === 'win32' && profile.environment !== 'wsl') hookArtifacts = prepareCodexHookArtifacts(context);
-      args.push(...codexHookArgs(profile, hookArtifacts?.wrapperPath));
+      else if (process.platform === 'win32' && profile.environment === 'wsl' && context?.taskId !== undefined) {
+        hookArtifacts = prepareCodexHookArtifacts(context, false);
+      }
+      args.push(...codexHookArgs(profile, hookArtifacts?.wrapperPath, hookArtifacts?.contextPath));
     }
     else fail('AGENT_HOOKS_UNSUPPORTED', 'Session hooks are supported only for Claude and Codex; other agents keep shell-confirmed status');
   }
@@ -103,13 +109,14 @@ function withSessionHooks(agent, profile, enabled, context) {
   // and legacy notify confirms only a completed turn, not running/waiting activity.
   return { ...agent, args, sessionHooks: enabled, hookArtifacts, cleanupHooks: hookArtifacts ? () => cleanupCodexHookArtifacts(hookArtifacts) : undefined };
 }
-function codexHookArgs(profile, wrapperPath) {
+function codexHookArgs(profile, wrapperPath, contextPath) {
   const convert = profile.environment === 'wsl' ? wslPath : value => value;
   const helper = path.join(__dirname, 'agent-status.cjs'), executable = convert(process.execPath);
   const windows = process.platform === 'win32' && profile.environment !== 'wsl';
   if (windows && !wrapperPath) fail('AGENT_HOOKS_CONTEXT', 'Windows Codex session hooks require a per-launch wrapper');
   const commandWindows = windows ? windowsCodexHookCommand(wrapperPath) : null;
-  const command = profile.environment === 'wsl' ? `${wslNodeEnv} ${shQuote(executable)} ${shQuote(helper)} --codex` : commandWindows;
+  const contextArg = profile.environment === 'wsl' && contextPath ? ` --context-file ${shQuote(contextPath)}` : '';
+  const command = profile.environment === 'wsl' ? `${wslNodeEnv} ${shQuote(executable)} ${shQuote(helper)} --codex${contextArg}` : commandWindows;
   // Native hook discovery collects each settings layer independently, including
   // SessionFlags from -c. Existing hooks and notify stay in their own layers.
   // https://github.com/openai/codex/blob/main/codex-rs/hooks/src/engine/discovery.rs

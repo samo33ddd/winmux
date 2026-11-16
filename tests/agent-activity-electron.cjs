@@ -83,7 +83,7 @@ const server = net.createServer(socket => {
         const item = workspace({id:'task', label:'Safe agent', state:'running'});
         item.name = request.params.name; state.workspaces.push(item);
         state.projects = [{id:'project-1', name:'Fixture', root:fixtureCwd, profileId:'powershell', primaryBranch:'main'}];
-        state.tasks = [{id:'task-1', name:request.params.name, projectId:'project-1', cwd:fixtureCwd, branch:'winmux/fixture', base:'main', managed:true, archived:false, workspaceId:item.id, delivery:{action:'submit', state:'OPEN', code:null, number:1, url:null, headOid:null}}];
+        state.tasks = [{id:'task-1', name:request.params.name, projectId:'project-1', cwd:fixtureCwd, branch:'winmux/fixture', base:'main', managed:true, archived:false, workspaceId:item.id, deliverySupport:'hooks', delivery:{action:'submit', state:'OPEN', code:null, number:1, url:null, headOid:null}}];
         result = item;
       }
       else if (request.method === 'agent.bind') {
@@ -242,6 +242,7 @@ async function run() {
     await page.getByRole('button', {name:'Новая задача'}).click();
     await page.getByTestId('task-name').fill('Fixture task');
     await page.getByTestId('task-agent').selectOption('codex');
+    assert.match(await page.getByTestId('task-dialog-form').innerText(), /Winmux UserPromptSubmit.*Codex \/hooks/);
     await page.getByRole('button', {name:'Проверить репозиторий'}).click();
     await page.getByTestId('task-base-branch').waitFor();
     await page.screenshot({ path:path.join(artifacts, 'task-dialog-900.png') });
@@ -253,7 +254,11 @@ async function run() {
     await page.getByTestId('projects-toggle').click();
     assert.match(await page.getByTestId('project-tasks').innerText(), /Fixture task/);
     assert.match(await page.getByTestId('project-tasks').innerText(), /PR создан — проверьте статус/);
+    assert.match(await page.getByTestId('project-tasks').innerText(), /Winmux UserPromptSubmit.*Codex \/hooks/);
     assert.doesNotMatch(await page.getByTestId('project-tasks').innerText(), /PR готов к слиянию/);
+    assert(await page.locator('.task-identity strong').evaluate(element => element.scrollWidth <= element.clientWidth), 'Task name must remain readable at 900px');
+    assert(await page.locator('.task-row > [role="status"]').last().evaluate(element => element.clientWidth >= 200), 'Hook guidance must have enough width to wrap naturally');
+    await page.screenshot({ path:path.join(artifacts, 'task-projects-900.png') });
     const visible = await page.locator('body').innerText();
     assert.doesNotMatch(visible, /krach|Users\\|Authorization|sk-|token/i);
     console.log(`PASS real Electron activity fixture: five agents, ru/en, six themes, stale actions hidden. Screenshots: ${shots.join(', ')}`);

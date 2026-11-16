@@ -9,7 +9,7 @@
 .task-project-heading { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px; }
 .task-project-heading strong { font-size: 12px; }
 .task-project-heading code, .task-empty { color: var(--muted); font-size: 11px; }
-.task-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; padding: 7px 8px; border-radius: 8px; }
+.task-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px 8px; align-items: center; padding: 7px 8px; border-radius: 8px; }
 .task-row:hover { background: var(--hover); }
 .task-row[data-archived="true"] { opacity: .72; }
 .task-identity { min-width: 0; text-align: left; display: flex; flex-direction: column; gap: 2px; }
