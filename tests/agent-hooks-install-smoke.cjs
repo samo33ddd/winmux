@@ -11,9 +11,10 @@ const { once } = require('node:events');
 const { test } = require('node:test');
 const { installAgentHooks, OWNED_STATUS } = require('../electron/agent-hooks-install.cjs');
 const { locations } = require('../electron/backend/shared.cjs');
-const { withSessionHooks } = require('../electron/backend/agent-hooks.cjs');
+const { withSessionHooks, codexHookArgs } = require('../electron/backend/agent-hooks.cjs');
 const { readContextFile } = require('../electron/backend/agent-status.cjs');
 const { shellArgs, windowsCommandLineLength } = require('../electron/backend/shell-integration.cjs');
+const { codexUserPromptSubmitOutput } = require('../electron/backend/task-instructions.cjs');
 
 function temp(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -140,6 +141,134 @@ test('helper delivers a bounded authenticated agent.hook and drops prompt conten
   assert.equal(JSON.stringify(received[0]).includes('secret'), false);
 });
 
+test('Codex UserPromptSubmit returns task context only for an authenticated root event', { skip: process.platform !== 'win32' }, async t => {
+  const dataDir = temp('winmux-codex-task-context-');
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const token = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(path.join(dataDir, 'ipc-token'), token, { mode: 0o600 });
+  const pipe = `\\\\.\\pipe\\winmux-codex-task-${crypto.randomBytes(6).toString('hex')}`;
+  const received = [];
+  const server = net.createServer(socket => {
+    let buffer = '';
+    socket.on('data', chunk => {
+      buffer += chunk.toString('utf8');
+      let newline;
+      while ((newline = buffer.indexOf('\n')) !== -1) {
+        const request = JSON.parse(buffer.slice(0, newline));
+        buffer = buffer.slice(newline + 1);
+        received.push(request);
+        const result = request.token === token
+          ? { id: request.id, result: { applied: true } }
+          : { id: request.id, error: { code: 'UNAUTHORIZED', message: 'no' } };
+        socket.write(`${JSON.stringify(result)}\n`);
+      }
+    });
+  });
+  await new Promise(resolve => server.listen(pipe, resolve));
+  t.after(() => server.close());
+  const statusReports = () => received.filter(request => request.method === 'agent.status');
+
+  const base = {
+    version: 1,
+    paneId: 'pane-context',
+    launchId: 'launch-context',
+    dataDir,
+    pipeName: pipe,
+  };
+  const contextFile = path.join(dataDir, 'context.json');
+  const helper = path.resolve(__dirname, '..', 'electron', 'backend', 'agent-status.cjs');
+  async function run(event) {
+    const child = spawn(process.execPath, [helper, '--codex', '--context-file', contextFile], {
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.resume();
+    child.stdin.end(JSON.stringify(event));
+    const [code] = await once(child, 'exit');
+    return { code, stdout };
+  }
+
+  fs.writeFileSync(contextFile, JSON.stringify(base));
+  const noTaskStart = await run({
+    hook_event_name: 'SessionStart',
+    prompt: 'secret prompt',
+    transcript_path: 'C:\\secret\\transcript.jsonl',
+  });
+  assert.equal(noTaskStart.code, 0);
+  assert.equal(noTaskStart.stdout, '');
+  assert.equal(statusReports().length, 1);
+  assert.equal(statusReports()[0].params.state, 'idle');
+  assert.equal(JSON.stringify(statusReports()[0]).includes('secret'), false);
+
+  const noTaskTurn = await run({ hook_event_name: 'UserPromptSubmit', prompt: 'secret prompt' });
+  assert.equal(noTaskTurn.code, 0);
+  assert.equal(noTaskTurn.stdout, '');
+  assert.equal(statusReports().length, 2);
+  assert.equal(statusReports()[1].params.state, 'running');
+
+  fs.writeFileSync(contextFile, JSON.stringify({ ...base, taskId: 'task-context' }));
+  const taskStart = await run({
+    hook_event_name: 'SessionStart',
+    prompt: 'secret prompt',
+    transcript_path: 'C:\\secret\\transcript.jsonl',
+  });
+  assert.equal(taskStart.code, 0);
+  assert.equal(taskStart.stdout, '');
+  assert.equal(statusReports().length, 3);
+  assert.equal(statusReports()[2].params.state, 'idle');
+
+  const rootTurn = await run({
+    hook_event_name: 'UserPromptSubmit',
+    prompt: 'secret prompt',
+    transcript_path: 'C:\\secret\\transcript.jsonl',
+  });
+  assert.equal(rootTurn.code, 0);
+  assert.deepEqual(JSON.parse(rootTurn.stdout), codexUserPromptSubmitOutput('task-context'));
+  assert.match(JSON.parse(rootTurn.stdout).hookSpecificOutput.additionalContext, /task-context/);
+  assert.equal(statusReports().length, 4);
+  assert.equal(statusReports()[3].params.state, 'running');
+  assert.equal(JSON.stringify(statusReports()[3]).includes('secret'), false);
+
+  const repeatedTurn = await run({ hook_event_name: 'UserPromptSubmit' });
+  assert.equal(repeatedTurn.code, 0);
+  assert.deepEqual(JSON.parse(repeatedTurn.stdout), codexUserPromptSubmitOutput('task-context'));
+  assert.equal(statusReports().length, 5);
+
+  const nested = await run({
+    hook_event_name: 'UserPromptSubmit',
+    parent_thread_id: 'parent-thread',
+    prompt: 'secret nested prompt',
+  });
+  assert.equal(nested.code, 0);
+  assert.equal(nested.stdout, '');
+  assert.equal(statusReports().length, 5);
+
+  const codexNested = await run({
+    hook_event_name: 'UserPromptSubmit',
+    agent_id: 'nested-agent',
+    agent_type: 'worker',
+    prompt: 'secret nested prompt',
+  });
+  assert.equal(codexNested.code, 0);
+  assert.equal(codexNested.stdout, '');
+  assert.equal(statusReports().length, 5);
+
+  const stop = await run({ hook_event_name: 'Stop' });
+  assert.equal(stop.code, 0);
+  assert.equal(stop.stdout, '');
+  assert.equal(statusReports().length, 6);
+  assert.equal(statusReports()[5].params.state, 'completed');
+
+  fs.writeFileSync(contextFile, JSON.stringify({ ...base, taskId: 'invalid task id' }));
+  const malformed = await run({ hook_event_name: 'UserPromptSubmit' });
+  assert.equal(malformed.code, 1);
+  assert.equal(malformed.stdout, '');
+  assert.equal(statusReports().length, 6);
+  assert.throws(() => readContextFile(contextFile), /context is invalid/);
+});
+
 test('Codex session hooks use bounded per-launch wrapper and context artifacts', { skip: process.platform !== 'win32' }, t => {
   const root = temp('winmux-hooks artifacts юникод ');
   const dataDir = path.join(root, 'data dir юникод');
@@ -151,14 +280,17 @@ test('Codex session hooks use bounded per-launch wrapper and context artifacts',
     launchId: 'launch-explicit',
     dataDir,
     pipeName: '\\\\.\\pipe\\winmux-fixture',
+    taskId: 'task-explicit',
   };
   const profile = { environment: 'windows', command: process.execPath, args: ['-NoLogo', '-NoProfile', '-NoExit'] };
-  const agent = withSessionHooks({ hookAdapter: 'codex', command: process.execPath, args: [] }, profile, true, context);
+  const agent = withSessionHooks({ hookAdapter: 'codex', command: process.execPath, args: ['--existing', 'value with spaces'] }, profile, true, context);
   const args = shellArgs(profile, agent);
   const length = windowsCommandLineLength(profile.command, args);
   t.diagnostic(`Windows launch UTF-16 units: ${length}`);
   assert.ok(length < 30000, `Windows launch command line is ${length} UTF-16 units`);
+  assert.deepEqual(agent.args.slice(0, 2), ['--existing', 'value with spaces']);
   assert.equal(agent.args.filter(value => value.startsWith('hooks.')).length, 7);
+  assert(!agent.args.some(value => /developer_instructions|\bnotify\s*=/.test(value)));
   assert(fs.existsSync(agent.hookArtifacts.contextPath));
   assert(fs.existsSync(agent.hookArtifacts.wrapperPath));
   assert.deepEqual(readContextFile(agent.hookArtifacts.contextPath), { version: 1, ...context });
@@ -171,11 +303,38 @@ test('Codex session hooks use bounded per-launch wrapper and context artifacts',
   assert.equal(fs.existsSync(agent.hookArtifacts.contextPath), false);
   assert.equal(fs.existsSync(agent.hookArtifacts.wrapperPath), false);
 
+  const wslProfile = { environment: 'wsl', command: 'wsl.exe', args: ['--distribution', 'Ubuntu'], distro: 'Ubuntu' };
+  const wslContext = { ...context, launchId: 'launch-wsl-task' };
+  const wslAgent = withSessionHooks({ hookAdapter: 'codex', command: '/usr/bin/codex', args: [] }, wslProfile, true, wslContext);
+  assert.equal(wslAgent.hookArtifacts.wrapperPath, null);
+  assert(fs.existsSync(wslAgent.hookArtifacts.contextPath));
+  assert.deepEqual(readContextFile(wslAgent.hookArtifacts.contextPath), { version: 1, ...wslContext });
+  const sessionStart = wslAgent.args.find(value => value.startsWith('hooks.SessionStart='));
+  assert(sessionStart.includes('--context-file'));
+  const wslCommand = JSON.parse(sessionStart.slice(sessionStart.indexOf('command=') + 'command='.length).match(/^"(?:[^"\\]|\\.)*"/)[0]);
+  assert(wslCommand.includes(wslAgent.hookArtifacts.contextPath));
+  wslAgent.cleanupHooks();
+  assert.equal(fs.existsSync(wslAgent.hookArtifacts.contextPath), false);
+
+  const noTaskAgent = withSessionHooks({ hookAdapter: 'codex', command: '/usr/bin/codex', args: [] }, wslProfile, true, {
+    ...wslContext,
+    launchId: 'launch-wsl-no-task',
+    taskId: undefined,
+  });
+  assert.equal(noTaskAgent.hookArtifacts, null);
+  assert.deepEqual(noTaskAgent.args, codexHookArgs(wslProfile));
+
   assert.throws(() => withSessionHooks(
     { hookAdapter: 'codex', command: process.execPath, args: [] },
     profile,
     true,
     { ...context, dataDir: `C:\\${'x'.repeat(1100)}` },
+  ), { code: 'AGENT_HOOKS_CONTEXT' });
+  assert.throws(() => withSessionHooks(
+    { hookAdapter: 'codex', command: process.execPath, args: [] },
+    profile,
+    true,
+    { ...context, taskId: 'invalid task id' },
   ), { code: 'AGENT_HOOKS_CONTEXT' });
 });
 

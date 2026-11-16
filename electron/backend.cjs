@@ -12,6 +12,7 @@ const { createController: createAgentController } = require('./agent-integration
 const { ACTIVITY_KINDS, createActivityTracker } = require('./agent-activity.cjs');
 const { createTaskGitService, createGitExecutor } = require('./backend/task-git.cjs');
 const { createTaskDelivery } = require('./backend/task-delivery.cjs');
+const { deliverySupportFor } = require('./backend/task-instructions.cjs');
 
 function replaceLeaf(node, paneId, replacement) {
   if (node.type === 'leaf') return node.paneId === paneId ? replacement : node;
@@ -466,7 +467,7 @@ async function startServer(options = {}) {
           branch = found.branch; cwd = found.path;
           if (state.tasks.some(item => (!item.archived || item.phase === 'ready') && item.projectId === project.id && identity(item.cwd) === identity(cwd))) fail('ALREADY_EXISTS', 'This worktree is already attached to a task');
         }
-        const task = { id, name, projectId:project.id, cwd, branch, base, agentId, managed:params.mode === 'new', archived:false, phase:'creating', deliverySupport:['claude','omp'].includes(agentId.split(':').pop()) ? 'instructions' : 'unsupported' };
+        const task = { id, name, projectId:project.id, cwd, branch, base, agentId, managed:params.mode === 'new', archived:false, phase:'creating', deliverySupport:deliverySupportFor(agentId) };
         state.tasks.push(task); changed();
         try {
           const context = { ...projectContext(project), path:cwd, branch, base, taskId:id };
@@ -870,7 +871,7 @@ async function startServer(options = {}) {
       const task = state.tasks.find(item => item.workspaceId === workspace.id && !item.archived);
       for (const pane of workspace.panes) {
         try {
-          const launch = await validateLaunch(environment, pane.profileId, pane.cwd);
+          const launch = await validateLaunch(environment, pane.profileId, pane.cwd, undefined, undefined, { dataDir: loc.dataDir, pipeName: loc.pipeName }, task?.id);
           if (task) launch.taskId = task.id;
           spawnPane(pane, launch);
         } catch (error) {

@@ -329,6 +329,7 @@ const english: Record<string, string> = {
   'Слияние заблокировано': 'Merge blocked',
   'PR готов к слиянию': 'PR ready to merge',
   'PR создан — проверьте статус': 'PR created — check status',
+  'Для инструкции доставки включите и разрешите Winmux UserPromptSubmit в Codex /hooks.': 'Enable and trust Winmux UserPromptSubmit in Codex /hooks to receive delivery instructions.',
   'Не удалось подтвердить состояние PR': 'Could not confirm PR status',
   'Задачи без терминала': 'Tasks without a terminal',
   'Открыть PR': 'Open PR',
