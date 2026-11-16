@@ -22,6 +22,17 @@ async function check(cwd,profile){
   assert(status.entries.some(entry=>entry.path==='hello.txt'&&entry.worktree==='M'));
   const diff=await rpc('git.diff',{path:'hello.txt'});
   assert(diff.text.includes('+Привет'));
+  const saved=await rpc('files.write',{path:'hello.txt',expectedText:text.text,text:'Привет — saved\n'});
+  assert.equal(saved.text,'Привет — saved\n');
+  await assert.rejects(()=>rpc('files.write',{path:'hello.txt',expectedText:text.text,text:'stale'}),/changed on disk/);
+  assert.equal((await rpc('files.read',{path:'hello.txt'})).text,saved.text);
+  await assert.rejects(()=>rpc('files.write',{path:'../outside',expectedText:'',text:'x'}),/inside the current directory/);
+  await assert.rejects(()=>rpc('files.write',{path:'hello.txt',expectedText:saved.text,text:'x'.repeat(512*1024+1)}),/512 KB/);
+  for (const file of ['invalid.txt','binary.dat','large.txt','image.svg']) {
+    const before=await rpc('files.read',{path:file});
+    await assert.rejects(()=>rpc('files.write',{path:file,expectedText:before.text||'',text:'must not replace'}),/Only complete UTF-8/);
+  }
+  await rpc('files.write',{path:'hello.txt',expectedText:saved.text,text:text.text});
   results.push(`${profile.id}: file listing, Unicode text, image bytes, traversal rejection, actual Git branch/status/diff passed`);
 }
 (async()=>{
@@ -33,6 +44,10 @@ async function check(cwd,profile){
     const git=(...args)=>execFileSync('git',['-C',fixture,...args],{encoding:'utf8',windowsHide:true});
     git('init','-b','main');git('add','.');git('-c','user.name=Winmux Test','-c','user.email=test@example.invalid','commit','-m','fixture');
     await fs.writeFile(path.join(fixture,'hello.txt'),'Initial content\nПривет — working tree\n');
+    await fs.writeFile(path.join(fixture,'invalid.txt'),Buffer.from([0xff,0xfe,0x61]));
+    await fs.writeFile(path.join(fixture,'binary.dat'),Buffer.from([0,1,2]));
+    await fs.writeFile(path.join(fixture,'large.txt'),'x'.repeat(512*1024+1));
+    await fs.writeFile(path.join(fixture,'image.svg'),'<svg xmlns="http://www.w3.org/2000/svg"/>');
     await check(fixture,{id:'powershell',environment:'windows'});
     let distro;
     try {distro=execFileSync('wsl.exe',['--list','--quiet'],{timeout:10000,windowsHide:true}).toString('utf16le').replace(/\u0000/g,'').split(/\r?\n/).map(s=>s.trim()).find(s=>s&&!s.includes('docker'));}

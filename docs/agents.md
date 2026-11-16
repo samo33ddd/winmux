@@ -83,7 +83,7 @@ After upgrading from 0.2.0, the existing Winmux terminal daemon keeps its runnin
 
 `notify` can omit the pane argument when `WINMUX_PANE_ID` is present in a shell launched by Winmux. `close PANE_ID` terminates that pane's process. `shutdown` stops the daemon and all its terminal processes; it is not a routine end-of-task cleanup command for shared instances.
 
-For lower-level calls, `rpc METHOD JSON` uses the methods documented in [the daemon contract](../electron/backend/README.md). The daemon does not forward `browser.*`, `files.*`, or `git.*` requests. File and Git panels are desktop read-only features.
+For lower-level calls, `rpc METHOD JSON` uses the methods documented in [the daemon contract](../electron/backend/README.md). The daemon does not forward `browser.*`, `files.*`, or `git.*` requests. The desktop Files panel supports editing eligible text files; Git remains read-only.
 
 ## Project-local OMP status extension
 

@@ -89,7 +89,7 @@ h1, h2, h3, p { margin: 0; }
 .topbar { height: 48px; min-height: 48px; display: flex; align-items: center; padding: 0 148px 0 8px; gap: 6px; user-select: none; position: relative; }
 .topbar, .sidebar-heading { -webkit-app-region: drag; }
 .topbar button, .topbar input, .topbar select, .topbar .header-launch, .topbar .header-secondary, .topbar .project-switcher, .topbar .workspace-tabs, .topbar .terminal-tab-tools, .topbar .topbar-tools, .topbar .switcher-menu, .topbar .header-agent, .sidebar-heading button { -webkit-app-region: no-drag; }
-.project-switcher { position: relative; display: flex; align-items: center; min-width: 0; flex: 0 1 180px; }
+.project-switcher { position: relative; display: flex; align-items: center; min-width: 0; flex: 0 1 auto; max-width: 180px; }
 .project-switch { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 180px; height: 28px; padding: 0 6px; border-radius: 6px; color: var(--text); }
 .rename-workspace { width: 22px; opacity: 0; }
 .project-switcher:hover .rename-workspace, .project-switcher:focus-within .rename-workspace, .project-switcher.open .rename-workspace { opacity: 1; }

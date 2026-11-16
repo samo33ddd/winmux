@@ -110,7 +110,7 @@ test('hooks apply only to an exact binding or one verified mapping', () => {
 test('cwd comparison ignores slash and case differences', () => {
   assert.equal(normalizeCwd('E:/Projects/Winmux/'), normalizeCwd('e:\\projects\\winmux'));
   assert.equal(isCodexProcess({ name: 'codex.exe', commandLine: 'codex app-server proxy' }), false);
-  assert.equal(version, '0.2.1');
+  assert.equal(version, require('../package.json').version);
 });
 
 test('R1-02 hooks retain full pane ambiguity and reject mismatched sessions', () => {

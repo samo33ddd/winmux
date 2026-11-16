@@ -63,7 +63,7 @@
   .workspace-top-tab { max-width:108px; }
 }
 @container (max-width:860px) {
-  .project-switcher, .project-switch { flex: 0 1 88px; max-width: 88px; }
+  .project-switcher, .project-switch { flex: 0 1 auto; max-width: 88px; }
   .workspace-tabs { flex: 1 1 220px; min-width: 168px; }
   .workspace-top-tab { max-width: 148px; min-width: 72px; }
   .header-agent { max-width: 132px; }

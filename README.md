@@ -6,7 +6,7 @@ For developers who live with AI agents, 24/7 on Windows.
 
 Keep your agents, shells, project files, Git changes, and browser previews in one Windows workspace. Winmux is an independent terminal multiplexer inspired by [cmux](https://cmux.com), built with Electron, TypeScript, xterm.js, and ConPTY.
 
-This source tree prepares **0.2.1**, with fixes for agent integration, terminal titles, Codex colors, and bundled skill installation. The interface supports English and Russian. See [verification notes](docs/verification.md) for runtime evidence and the limits of agent integration.
+This source tree prepares **0.2.2**, with a file editor, Markdown/source highlighting, confirmed completion notifications, and updated Winmux skills. The interface supports English and Russian. See [verification notes](docs/verification.md) for runtime evidence and the limits of agent integration.
 
 ![Winmux dark workspace with its collapsed project rail, unified header, and split terminals](docs/screenshots/workspace-dark.png)
 
@@ -17,7 +17,7 @@ This source tree prepares **0.2.1**, with fixes for agent integration, terminal 
 - Copy on selection, clipboard shortcuts, terminal search, terminal preferences, six themes, and custom theme import/export.
 - Launch installed CLI agents in the current workspace, with agent identity and event-based status.
 - Notifications linked to the workspace and terminal that need attention.
-- Read-only project files and Git views that follow the active terminal directory, including text/image previews and staged or working-tree diffs.
+- Project files and Git views that follow the active terminal directory: wrapped text editing, source highlighting, Markdown/image previews, and read-only staged or working-tree diffs.
 - A tabbed HTTP(S) browser with independent pages, domain-scoped cookie import, and local automation for inspecting, clicking, filling, evaluating JavaScript, and screenshots.
 - A local terminal CLI and [repository-shipped agent skills](docs/agents.md).
 
@@ -31,12 +31,12 @@ The project switcher in the top header opens the current workspace list directly
 
 ## Download
 
-Use the [latest release page](https://github.com/samo33ddd/winmux/releases/latest) for published Windows builds. The Windows x64 assets prepared for 0.2.1 are:
+Use the [latest release page](https://github.com/samo33ddd/winmux/releases/latest) for published Windows builds. The Windows x64 assets prepared for 0.2.2 are:
 
 | Asset | Purpose |
 | --- | --- |
-| `Winmux-Setup-0.2.1-x64.exe` | Windows x64 installer |
-| `Winmux-Portable-0.2.1-x64.exe` | Windows x64 portable executable |
+| `Winmux-Setup-0.2.2-x64.exe` | Windows x64 installer |
+| `Winmux-Portable-0.2.2-x64.exe` | Windows x64 portable executable |
 
 A version is available only when its assets appear on the release page. These expected names do not establish publication. Portable describes how the app is launched; local state still defaults to `%LOCALAPPDATA%/Winmux/`.
 
@@ -108,7 +108,7 @@ Files and Git follow the active terminal's directory through shell integration. 
 
 The in-app explicit file preview is separate from the containment-limited Files panel. Text is read up to 512 KB and supported raster/SVG images up to 12 MB; binary files show metadata only. Relative terminal or CLI paths resolve from the caller pane's live directory. WSL previews use `python3` inside the pane's distribution. UNC paths, remote `file://` hosts, directories, and oversized images are rejected.
 
-Browser automation is available only while the desktop window is open. The embedded browser is a preview surface: popups, downloads, and permission requests are blocked. Its tabs retain independent pages and share a persistent browser session. File and Git views are read-only. Conversation resume, MCP, and automatic worktree creation remain future work.
+Browser automation is available only while the desktop window is open. The embedded browser is a preview surface: popups, downloads, and permission requests are blocked. Its tabs retain independent pages and share a persistent browser session. The Files panel edits complete UTF-8 text up to 512 KB; truncated and binary files are read-only. Save explicitly; external changes cause a conflict error and Reload asks before discarding a draft. Git views are read-only. Conversation resume, MCP, and automatic worktree creation remain future work.
 
 After an application update, an already-running daemon continues using its loaded code. Winmux detects older daemons and explains which features require a restart. When ready to stop your running commands, use **Stop all sessions and exit**, then reopen Winmux. Merely closing the window or reloading the UI does not upgrade a daemon. Never stop shared sessions as part of automated test cleanup.
 

@@ -16,6 +16,11 @@
 .tool-tab-content { flex: 1; min-height: 0; min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
 .tool-split { flex: 1; min-height: 0; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
 .tool-split > * { min-width: 0; min-height: 0; }
+.tool-split.horizontal.has-preview { grid-template-rows: minmax(0, 1fr); }
+.tool-split.horizontal.has-preview > .file-preview { grid-column: 1; grid-row: 1; }
+.tool-split.horizontal.has-preview > .tool-content-resizer { grid-column: 2; grid-row: 1; cursor: col-resize; }
+.tool-split.horizontal.has-preview > .file-tree { grid-column: 3; grid-row: 1; }
+.tool-split.horizontal .tool-content-resizer::after { inset: 0 2px; }
 .tool-content-resizer { position: relative; touch-action: none; cursor: row-resize; background: var(--surface); outline-offset: -2px; }
 .tool-content-resizer::after { content: ''; position: absolute; inset: 2px 0; background: var(--border); }
 .tool-content-resizer:hover::after, .tool-content-resizer:focus-visible::after, .tool-split.dragging .tool-content-resizer::after { background: var(--accent); }
@@ -45,6 +50,26 @@
 .preview-heading > .icon-button { width: 22px; height: 23px; }
 .preview-heading > .icon-button svg { width: 13px; height: 13px; }
 .text-preview, .diff-preview { margin: 0; padding: 12px; overflow: auto; flex: 1; min-height: 0; min-width: 0; font: 12px/1.65 "Cascadia Code", Consolas, monospace; tab-size: 4; }
+.text-preview { white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-editor { resize: none; border: 0; border-radius: 0; width: 100%; background: transparent; color: var(--text); outline-offset: -2px; }
+.file-editor-surface { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
+.syntax-overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.has-highlighting .file-editor { position: relative; color: transparent; caret-color: var(--text); }
+.syntax-overlay code { font: inherit; }
+.file-editor, .syntax-overlay { scrollbar-gutter: stable; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal { color: var(--accent); }
+.hljs-string, .hljs-regexp, .hljs-attr { color: var(--attention); }
+.hljs-comment, .hljs-quote { color: var(--muted); }
+.hljs-number, .hljs-title, .hljs-built_in, .hljs-type { color: var(--link, var(--accent)); }
+.file-editor-toolbar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--border); font-size: 11px; }
+.file-editor-toolbar > span { flex: 1; color: var(--muted); }
+.file-editor-toolbar > button { padding: 4px 6px; color: var(--accent); }
+.file-editor-toolbar > button:disabled { opacity: .45; }
+.markdown-preview { flex: 1; min-height: 0; padding: 12px; overflow: auto; overflow-wrap: anywhere; font-size: 13px; line-height: 1.65; }
+.markdown-preview > :first-child { margin-top: 0; }
+.markdown-preview pre { white-space: pre-wrap; padding: 10px; background: var(--sidebar); }
+.markdown-preview code { font-family: "Cascadia Code", Consolas, monospace; }
+.markdown-preview blockquote { margin-left: 0; padding-left: 12px; border-left: 2px solid var(--border); color: var(--muted); }
 .image-preview { display: flex; align-items: center; justify-content: center; overflow: auto; flex: 1; min-height: 0; padding: 16px; background: var(--sidebar); }
 .image-preview img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
 .preview-note, .tool-footer-note { font-size: 11px; padding: 8px 12px; color: var(--muted); border-top: 1px solid var(--border); line-height: 1.6; }

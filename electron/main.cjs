@@ -187,16 +187,21 @@ async function start() {
   syncWindowTheme((await client.request('state',{})).settings.theme);
   browserControl = await startBrowserControl({win, client, dataDir, fileOpen:openFilePreview});
   win.on('closed',() => { win=null; });
+  win.webContents.on('will-prevent-unload', event => {
+    if (closingAll) { event.preventDefault(); return; }
+    const choice = dialog.showMessageBoxSync(win, { type:'warning', buttons:['Keep editing / Продолжить', 'Discard and close / Закрыть без сохранения'], defaultId:0, cancelId:0, message:'Unsaved file changes / Есть несохранённые изменения файлов' });
+    if (choice === 1) event.preventDefault();
+  });
   if (devUrl) await win.loadURL(devUrl); else await win.loadFile(path.join(__dirname,'../dist/index.html'));
 }
 
 async function quitAll() {
   if (closingAll) return;
-  const answer = await dialog.showMessageBox(win, {type:'warning',buttons:['Cancel','Stop all'],defaultId:0,cancelId:0,message:'Stop all terminal sessions?',detail:'Running commands and agents will stop. To keep them running, close only the window.'});
+  const answer = await dialog.showMessageBox(win, {type:'warning',buttons:['Cancel','Stop all'],defaultId:0,cancelId:0,message:'Stop all terminal sessions?',detail:'Running commands and agents will stop. Unsaved file changes will be discarded. To keep sessions running, close only the window.'});
   if (answer.response!==1) return;
   closingAll=true;
   try { await client.request('daemon.shutdown',{}); app.quit(); }
   catch(error) { closingAll=false; await dialog.showMessageBox(win,{type:'error',message:'Could not stop sessions',detail:error.message}); }
 }
 app.on('window-all-closed',() => app.quit());
-app.on('before-quit',() => { browserControl?.close(); client?.close(); });
+app.on('will-quit',() => { browserControl?.close(); client?.close(); });

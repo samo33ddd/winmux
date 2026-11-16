@@ -1,7 +1,7 @@
 ---
 name: winmux-terminal
 description: Control persistent Windows terminal workspaces.
-version: 0.1.0
+version: 0.2.2
 author: samo33ddd, Hermes Agent
 license: UNLICENSED
 platforms: [windows, linux]
@@ -75,10 +75,12 @@ node scripts/winmux-client.cjs notify PANE_ID --title "Task finished" --body "Re
 - Windows paths and Linux paths are different. For WSL, use a discovered `wsl:<distribution>` profile and a valid Linux directory. Windows-side WSL launch is not proof of Windows CLI interop from inside WSL.
 - Installed WSL wrappers need Windows Node interop. If `node.exe` is unavailable in WSL, the wrapper reports that explicitly instead of trying the Windows named pipe from Linux.
 - Environment discovery checks executable availability without launching agents. Do not advertise hooks, MCP, conversation resume, or tested agent compatibility based on discovery.
-- Displayed directories are startup directories, not live shell directories.
+- `workspace.cwd` is the startup directory; `pane.cwd` follows confirmed shell directory reports. File and Git panels use the selected pane's current directory. A shell that does not report cwd retains its last confirmed directory.
 - Screen reads are bounded terminal state, not full logs. Snapshot JSON contains VT state and ordering metadata.
 - A lost response can follow a successful mutation. Neither CLI retries automatically. Inspect state and the pane before repeating input, splitting, creating, or closing.
-- File and Git panels are read-only desktop tools, not daemon `rpc` methods. Browser control belongs to the separate desktop service.
+- File and Git operations belong to the desktop, not daemon `rpc` methods. Files opens a preview left of the tree, wraps text, edits complete UTF-8 files up to 512 KB, highlights known source languages and renders Markdown. Save explicitly with the button or Ctrl+S; a changed-on-disk error requires reviewing the file and using Reload, which asks before discarding a draft. Truncated, binary and image files cannot be edited. Git is read-only. Browser control belongs to its separate desktop service.
+- Use `open PATH --pane PANE_ID` only for a deliberate request to preview a local file. Outputting or hovering a path never means it should be opened. Preserve spaces, Unicode, extensions and line/column references; never invent a missing file or remap its root to hide an error. A later successful open must recover from an earlier missing-file error.
+- Confirmed turn completion, failure and shell-observed agent exit create pane/workspace notifications. Unknown activity is not completion. An exit code is shown only for a confirmed ended launch; it is not an activity counter. If status is unavailable, inspect Settings and the relevant native connection/hook support rather than inferring activity from a running shell.
 
 ## Verification
 
