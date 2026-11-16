@@ -219,6 +219,7 @@ and verify the returned `workspaceId`/`tabId` and live process afterward.
 ## Pitfalls
 
 - Closing the desktop or CLI leaves the daemon's terminals alive. A daemon restart or reboot restores metadata and fresh shells; it never replays commands or resumes agent conversations.
+- Preserve a running portable application's extraction directory, including files under `%TEMP%`. Hooks that launch its Electron runtime can fail with `Invalid file descriptor to ICU data received` when `icudtl.dat` is missing, or a V8 startup snapshot error when snapshot files are missing. Inspect the exact hook executable and follow the matching-package recovery procedure in the source `docs/agents.md`; never delete the live extraction directory, mix runtime versions, inject a status to hide the failure, or restart the owner daemon without authorization. Confirm recovery through a real hook and pane state, not only a Node probe.
 - Windows paths and Linux paths are different. For WSL, use a discovered `wsl:<distribution>` profile and a valid Linux directory. Windows-side WSL launch is not proof of Windows CLI interop from inside WSL.
 - Installed WSL wrappers need Windows Node interop. If `node.exe` is unavailable in WSL, the wrapper reports that explicitly instead of trying the Windows named pipe from Linux.
 - Environment discovery checks executable availability without launching agents. Do not advertise hooks, MCP, conversation resume, or tested agent compatibility based on discovery.

@@ -25,6 +25,33 @@ Use terminal commands below with the terminal wrapper and browser commands with 
 
 WSL installation uses the selected WSL project and runs the client through Windows Node.js interop. Windows `node.exe` must be available through WSL interop; `WINMUX_WINDOWS_NODE` can select its executable. The automated checks exercise this bridge in Ubuntu 24.04.
 
+## Portable runtime recovery
+
+Session hooks may invoke the running portable application's extracted `Winmux.exe`
+in Node mode. Keep its entire extraction directory while the desktop or daemon is
+running, even when that directory is under `%TEMP%`. A live process can survive
+removal of files that its next helper process still needs.
+
+If hooks print `Invalid file descriptor to ICU data received`, inspect
+`icudtl.dat` beside the exact executable used by the hook. If the next error is
+`Error loading V8 startup snapshot file`, inspect `snapshot_blob.bin` and
+`v8_context_snapshot.bin` there too. These failures happen before the hook's
+JavaScript runs; changing Codex trust or injecting a status does not repair them.
+
+For in-place recovery without terminating terminals, use an intact unpacked copy
+of the same Winmux package. Require matching SHA-256 hashes for its `Winmux.exe`
+and the live executable before copying any resource. Restore only confirmed
+missing files and verify each copied file against its package source. Preserve
+existing files, user data and hooks. If no matching package is available, obtain
+it first; do not mix Electron versions or silently restart the owner daemon.
+
+Run a synchronous child-process probe of that exact executable with
+`ELECTRON_RUN_AS_NODE=1` and `-e "console.log(process.versions.electron)"`, scoped
+to the child environment. Check its exit status and stderr, then observe a real
+Codex hook and the corresponding pane's activity state. A successful Node probe
+alone does not establish hook trust, authenticated reporting, or UI display.
+The cause of any missing files must be investigated separately.
+
 ## Source checkout prerequisites
 
 Use a Windows source checkout with dependencies installed (`npm ci`). Build and open the desktop with `npm run build` and `npm start` when browser control is needed. Terminal-only work can start a daemon with `npm run cli -- start`. Use the repo root as the working directory for every command below.

@@ -122,6 +122,33 @@ cannot rely on inherited terminal `WINMUX_*` variables. Never embed capability
 tokens or prompt/tool arguments in those artifacts. Clean them on normal disposal
 and failed launch. Preserve WSL's separate interop route and user hook trust.
 
+Portable Windows builds run from an extracted temporary directory. If a new
+Electron-as-Node hook process exits before JavaScript with `Invalid file
+descriptor to ICU data received.` or a missing V8 snapshot error, treat the
+extraction as potentially damaged and check for missing resources. The deletion
+source is not established; do not claim
+temporary cleanup caused it without separate evidence.
+
+Recover with resources from the exact matching build:
+
+1. Resolve the live hook executable (`process.execPath` in the daemon or the
+   executable named by the generated wrapper) and compare its SHA-256 with
+   `release/win-unpacked/Winmux.exe` from the same version. Stop if they differ.
+2. Copy only missing `icudtl.dat`, `snapshot_blob.bin`, and
+   `v8_context_snapshot.bin` from that matching unpacked package into the live
+   executable directory. Do not overwrite an existing resource, delete the live
+   temporary extraction, or restart the owner application.
+3. Validate synchronously and wait for completion: run the live `Winmux.exe`
+   with `ELECTRON_RUN_AS_NODE=1` and a harmless JavaScript expression; require
+   status 0, the expected Electron version on stdout, empty stderr, and the
+   generated helper path to exist. A `spawnSync` or `execFileSync` result is
+   runtime evidence; merely starting a process without waiting for its result is not.
+4. Treat successful Electron-as-Node startup only as recovery evidence. A
+   synthetic hook-state fixture does not prove Codex trusted or executed the
+   generated hooks. Actual hook coverage requires Codex to execute the generated
+   command against the real daemon and must separately verify the resulting
+   sidebar activity or notification state; otherwise report that limitation.
+
 Measure the complete PowerShell command after UTF-16/base64 and Windows argv
 quoting, rather than just the hook JSON size. The launcher rejects above 30,000
 UTF-16 units before spawning; the Unicode/spaces regression measured 22,795.
