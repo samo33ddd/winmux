@@ -1,0 +1,4 @@
+interface:
+  display_name: "Winmux development"
+  short_description: "Develop and verify Winmux while preserving sessions"
+  default_prompt: "Use $winmux-dev to develop or debug Winmux, verify the affected contracts in an isolated instance, and update the skill with detailed evidence."
