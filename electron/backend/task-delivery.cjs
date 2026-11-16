@@ -5,6 +5,7 @@ const { fail, integer, string } = require('./shared.cjs');
 
 const SHA = /^[0-9a-f]{40}$/;
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const REVIEW_OUTCOMES = new Set(['approved', 'changes_requested']);
 const VIEW_FIELDS = 'number,url,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,reviewDecision,reviews,latestReviews,mergeStateStatus,mergeable,mergedAt';
 const CODE_ORDER = ['SOURCE_MISMATCH', 'BASE_MISMATCH', 'HEAD_MISMATCH', 'STALE_HEAD', 'AMBIGUOUS_PR', 'NOT_FOUND', 'NO_INDEPENDENT_APPROVAL', 'CHECKS_FAILED', 'CHECKS_PENDING', 'CHECKS_UNKNOWN', 'MERGE_BLOCKED', 'UNCERTAIN_SUBMIT', 'UNCERTAIN_MERGE', 'UNAVAILABLE'];
 
@@ -40,6 +41,18 @@ function ordered(blockers) {
   return known.concat(blockers.filter(code => !known.includes(code)));
 }
 
+function normalizeTaskReview(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail('INVALID_ARGUMENT', 'review must be an object');
+  const sha = string(value.sha, 'review.sha', 40).toLowerCase();
+  if (!SHA.test(sha)) fail('INVALID_ARGUMENT', 'review.sha must be 40 hex characters');
+  const reviewer = string(value.reviewer, 'review.reviewer', 120).trim();
+  const summary = string(value.summary, 'review.summary', 4096).trim();
+  if (!REVIEW_OUTCOMES.has(value.outcome)) fail('INVALID_ARGUMENT', 'review.outcome must be approved or changes_requested');
+  const reviewedAt = integer(value.reviewedAt, 'review.reviewedAt', 0, Number.MAX_SAFE_INTEGER);
+  return { sha, reviewer, summary, outcome:value.outcome, reviewedAt };
+}
+
 function createTaskDelivery(options = {}) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) fail('INVALID_ARGUMENT', 'options must be an object');
   const repo = repository(string(options.repo, 'repo', 200));
@@ -62,6 +75,7 @@ function createTaskDelivery(options = {}) {
     if (task.number !== undefined) spec.number = integer(task.number, 'number', 1, 1000000000);
     if (task.title !== undefined) spec.title = task.title;
     if (task.body !== undefined) spec.body = task.body;
+    if (Object.prototype.hasOwnProperty.call(task, 'review')) spec.review = normalizeTaskReview(task.review);
     return spec;
   }
 
@@ -131,17 +145,25 @@ function createTaskDelivery(options = {}) {
     return typeof value === 'string' ? value.toLowerCase() : '';
   }
 
-  function reviewBlockers(pr, sha) {
+  function reviewBlockers(pr, sha, localReview) {
     const author = login(pr.author).toLowerCase();
     const rows = Array.isArray(pr.reviews) ? pr.reviews : [];
     const latest = new Map();
     for (const review of [...rows].sort((left, right) => String(left.submittedAt || '').localeCompare(String(right.submittedAt || '')))) {
       const name = login(review.author).toLowerCase();
-      if (name) latest.set(name, review);
+      if (name && ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)) latest.set(name, review);
     }
-    const onHead = [...latest.values()].filter(review => reviewOid(review) === sha && login(review.author).toLowerCase() !== author);
-    const approved = Boolean(author) && onHead.some(review => review.state === 'APPROVED');
-    const changes = onHead.some(review => review.state === 'CHANGES_REQUESTED') || pr.reviewDecision === 'CHANGES_REQUESTED' || pr.reviewDecision === 'REVIEW_REQUIRED';
+    const independent = [...latest.values()].filter(review => {
+      const name = login(review.author).toLowerCase();
+      return Boolean(name) && name !== author;
+    });
+    const onHead = independent.filter(review => reviewOid(review) === sha);
+    const formalApproved = Boolean(author) && onHead.some(review => review.state === 'APPROVED');
+    const formalChanges = independent.some(review => review.state === 'CHANGES_REQUESTED');
+    const decision = String(pr.reviewDecision || '').toUpperCase();
+    const localExact = localReview && localReview.sha === sha ? localReview.outcome : null;
+    const approved = localExact === 'approved' || formalApproved;
+    const changes = localExact === 'changes_requested' || formalChanges || decision === 'CHANGES_REQUESTED' || decision === 'REVIEW_REQUIRED';
     return approved && !changes ? [] : ['NO_INDEPENDENT_APPROVAL'];
   }
 
@@ -189,7 +211,7 @@ function createTaskDelivery(options = {}) {
 
   async function openBlockers(pr, spec) {
     if (String(pr.state || '').toUpperCase() === 'MERGED') return [];
-    const review = reviewBlockers(pr, spec.sha);
+    const review = reviewBlockers(pr, spec.sha, spec.review);
     const checks = await checkBlockers(pr.number);
     return ordered([...review, ...checks, ...readiness(pr, [...review, ...checks])]);
   }
@@ -284,7 +306,7 @@ function createTaskDelivery(options = {}) {
     if (!again.pr) return finish('merge', spec, ['UNAVAILABLE'], found.pr, { reconciled: true });
     const moved = identityBlockers(again.pr, spec);
     if (moved.length) return finish('merge', spec, moved, again.pr, { reconciled: true });
-    const review = reviewBlockers(again.pr, spec.sha);
+    const review = reviewBlockers(again.pr, spec.sha, spec.review);
     const checks = await checkBlockers(again.pr.number);
     const ready = ordered([...review, ...checks, ...readiness(again.pr, [...review, ...checks])]);
     if (ready.length) return finish('merge', spec, ready, again.pr, { reconciled: true });
@@ -304,4 +326,4 @@ function createTaskDelivery(options = {}) {
   return { status, submit, merge };
 }
 
-module.exports = { createTaskDelivery };
+module.exports = { createTaskDelivery, normalizeTaskReview };

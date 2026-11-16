@@ -12,7 +12,7 @@ function requireTaskId(taskId) {
 }
 
 function taskInstruction(taskId) {
-  return `This terminal belongs to Winmux task ${requireTaskId(taskId)}. Follow the repository instructions. When the user's task is complete, use the installed winmux-terminal skill and task.delivery RPCs to create a PR into the primary branch, obtain independent review, resolve findings, wait for required CI on the current PR head, then merge through task.delivery.merge. Never push directly to the primary branch or bypass protection. If the skill, review, CI, or permissions are unavailable, explain the blocker. Do not treat agent completion as task delivery.`;
+  return `This terminal belongs to Winmux task ${requireTaskId(taskId)}. Follow the repository instructions. When the user's task is complete, use the installed winmux-terminal skill and task.delivery RPCs to create a PR into the primary branch, run an independent review, and resolve findings. Record the reviewer's attestation for the current HEAD with task.delivery.review; never record an approval you did not receive. Then wait for required CI on the current PR head and merge through task.delivery.merge. Never push directly to the primary branch or bypass protection. If the skill, review, CI, or permissions are unavailable, explain the blocker. Do not treat agent completion as task delivery.`;
 }
 
 function taskInstructionArgs(agent, taskId) {

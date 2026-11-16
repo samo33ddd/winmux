@@ -47,7 +47,7 @@ const english: Record<string, string> = {
   'Выполняет команду': 'Running a command',
   'Ищет информацию': 'Searching',
   'Работает с браузером': 'Using the browser',
-  'Поручает работу агентам': 'Delegating work',
+  'Работает с агентами': 'Working with agents',
   'Ожидает ввода': 'Waiting for input',
   'Ожидает': 'Idle',
   'Codex': 'Codex',

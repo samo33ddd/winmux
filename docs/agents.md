@@ -25,6 +25,33 @@ Use terminal commands below with the terminal wrapper and browser commands with 
 
 WSL installation uses the selected WSL project and runs the client through Windows Node.js interop. Windows `node.exe` must be available through WSL interop; `WINMUX_WINDOWS_NODE` can select its executable. The automated checks exercise this bridge in Ubuntu 24.04.
 
+## Portable runtime recovery
+
+Session hooks may invoke the running portable application's extracted `Winmux.exe`
+in Node mode. Keep its entire extraction directory while the desktop or daemon is
+running, even when that directory is under `%TEMP%`. A live process can survive
+removal of files that its next helper process still needs.
+
+If hooks print `Invalid file descriptor to ICU data received`, inspect
+`icudtl.dat` beside the exact executable used by the hook. If the next error is
+`Error loading V8 startup snapshot file`, inspect `snapshot_blob.bin` and
+`v8_context_snapshot.bin` there too. These failures happen before the hook's
+JavaScript runs; changing Codex trust or injecting a status does not repair them.
+
+For in-place recovery without terminating terminals, use an intact unpacked copy
+of the same Winmux package. Require matching SHA-256 hashes for its `Winmux.exe`
+and the live executable before copying any resource. Restore only confirmed
+missing files and verify each copied file against its package source. Preserve
+existing files, user data and hooks. If no matching package is available, obtain
+it first; do not mix Electron versions or silently restart the owner daemon.
+
+Run a synchronous child-process probe of that exact executable with
+`ELECTRON_RUN_AS_NODE=1` and `-e "console.log(process.versions.electron)"`, scoped
+to the child environment. Check its exit status and stderr, then observe a real
+Codex hook and the corresponding pane's activity state. A successful Node probe
+alone does not establish hook trust, authenticated reporting, or UI display.
+The cause of any missing files must be investigated separately.
+
 ## Source checkout prerequisites
 
 Use a Windows source checkout with dependencies installed (`npm ci`). Build and open the desktop with `npm run build` and `npm start` when browser control is needed. Terminal-only work can start a daemon with `npm run cli -- start`. Use the repo root as the working directory for every command below.
@@ -32,6 +59,30 @@ Use a Windows source checkout with dependencies installed (`npm ci`). Build and 
 Set `WINMUX_DATA_DIR` consistently for the desktop, terminal CLI, and browser CLI when using an isolated instance. The default is `%LOCALAPPDATA%/Winmux/`. The terminal CLI also accepts `--data-dir DIR` and `--pipe NAME`, with `WINMUX_PIPE_NAME` as the pipe environment override. The browser CLI uses `WINMUX_DATA_DIR`; it does not accept those terminal flags.
 
 The commands below use a source checkout. Do not assume an installed or portable executable has added a global `winmux` command to PATH.
+
+## Task review and delivery
+
+Project tasks can create isolated Git worktrees or attach existing linked
+worktrees. The bundled `winmux-terminal` skill documents their RPC commands,
+archive safeguards and recovery. A task's delivery context includes its branch,
+working directory, primary branch, PR result and recorded review evidence.
+
+For a single-maintainer workflow, first run an independent native review, resolve
+findings and record the reviewed task HEAD with `task.delivery.review`. Provide
+`taskId`, `sha`, a bounded `reviewer` label and evidence `summary`, and `outcome`
+(`approved` or `changes_requested`). The daemon validates the task and current
+commit, timestamps the record and preserves it across restarts. The operation
+records a trusted local operator's attestation; it does not run a reviewer or
+create a GitHub approval. Never record independent approval for your own
+unreviewed implementation. A new commit requires a new review.
+
+`task.delivery.refresh` reports missing review, stale heads and CI blockers.
+`task.delivery.merge` accepts exact-commit local approval or an eligible GitHub
+approval, but still blocks requested changes, repository-required formal review,
+failed or unknown required checks, and non-mergeable PRs. It rechecks the remote
+head and uses a merge commit with `--match-head-commit`, without admin bypass.
+Repository protection must match the owner-selected review workflow: local
+review may use zero required GitHub approvals while retaining strict required CI.
 
 ## Terminal workflow
 

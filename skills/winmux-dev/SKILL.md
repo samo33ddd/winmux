@@ -77,6 +77,14 @@ and toolbar buttons remain `no-drag`. Validate computed regions and, when native
 Computer Use is available, measure the restored window position after a real
 header drag. CDP pointer events alone do not prove native window movement. A
 missing native pipe is a verification limitation, not a product pass.
+The standalone `cua-driver` can remain available when `@oai/sky` reports a missing
+pipe. Use `cua-driver doctor`, enumerate the exact test window, capture fresh
+window state, then attempt a native drag in blank header space. If background
+delivery is refused or verified ineffective, use the driver's explicit foreground
+route on that test window. Measure before/after OS bounds; `effect: unverifiable`
+in the gesture response alone proves nothing. The 0.2.3 check observed movement
+with one/two tabs and at 900px, plus native restoration by dragging a maximized
+window. Never substitute `setBounds` for the gesture being tested.
 
 Terminal pane relocation uses `pane.move {paneId,targetPaneId,side}` with four
 edge positions inside one workspace. Move the existing leaf/runtime, collapse
@@ -121,6 +129,33 @@ that context to `agent-status.cjs --codex --context-file`. Shared app-server hoo
 cannot rely on inherited terminal `WINMUX_*` variables. Never embed capability
 tokens or prompt/tool arguments in those artifacts. Clean them on normal disposal
 and failed launch. Preserve WSL's separate interop route and user hook trust.
+
+Portable Windows builds run from an extracted temporary directory. If a new
+Electron-as-Node hook process exits before JavaScript with `Invalid file
+descriptor to ICU data received.` or a missing V8 snapshot error, treat the
+extraction as potentially damaged and check for missing resources. The deletion
+source is not established; do not claim
+temporary cleanup caused it without separate evidence.
+
+Recover with resources from the exact matching build:
+
+1. Resolve the live hook executable (`process.execPath` in the daemon or the
+   executable named by the generated wrapper) and compare its SHA-256 with
+   `release/win-unpacked/Winmux.exe` from the same version. Stop if they differ.
+2. Copy only missing `icudtl.dat`, `snapshot_blob.bin`, and
+   `v8_context_snapshot.bin` from that matching unpacked package into the live
+   executable directory. Do not overwrite an existing resource, delete the live
+   temporary extraction, or restart the owner application.
+3. Validate synchronously and wait for completion: run the live `Winmux.exe`
+   with `ELECTRON_RUN_AS_NODE=1` and a harmless JavaScript expression; require
+   status 0, the expected Electron version on stdout, empty stderr, and the
+   generated helper path to exist. A `spawnSync` or `execFileSync` result is
+   runtime evidence; merely starting a process without waiting for its result is not.
+4. Treat successful Electron-as-Node startup only as recovery evidence. A
+   synthetic hook-state fixture does not prove Codex trusted or executed the
+   generated hooks. Actual hook coverage requires Codex to execute the generated
+   command against the real daemon and must separately verify the resulting
+   sidebar activity or notification state; otherwise report that limitation.
 
 Measure the complete PowerShell command after UTF-16/base64 and Windows argv
 quoting, rather than just the hook JSON size. The launcher rejects above 30,000
@@ -199,7 +234,7 @@ and bounded output/timeouts. Never delete or overwrite a worktree through a raw
 shell fallback after an ownership or cleanliness rejection.
 
 `task.delivery.context` returns the task's branch, cwd, primary branch, and last
-delivery result. `refresh`, `submit`, and `merge` parse `origin` without embedded
+delivery result and review evidence. `refresh`, `submit`, and `merge` parse `origin` without embedded
 credentials, verify the worktree is on its recorded branch, read the current
 HEAD, and operate through authenticated `gh`. They do not stage, commit, or push.
 Only one delivery operation may run per task. A successful `submit` confirms PR
@@ -213,6 +248,29 @@ and a clean mergeable PR. The merge command is a merge commit with
 `--match-head-commit`; never add admin, auto-merge, squash, rebase, or branch
 deletion bypasses. Re-read the PR after any uncertain submit or merge response
 and reconcile instead of retrying a mutation blindly.
+
+`task.delivery.review` records an explicit local attestation after an independent
+review actually completed. It requires task ID, exact current 40-hex HEAD, a
+nonempty reviewer label (120 characters maximum), an evidence summary (4096
+maximum), and outcome `approved` or `changes_requested`. The daemon timestamps,
+validates and persists the record. It does not run a reviewer, prove a process
+identity, or manufacture a GitHub approval; trusted local orchestration owns the
+independence claim. A new commit invalidates previous approval. Local approval
+or an eligible non-author GitHub approval may satisfy the product gate, but
+local changes requests, outstanding formal changes requests and GitHub's
+`REVIEW_REQUIRED` decision remain blockers. Never record approval before the
+independent pass or remove required CI. Owner-selected local review may use a
+zero GitHub approval count; that is a deliberate policy choice, not an admin
+bypass. Exercise validation, restart retention, stale heads, requested changes,
+required checks and both pre-merge rechecks in backend and delivery regressions.
+
+`src/AgentStatus.tsx` owns both header and workspace-list presentation. Identity,
+state and action remain separate; a generic task-processing caption is allowed
+only for a named agent with confirmed `running` state when no tool activity is
+available. Preserve unknown/waiting/ended action hiding, exit-code rules and
+complete tooltips. The Electron activity fixture checks aligned icon/text
+columns, the 900px width, English/Russian, six themes, generic-to-specific action
+changes and sanitized captures. This UI fallback does not invent a tool event.
 
 Task-created Claude and OMP launches receive appended system instructions that
 refer to `$winmux-terminal` and the delivery RPCs. Codex receives the same bounded

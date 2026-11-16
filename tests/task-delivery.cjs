@@ -10,6 +10,14 @@ const next = 'b'.repeat(40);
 const repo = 'samo33ddd/winmux';
 const source = 'task-owner/winmux';
 const task = { source, head: 'feat/41', sha, title: 'feat: isolated delivery', body: 'Closes nothing yet' };
+const localReview = (outcome = 'approved', overrides = {}) => ({
+  sha,
+  reviewer: 'Codex independent reviewer',
+  summary: 'Reviewed the exact task commit and found no blocking defects.',
+  outcome,
+  reviewedAt: 1,
+  ...overrides,
+});
 
 function pull(overrides = {}) {
   return {
@@ -91,6 +99,77 @@ test('status fails closed for a stale head, missing review, and required check s
   assert.equal(ready.calls.at(-1).args.includes('--admin'), false);
 });
 
+test('review gate accepts an exact local approval or an eligible formal approval', async () => {
+  const unreviewed = pull({ reviewDecision: null, latestReviews: [], reviews: [] });
+  const local = gate([listed(unreviewed), { code: 0, stdout: JSON.stringify(checks('SUCCESS', 'pass')), stderr: '' }]);
+  const approved = await local.delivery.status({ ...task, review: localReview() });
+  assert.equal(approved.ok, true);
+  assert.deepEqual(approved.blockers, []);
+
+  const formal = gate([listed(pull()), { code: 0, stdout: JSON.stringify(checks('SUCCESS', 'pass')), stderr: '' }]);
+  assert.equal((await formal.delivery.status(task)).ok, true);
+
+  const missingReviewer = gate([listed(pull({ reviews: [{ state: 'APPROVED', commit: { oid: sha } }] }))]);
+  assert.equal((await missingReviewer.delivery.status(task)).code, 'NO_INDEPENDENT_APPROVAL');
+});
+
+test('review gate blocks stale, malformed, requested-change, and repository-required reviews', async () => {
+  const noFormal = pull({ reviewDecision: null, latestReviews: [], reviews: [] });
+
+  const stale = gate([listed(noFormal)]);
+  assert.equal((await stale.delivery.status({ ...task, review: localReview('approved', { sha: next }) })).code, 'NO_INDEPENDENT_APPROVAL');
+
+  const malformed = gate([]);
+  for (const review of [
+    localReview('approved', { sha: 'g'.repeat(40) }),
+    localReview('approved', { reviewer: ' ' }),
+    localReview('approved', { reviewer: 'x'.repeat(121) }),
+    localReview('approved', { summary: ' ' }),
+    localReview('approved', { summary: 'x'.repeat(4097) }),
+    localReview('approved', { summary: 'review\0summary' }),
+    localReview('unknown'),
+    localReview('approved', { reviewedAt: 1.5 }),
+  ]) {
+    await assert.rejects(() => malformed.delivery.status({ ...task, review }), { code: 'INVALID_ARGUMENT' });
+  }
+  assert.equal(malformed.calls.length, 0);
+
+  const localChanges = gate([listed(pull({ reviewDecision: 'APPROVED' }))]);
+  assert.equal((await localChanges.delivery.status({ ...task, review: localReview('changes_requested') })).code, 'NO_INDEPENDENT_APPROVAL');
+
+  const required = gate([listed(pull({ reviewDecision: 'REVIEW_REQUIRED', reviews: [] }))]);
+  assert.equal((await required.delivery.status({ ...task, review: localReview() })).code, 'NO_INDEPENDENT_APPROVAL');
+
+  const formalChanges = pull({
+    reviewDecision: null,
+    reviews: [{ author: { login: 'reviewer' }, state: 'CHANGES_REQUESTED', commit: { oid: next }, submittedAt: '2026-11-16T11:00:00Z' }],
+  });
+  const blocked = gate([listed(formalChanges)]);
+  assert.equal((await blocked.delivery.status({ ...task, review: localReview() })).code, 'NO_INDEPENDENT_APPROVAL');
+
+  const staleChanges = gate([listed(pull({ reviewDecision: 'APPROVED' })), { code: 0, stdout: JSON.stringify(checks('SUCCESS', 'pass')), stderr: '' }]);
+  assert.equal((await staleChanges.delivery.status({ ...task, review: localReview('changes_requested', { sha: next }) })).ok, true);
+});
+
+test('an informational review cannot clear an outstanding changes request', async () => {
+  const reviews = [
+    {author:{login:'reviewer'}, state:'CHANGES_REQUESTED', commit:{oid:sha}, submittedAt:'2026-11-16T10:00:00Z'},
+    {author:{login:'reviewer'}, state:'COMMENTED', commit:{oid:sha}, submittedAt:'2026-11-16T11:00:00Z'},
+  ];
+  const pr = pull({reviewDecision:null, reviews});
+  const blocked = gate([
+    view(pr), {code:0, stdout:JSON.stringify(checks('SUCCESS','pass')), stderr:''},
+    view(pr), {code:0, stdout:JSON.stringify(checks('SUCCESS','pass')), stderr:''},
+    {code:0, stdout:'', stderr:''}, view({...pr,state:'MERGED'}),
+  ]);
+  assert.equal((await blocked.delivery.merge({...task, number:41, review:localReview()})).code, 'NO_INDEPENDENT_APPROVAL');
+  assert.equal(blocked.calls.some(call => call.args[1] === 'merge'), false);
+  for (const state of ['APPROVED', 'DISMISSED']) {
+    const resolved = gate([listed(pull({reviewDecision:null, reviews:[...reviews, {author:{login:'reviewer'}, state, commit:{oid:sha}, submittedAt:'2026-11-16T12:00:00Z'}]})), {code:0,stdout:JSON.stringify(checks('SUCCESS','pass')),stderr:''}]);
+    assert.equal((await resolved.delivery.status({...task,review:localReview()})).ok, true);
+  }
+});
+
 test('submit reconciles an uncertain creation and never sends a raw command', async () => {
   const created = gate([
     { code: 0, stdout: '[]', stderr: '' },
@@ -133,6 +212,22 @@ test('merge verifies the actual head and reconciles without retry or admin bypas
   assert.equal(merged.state, 'MERGED');
   const command = success.calls.find(call => call.args[0] === 'pr' && call.args[1] === 'merge').args;
   assert.deepEqual(command, ['pr', 'merge', '41', '--repo', repo, '--merge', '--match-head-commit', sha]);
+
+  const localReady = pull({ reviewDecision: null, latestReviews: [], reviews: [] });
+  const local = gate([
+    view(localReady),
+    { code: 0, stdout: JSON.stringify(checks('SUCCESS', 'pass')), stderr: '' },
+    view(localReady),
+    { code: 0, stdout: JSON.stringify(checks('SUCCESS', 'pass')), stderr: '' },
+    { code: 0, stdout: '', stderr: '' },
+    view(pull({ state: 'MERGED' })),
+  ]);
+  assert.equal((await local.delivery.merge({ ...owned, review: localReview() })).ok, true);
+  assert.deepEqual(local.calls.find(call => call.args[1] === 'merge').args, ['pr', 'merge', '41', '--repo', repo, '--merge', '--match-head-commit', sha]);
+
+  const localChanges = gate([view(ready), { code: 0, stdout: JSON.stringify(checks('SUCCESS', 'pass')), stderr: '' }]);
+  assert.equal((await localChanges.delivery.merge({ ...owned, review: localReview('changes_requested') })).code, 'NO_INDEPENDENT_APPROVAL');
+  assert.equal(localChanges.calls.some(call => call.args[1] === 'merge'), false);
 
   const stale = gate([
     view(ready),

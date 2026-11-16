@@ -147,6 +147,43 @@ async function run() {
       assert.equal(await header.locator('.agent-name').innerText(), 'Codex');
       assert.equal(await header.locator('[data-testid="agent-action"] span').innerText(), agents[0].action[language]);
       assert.equal(await header.getAttribute('title'), caption(agents[0], language));
+
+      const specific = structuredClone(state);
+      specific.workspaces[0].panes[0].agentActivity = 'reading';
+      publish(specific);
+      const readingLabel = language === 'ru' ? 'Читает файлы' : 'Reading files';
+      await page.waitForFunction(label => document.querySelector('.header-agent .agent-action span')?.textContent === label, readingLabel);
+      const fallback = structuredClone(state);
+      delete fallback.workspaces[0].panes[0].agentActivity;
+      publish(fallback);
+      await page.waitForFunction(label => document.querySelector('.header-agent .agent-action span')?.textContent === label, agents[0].action[language]);
+      for (const metadata of [header, workspaceButton(page, 'workspace-codex').locator('[data-testid="agent-metadata"]')]) {
+        await metadata.locator('[data-testid="agent-action"]').waitFor();
+        assert.equal(await metadata.locator('[data-testid="agent-action"] span').innerText(), agents[0].action[language], 'Confirmed running without a tool uses a generic task caption');
+      }
+      const delegation = structuredClone(state);
+      delegation.workspaces[0].panes[0].agentActivity = 'delegating';
+      publish(delegation);
+      const delegationLabel = language === 'ru' ? 'Работает с агентами' : 'Working with agents';
+      await page.waitForFunction(label => document.querySelector('.header-agent .agent-action span')?.textContent === label, delegationLabel);
+      await page.setViewportSize({width:900, height:700});
+      for (const [location, metadata] of [['header', header], ['sidebar', workspaceButton(page, 'workspace-codex').locator('[data-testid="agent-metadata"]')]]) {
+        const geometry = await metadata.evaluate(element => {
+          const box = selector => element.querySelector(selector).getBoundingClientRect();
+          const name = box('.agent-name'), dot = box('.activity-dot'), icon = box('.agent-action svg'), action = box('.agent-action span');
+          return {nameX:name.x, actionX:action.x, dotCenter:dot.x+dot.width/2, iconCenter:icon.x+icon.width/2, bottom:action.bottom, top:name.y, right:element.getBoundingClientRect().right};
+        });
+        assert(Math.abs(geometry.nameX-geometry.actionX)<1, `${location}: name and action share a text column`);
+        assert(Math.abs(geometry.dotCenter-geometry.iconCenter)<1, `${location}: state dot and action icon align`);
+        assert(geometry.bottom-geometry.top<=36, `${location}: status stays within the compact header height`);
+        assert(geometry.right<=900, `${location}: indicator stays inside the minimum-width window`);
+        assert.equal(await metadata.locator('[data-testid="agent-action"] span').innerText(), delegationLabel);
+        await metadata.screenshot({path:path.join(artifacts, `agent-status-${language}-${location}.png`)});
+      }
+      await page.screenshot({path:path.join(artifacts, `agent-status-${language}-900.png`)});
+      publish(state);
+      await page.waitForFunction(label => document.querySelector('.header-agent .agent-action span')?.textContent === label, agents[0].action[language]);
+      await page.setViewportSize({width:1440, height:960});
     }
 
     await page.getByTestId('settings-open').click();
