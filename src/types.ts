@@ -18,7 +18,7 @@ export interface Workspace { id: string; name: string; cwd: string; profileId: s
 export interface Notice { id: string; paneId: string; workspaceId: string; title: string; body: string; createdAt: number; read: boolean }
 export interface Settings extends Preferences { fontSize: number; theme: ThemeId; activeWorkspaceId?: string }
 export interface Project { id: string; name: string; root: string; profileId: string; primaryBranch: string }
-export interface TaskDelivery { state: string | null; code: string | null; number: number | null; url: string | null; headOid: string | null }
+export interface TaskDelivery { action?: string; state: string | null; code: string | null; number: number | null; url: string | null; headOid: string | null }
 export interface Task { id: string; name: string; projectId: string; cwd: string; branch: string; base: string; managed: boolean; archived: boolean; workspaceId?: string; agentId?: string; phase?: string; error?: string; archiveReason?: string; deliverySupport?: string; delivery?: TaskDelivery }
 export interface State { workspaces: Workspace[]; projects?: Project[]; tasks?: Task[]; notifications: Notice[]; settings: Settings }
 export interface Profile {

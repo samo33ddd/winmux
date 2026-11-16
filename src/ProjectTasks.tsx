@@ -5,6 +5,7 @@ import './tasks.css';
 
 export function deliveryLabel(delivery: TaskDelivery): string {
   if (delivery.state === 'MERGED') return t('PR слит');
+  if (delivery.action === 'submit' && delivery.code === null) return t('PR создан — проверьте статус');
   switch (delivery.code) {
     case 'NOT_FOUND': return t('PR ещё не создан');
     case 'NO_INDEPENDENT_APPROVAL': return t('Ожидается независимое ревью');

@@ -83,7 +83,7 @@ const server = net.createServer(socket => {
         const item = workspace({id:'task', label:'Safe agent', state:'running'});
         item.name = request.params.name; state.workspaces.push(item);
         state.projects = [{id:'project-1', name:'Fixture', root:fixtureCwd, profileId:'powershell', primaryBranch:'main'}];
-        state.tasks = [{id:'task-1', name:request.params.name, projectId:'project-1', cwd:fixtureCwd, branch:'winmux/fixture', base:'main', managed:true, archived:false, workspaceId:item.id}];
+        state.tasks = [{id:'task-1', name:request.params.name, projectId:'project-1', cwd:fixtureCwd, branch:'winmux/fixture', base:'main', managed:true, archived:false, workspaceId:item.id, delivery:{action:'submit', state:'OPEN', code:null, number:1, url:null, headOid:null}}];
         result = item;
       }
       else if (request.method === 'agent.bind') {
@@ -252,6 +252,8 @@ async function run() {
     assert.equal(taskRequests[0].agentId, 'codex');
     await page.getByTestId('projects-toggle').click();
     assert.match(await page.getByTestId('project-tasks').innerText(), /Fixture task/);
+    assert.match(await page.getByTestId('project-tasks').innerText(), /PR создан — проверьте статус/);
+    assert.doesNotMatch(await page.getByTestId('project-tasks').innerText(), /PR готов к слиянию/);
     const visible = await page.locator('body').innerText();
     assert.doesNotMatch(visible, /krach|Users\\|Authorization|sk-|token/i);
     console.log(`PASS real Electron activity fixture: five agents, ru/en, six themes, stale actions hidden. Screenshots: ${shots.join(', ')}`);

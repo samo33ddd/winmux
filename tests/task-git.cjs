@@ -131,6 +131,16 @@ test('changed, untracked, ignored data and imported worktrees are preserved', as
   }), 'WORKTREE_NOT_CLEAN');
   git(managedPath, 'restore', 'tracked.txt');
 
+  git(managedPath, 'update-index', '--assume-unchanged', 'tracked.txt');
+  await fsPromises.writeFile(path.join(managedPath, 'tracked.txt'), 'hidden change\n');
+  await expectCode(service.removeWorktree({ repo, path: managedPath, taskId: 'cleanup-task' }), 'WORKTREE_NOT_CLEAN');
+  assert.equal(await fsPromises.readFile(path.join(managedPath, 'tracked.txt'), 'utf8'), 'hidden change\n');
+  git(managedPath, 'update-index', '--no-assume-unchanged', 'tracked.txt');
+  git(managedPath, 'restore', 'tracked.txt');
+  git(managedPath, 'update-index', '--skip-worktree', 'tracked.txt');
+  await expectCode(service.removeWorktree({ repo, path: managedPath, taskId: 'cleanup-task' }), 'WORKTREE_NOT_CLEAN');
+  git(managedPath, 'update-index', '--no-skip-worktree', 'tracked.txt');
+
   await fsPromises.writeFile(path.join(managedPath, 'untracked.txt'), 'keep\n');
   await expectCode(service.removeWorktree({
     repo,

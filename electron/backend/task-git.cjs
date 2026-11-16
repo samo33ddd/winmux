@@ -566,6 +566,10 @@ function createTaskGitService(options = {}) {
         });
       }
 
+      const index = await run(['ls-files', '-v', '-z'], { ...context, cwd: normalizePath(worktree.path, context.environment) });
+      if (index.stdout.split('\0').some(entry => entry && (entry[0] === 'S' || /^[a-z]$/.test(entry[0])))) {
+        throw new TaskGitError('WORKTREE_NOT_CLEAN', 'Worktree has index flags that can hide changes', { operation:'removeWorktree' });
+      }
       const status = await run(
         ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching'],
         { ...context, cwd: normalizePath(worktree.path, context.environment) }

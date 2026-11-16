@@ -116,7 +116,8 @@ node scripts/winmux-client.cjs rpc task.archive '{"taskId":"TASK_ID"}'
 Archive refuses while the task workspace or a delivery operation is active.
 Winmux also preserves a worktree used by another workspace or pane. For a
 Winmux-managed worktree, archive removes it only when tracked, untracked, and
-ignored data are all clean; the branch is always retained. Imported, dirty,
+ignored data are all clean; assume-unchanged and skip-worktree index flags also
+block removal because they can hide changes. The branch is always retained. Imported, dirty,
 locked, or ownership-conflicted worktrees remain on disk. Inspect the returned
 `{archived, removed, reason}` and do not report disk cleanup when `removed` is
 false.
@@ -149,7 +150,8 @@ node scripts/winmux-client.cjs rpc task.delivery.merge '{}'
 
 `submit` requires `title`; `body` defaults to empty and is limited to 65,536
 characters. If the exact open PR already exists, submission reconciles it
-without changing its title or body. `refresh` reads the existing PR. `merge`
+without changing its title or body. A successful `submit` confirms identity,
+not review or CI readiness; call `refresh` to inspect those gates. `refresh` reads the existing PR. `merge`
 uses a merge commit and only proceeds when the PR's source repository, base
 branch, head branch, and current head commit match the task; an independent
 non-author approval exists on that head without requested changes; all required

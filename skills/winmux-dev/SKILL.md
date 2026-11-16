@@ -111,7 +111,8 @@ The task RPC surface is:
   tasks and missing branches without fabricating replacement history.
 - `task.archive` requires the task workspace and delivery operation to be
   inactive. It removes a managed worktree only when ownership is unambiguous and
-  the worktree is clean, including tracked, untracked, and ignored data. The
+  the worktree is clean, including tracked, untracked, and ignored data. Index
+  flags that hide changes (assume-unchanged or skip-worktree) also block removal. The
   branch is preserved. Imported, dirty, locked, in-use, or ownership-conflicted
   worktrees stay on disk and return a visible `reason`.
 
@@ -126,7 +127,9 @@ shell fallback after an ownership or cleanliness rejection.
 delivery result. `refresh`, `submit`, and `merge` parse `origin` without embedded
 credentials, verify the worktree is on its recorded branch, read the current
 HEAD, and operate through authenticated `gh`. They do not stage, commit, or push.
-Only one delivery operation may run per task.
+Only one delivery operation may run per task. A successful `submit` confirms PR
+identity only; it does not establish merge readiness. Refresh before presenting
+readiness or attempting merge.
 
 Delivery is fail-closed. The PR must match the task's GitHub source repository,
 base branch, head branch, and exact HEAD commit. Merge additionally requires an

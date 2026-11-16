@@ -328,6 +328,7 @@ const english: Record<string, string> = {
   'Изменилась версия PR': 'PR head changed',
   'Слияние заблокировано': 'Merge blocked',
   'PR готов к слиянию': 'PR ready to merge',
+  'PR создан — проверьте статус': 'PR created — check status',
   'Не удалось подтвердить состояние PR': 'Could not confirm PR status',
   'Задачи без терминала': 'Tasks without a terminal',
   'Открыть PR': 'Open PR',
