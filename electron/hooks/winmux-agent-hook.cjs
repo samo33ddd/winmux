@@ -24,19 +24,22 @@ function bounded(value, max) {
   return value;
 }
 
-function eventPayload(raw) {
+function eventPayload(raw, options = {}) {
   let parsed;
   try { parsed = JSON.parse(raw); } catch { fail('Codex hook input is not JSON'); }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) fail('Codex hook input is not an object');
   const event = bounded(parsed.hook_event_name, 64);
   const sessionId = bounded(parsed.session_id, 128);
   const cwd = parsed.cwd === undefined || parsed.cwd === null ? '' : bounded(parsed.cwd, 4096);
+  const paneId = options.paneId === undefined ? undefined : bounded(options.paneId, 128);
+  if (options.paneId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(paneId || '')) fail('Codex hook pane identity is invalid');
   if (!event || !EVENTS.has(event) || !sessionId || cwd === undefined) fail('Codex hook input is missing a supported event');
   return {
     agentId: 'codex',
     event,
     sessionId,
     cwd,
+    ...(paneId ? { paneId } : {}),
     ...((parsed.hook_event_name === 'PreToolUse' || parsed.hook_event_name === 'PostToolUse') && bounded(parsed.tool_name, 256) && bounded(parsed.tool_use_id, 256) ? {
       ...(bounded(parsed.tool_name, 256) ? { toolName: bounded(parsed.tool_name, 256) } : {}),
       ...(bounded(parsed.tool_use_id, 256) ? { toolId: bounded(parsed.tool_use_id, 256) } : {}),
@@ -116,8 +119,10 @@ async function main(argv = process.argv) {
   if (!selected || selected.includes('\0') || selected.length > 1024) fail('Codex hook requires --data-dir');
   const pipeIndex = argv.indexOf('--pipe');
   const pipe = pipeIndex === -1 ? undefined : argv[pipeIndex + 1];
+  const paneIndex = argv.indexOf('--pane-id');
+  const paneId = paneIndex === -1 ? undefined : argv[paneIndex + 1];
   const raw = await readStdin();
-  const params = eventPayload(raw);
+  const params = eventPayload(raw, { paneId });
   await deliver(pipeName(selected, pipe), tokenFor(selected), params);
 }
 

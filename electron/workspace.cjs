@@ -43,6 +43,16 @@ async function resolveLocal(root, rel, allowMissing=false) {
   if(fromRoot==='..' || fromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(fromRoot)) throw new Error('Link points outside the current directory');
   return target;
 }
+async function entryType(root,target,entry) {
+  if(entry.isDirectory()) return 'directory';
+  if(!entry.isSymbolicLink()) return 'file';
+  try {
+    const resolved=await fs.realpath(path.join(target,entry.name));
+    const fromRoot=path.relative(root,resolved);
+    if(fromRoot==='..' || fromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(fromRoot)) return 'symlink';
+    return (await fs.stat(resolved)).isDirectory() ? 'directory' : 'symlink';
+  } catch { return 'symlink'; }
+}
 function preview(buffer,name,size) {
   const mime=imageTypes[path.extname(name).toLowerCase()];
   if(mime) return {kind:'image',dataUrl:`data:${mime};base64,${buffer.toString('base64')}`,size};
@@ -53,8 +63,10 @@ async function localFiles(root,method,rel,params) {
   const target=await resolveLocal(root,rel);
   if(method==='files.list') {
     const all=await fs.readdir(target,{withFileTypes:true});
-    const entries=all.filter(e=>e.name!=='.git').sort((a,b)=>Number(b.isDirectory())-Number(a.isDirectory()) || a.name.localeCompare(b.name));
-    return {path:rel,entries:entries.slice(0,2000).map(e=>({name:e.name,path:rel?`${rel}/${e.name}`:e.name,type:e.isDirectory()?'directory':e.isSymbolicLink()?'symlink':'file',size:0})),truncated:entries.length>2000};
+    const actualRoot=await fs.realpath(root);
+    const entries=await Promise.all(all.filter(e=>e.name!=='.git').map(async e=>({name:e.name,type:await entryType(actualRoot,target,e)})));
+    entries.sort((a,b)=>Number(b.type==='directory')-Number(a.type==='directory') || a.name.localeCompare(b.name));
+    return {path:rel,entries:entries.slice(0,2000).map(e=>({name:e.name,path:rel?`${rel}/${e.name}`:e.name,type:e.type,size:0})),truncated:entries.length>2000};
   }
   const stat=await fs.stat(target);
   if(!stat.isFile()) throw new Error('Select a file to preview');
@@ -82,12 +94,17 @@ const pythonFiles = String.raw`import os,sys,json,base64,mimetypes
 root=os.path.realpath(os.path.expanduser(sys.argv[1])); rel=sys.argv[2]; method=sys.argv[3]
 target=os.path.realpath(os.path.join(root,rel))
 if os.path.commonpath([root,target])!=root: raise ValueError('Path is outside workspace')
+def contained(candidate):
+ return os.path.commonpath([root,candidate])==root
 if method=='files.list':
  entries=[]
  with os.scandir(target) as scan:
   for item in scan:
    if item.name=='.git': continue
    kind='symlink' if item.is_symlink() else 'directory' if item.is_dir() else 'file'
+   if kind=='symlink':
+    resolved=os.path.realpath(item.path)
+    if contained(resolved) and os.path.isdir(resolved): kind='directory'
    entries.append(dict(name=item.name,path=(rel+'/' if rel else '')+item.name,type=kind,size=0))
  entries.sort(key=lambda x:(x['type']!='directory',x['name'].lower()))
  print(json.dumps(dict(path=rel,entries=entries[:2000],truncated=len(entries)>2000)))
@@ -165,7 +182,7 @@ async function workspaceRequest(client,method,params) {
   }
   if(method==='git.status'){
     try{
-      const status=parseStatus(await executeGit(workspace,profile,['status','--porcelain=v1','-z','--branch','--untracked-files=normal',...(params.paneId!==undefined?['--','.']:[])]));
+      const status=parseStatus(await executeGit(workspace,profile,['status','--porcelain=v1','-z','--branch','--untracked-files=all',...(params.paneId!==undefined?['--','.']:[])]));
       if(params.paneId!==undefined){
         const prefix=(await executeGit(workspace,profile,['rev-parse','--show-prefix'])).replace(/\r?\n$/,'');
         status.entries=status.entries.filter(entry=>entry.path.startsWith(prefix)).map(entry=>{

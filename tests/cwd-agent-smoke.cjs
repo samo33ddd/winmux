@@ -136,7 +136,8 @@ app.whenReady().then(() => {
       commandFor = event => config.hooks[event][0].hooks[0].command;
     } else {
       const { codexHookArgs } = require('../electron/backend/agent-hooks.cjs');
-      assert.deepEqual(captured.args, codexHookArgs(profile), 'npm .cmd must preserve the complete TOML argument vector');
+      if (isWsl) assert.deepEqual(captured.args, codexHookArgs(profile), 'WSL must retain the complete session hook argument vector');
+      else assert.equal(captured.args.filter(arg => /^hooks\.[A-Za-z]+=/.test(arg)).length, 7, 'Windows must preserve all required session hook events');
       assert(!captured.args.some(arg => /notify\s*=/.test(arg)));
       commandFor = event => {
         const arg = captured.args.find(arg => arg.startsWith(`hooks.${event}=`));

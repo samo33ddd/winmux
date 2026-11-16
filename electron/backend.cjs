@@ -34,16 +34,49 @@ function setAgentState(pane, next, reset = false) {
   if (reset || pane.agentState !== next || !Number.isFinite(pane.agentStateSince)) pane.agentStateSince = Date.now();
   pane.agentState = next;
 }
+const STATE_MAX_BYTES = 4 * 1024 * 1024;
+const STATE_RECOVERY_MAX_BYTES = 16 * 1024 * 1024;
 function tabTitleMode(titleMode, hasTitle) {
   if (titleMode === undefined) return hasTitle ? 'custom' : 'auto';
   if (titleMode !== 'auto' && titleMode !== 'custom') fail('INVALID_ARGUMENT', 'titleMode must be auto or custom');
   if (titleMode === 'custom' && !hasTitle) fail('INVALID_ARGUMENT', 'A custom tab title is required');
   return titleMode;
 }
+function boundedText(value, max) {
+  let result = '';
+  for (const character of value) {
+    if (result.length + character.length > max) break;
+    result += character;
+  }
+  return result;
+}
+function stateDocument(state) { return JSON.stringify({ version: 3, state }); }
+function fitStateSize(state) {
+  let serialized = stateDocument(state);
+  if (Buffer.byteLength(serialized) <= STATE_MAX_BYTES) return { serialized, dropped: 0 };
+  const total = state.notifications.length;
+  let low = 0, high = total;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const candidate = { ...state, notifications: state.notifications.slice(-middle) };
+    if (Buffer.byteLength(stateDocument(candidate)) <= STATE_MAX_BYTES) low = middle;
+    else high = middle - 1;
+  }
+  state.notifications = low ? state.notifications.slice(-low) : [];
+  serialized = stateDocument(state);
+  if (Buffer.byteLength(serialized) > STATE_MAX_BYTES) fail('STATE_INVALID', 'Saved workspace state exceeds the size limit');
+  return { serialized, dropped: total - low };
+}
+function backupRecoveredState(file) {
+  const backup = `${file}.recovery-${Date.now()}-${randomUUID().slice(0, 8)}.bak`;
+  fs.copyFileSync(file, backup, fs.constants.COPYFILE_EXCL);
+  try { fs.chmodSync(backup, 0o600); } catch {}
+}
 function loadState(file) {
   const initial = { workspaces: [], projects: [], tasks: [], notifications: [], settings: { fontSize: 14, theme: 'dark' } };
   if (!fs.existsSync(file)) return initial;
-  if (fs.statSync(file).size > 4 * 1024 * 1024) fail('STATE_INVALID', 'Saved state exceeds the size limit');
+  const savedBytes = fs.statSync(file).size;
+  if (savedBytes > STATE_RECOVERY_MAX_BYTES) fail('STATE_INVALID', 'Saved state exceeds the recovery size limit');
   let saved;
   try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { fail('STATE_INVALID', `Cannot parse saved state; preserve and repair ${file}`); }
   if (![1, 2, 3].includes(saved.version) || !saved.state || !Array.isArray(saved.state.workspaces)) fail('STATE_INVALID', `Unsupported saved state in ${file}`);
@@ -52,10 +85,16 @@ function loadState(file) {
     fs.copyFileSync(file, `${file}.pre-tasks-${randomUUID()}.bak`, fs.constants.COPYFILE_EXCL);
     state.projects = []; state.tasks = [];
   }
+  let recovered = savedBytes > STATE_MAX_BYTES;
   const ids = new Set(); let count = 0;
   const unique = id => { string(id, 'saved id', 128); if (ids.has(id)) fail('STATE_INVALID', 'Duplicate saved identifier'); ids.add(id); };
   for (const workspace of state.workspaces) {
-    unique(workspace.id); string(workspace.name, 'workspace name', 120); string(workspace.cwd, 'cwd', 4096); string(workspace.profileId, 'profileId', 256);
+    unique(workspace.id);
+    if (typeof workspace.name !== 'string' || !workspace.name.trim() || workspace.name.includes('\0')) fail('STATE_INVALID', 'Invalid saved workspace name');
+    const normalizedName = workspace.name.trim();
+    const boundedName = boundedText(normalizedName, 120) || 'Workspace';
+    if (boundedName !== workspace.name) { workspace.name = boundedName; recovered = true; }
+    string(workspace.cwd, 'cwd', 4096); string(workspace.profileId, 'profileId', 256);
     if (!Array.isArray(workspace.panes) || !workspace.panes.length) fail('STATE_INVALID', 'Workspace has no panes');
     const leaves = new Set();
     for (const pane of workspace.panes) {
@@ -101,8 +140,14 @@ function loadState(file) {
   }
   if (!state.settings || !['dark', 'light'].includes(state.settings.theme)) fail('STATE_INVALID', 'Invalid saved settings');
   integer(state.settings.fontSize, 'fontSize', 9, 32);
-  state.notifications = Array.isArray(state.notifications) ? state.notifications.filter(n => n && typeof n.id === 'string' && typeof n.title === 'string' && typeof n.body === 'string' && typeof n.paneId === 'string' && typeof n.workspaceId === 'string' && Number.isFinite(n.createdAt)).slice(-LIMITS.notifications).map(n => ({ ...n, title: n.title.slice(0, 256), body: n.body.slice(0, 4096), read: Boolean(n.read) })) : [];
+  state.notifications = Array.isArray(state.notifications) ? state.notifications.filter(n => n && typeof n.id === 'string' && typeof n.title === 'string' && typeof n.body === 'string' && typeof n.paneId === 'string' && typeof n.workspaceId === 'string' && Number.isFinite(n.createdAt)).slice(-LIMITS.notifications).map(n => ({
+    id: boundedText(n.id, 128), paneId: boundedText(n.paneId, 128), workspaceId: boundedText(n.workspaceId, 128),
+    title: n.title.slice(0, 256), body: n.body.slice(0, 4096), createdAt: n.createdAt, read: Boolean(n.read),
+  })) : [];
+  const fitted = fitStateSize(state);
+  if (fitted.dropped) recovered = true;
   if (!state.workspaces.some(w => w.id === state.settings.activeWorkspaceId)) state.settings.activeWorkspaceId = state.workspaces[0]?.id;
+  if (recovered) backupRecoveredState(file);
   return state;
 }
 
@@ -149,7 +194,7 @@ async function startServer(options = {}) {
     clearTimeout(persistTimer);
     const temp = `${loc.stateFile}.${process.pid}.tmp`;
     try {
-      fs.writeFileSync(temp, JSON.stringify({ version: 3, state }), { mode: 0o600 });
+      fs.writeFileSync(temp, fitStateSize(state).serialized, { mode: 0o600 });
       fs.renameSync(temp, loc.stateFile);
     } catch (error) { try { fs.unlinkSync(temp); } catch {} throw error; }
   }
@@ -161,7 +206,15 @@ async function startServer(options = {}) {
     if (length > LIMITS.response || client.socket.writableLength + length > LIMITS.socket) { client.socket.destroy(); return; }
     client.socket.write(frame);
   }
-  function broadcast(event) { for (const client of clients) if (client.authorized) send(client, { event }); }
+  function broadcast(event) {
+    for (const client of clients) if (client.authorized) {
+      if (event.type === 'state' && client.socket.writableNeedDrain) client.pendingState = event;
+      else {
+        if (event.type === 'state') delete client.pendingState;
+        send(client, { event });
+      }
+    }
+  }
   function changed() { save(); broadcast({ type: 'state', state: publicState() }); }
   function asyncChanged() { safeSave(); broadcast({ type: 'state', state: publicState() }); }
   function workspaceById(id) { const w = state.workspaces.find(w => w.id === id); if (!w) fail('NOT_FOUND', 'Workspace not found'); return w; }
@@ -294,6 +347,7 @@ async function startServer(options = {}) {
     const runtime = terminalFor(pane);
     runtime.agentLaunchId = launch.agentLaunchId;
     runtime.agentSessionHooks = launch.agentSessionHooks === true;
+    runtime.cleanupHooks = launch.cleanupHooks;
     try {
       // Even an unset name in WSLENV creates an empty variable in Linux.
       const forwardedEnv = (process.env.WSLENV || '').split(':').filter(entry => entry.split('/')[0].toUpperCase() !== 'ELECTRON_RUN_AS_NODE');
@@ -314,6 +368,7 @@ async function startServer(options = {}) {
       pane.pid = runtime.pty.pid; pane.status = 'running'; delete pane.exitCode;
       runtime.subscriptions.push(runtime.pty.onData(data => queueOutput(pane, runtime, data)));
       runtime.subscriptions.push(runtime.pty.onExit(({ exitCode }) => {
+        runtime.cleanupHooks?.();
         if (runtime.disposed || stopping) return;
         fence(runtime, () => {
           if (runtime.disposed || stopping) return;
@@ -324,17 +379,18 @@ async function startServer(options = {}) {
         }).catch(error => { if (!runtime.disposed && !stopping) console.error(error.message); });
       }));
       return runtime;
-    } catch (error) { disposePane(pane); fail('SPAWN_FAILED', `Cannot start ${launch.profile.label}: ${error.message}`); }
+    } catch (error) { launch.cleanupHooks?.(); disposePane(pane); fail('SPAWN_FAILED', `Cannot start ${launch.profile.label}: ${error.message}`); }
   }
   function disposePane(pane) {
     const runtime = runtimes.get(pane.id);
     if (!runtime) return;
     runtime.disposed = true;
+    runtime.cleanupHooks?.();
     try { runtime.pty?.kill(); } catch (error) { if (pane.status === 'running') console.warn(`PTY cleanup: ${error.message}`); }
     for (const disposable of runtime.subscriptions) disposable.dispose();
     runtime.terminal.dispose(); runtimes.delete(pane.id);
   }
-  const makePane = launch => ({ id: randomUUID(), title: launch.profile.label, profileId: launch.profile.id, cwd: launch.cwd, ...(launch.agentId ? { agentId: launch.agentId, agentLabel: launch.agentLabel } : {}), agentState: launch.agentId ? 'starting' : 'unknown', pid: null, status: 'exited', cols: 100, rows: 28 });
+  const makePane = launch => ({ id: launch.paneId, title: launch.profile.label, profileId: launch.profile.id, cwd: launch.cwd, ...(launch.agentId ? { agentId: launch.agentId, agentLabel: launch.agentLabel } : {}), agentState: launch.agentId ? 'starting' : 'unknown', pid: null, status: 'exited', cols: 100, rows: 28 });
   function tabTitle(workspace, base) {
     let title = base, sequence = 2;
     while (workspace.tabs.some(tab => tab.title === title)) title = `${base} ${sequence++}`;
@@ -383,7 +439,7 @@ async function startServer(options = {}) {
         if (!inspected.branches.includes(primary)) fail('PRIMARY_UNAVAILABLE', 'Select an existing primary branch');
         if (!inspected.branches.includes(base)) fail('INVALID_ARGUMENT', 'Base branch must be local');
         const agentHooks = Boolean(environment.agents?.find(agent => agent.id === agentId)?.hookAdapter);
-        await validateLaunch(environment, profileId, inspected.root, agentId, agentHooks);
+        await validateLaunch(environment, profileId, inspected.root, agentId, false);
         const profile = environment.profiles.find(item => item.id === profileId);
         const identity = value => profile.environment === 'windows' ? path.win32.normalize(value).toLowerCase() : path.posix.normalize(value);
         let project = state.projects.find(item => {
@@ -472,15 +528,16 @@ async function startServer(options = {}) {
       case 'workspace.create': {
         if (runtimes.size >= LIMITS.panes) fail('LIMIT_REACHED', 'Maximum number of terminal panes reached');
         const profileId = params.profileId ?? 'powershell'; string(profileId, 'profileId', 256);
-        const name = params.name === undefined ? null : string(params.name, 'name', 120).trim();
+        const requestedName = params.name === undefined ? null : string(params.name, 'name', 120).trim();
         const task = params.taskId === undefined ? null : taskById(params.taskId);
         if (task && (task.cwd !== params.cwd || state.projects.find(item => item.id === task.projectId)?.profileId !== profileId || (params.agentId !== undefined && task.agentId !== params.agentId) || task.phase !== 'ready' || state.workspaces.some(item => item.id === task.workspaceId))) fail('INVALID_ARGUMENT', 'Task does not match the launch');
-        const launch = await validateLaunch(environment, profileId, params.cwd, params.agentId, params.agentHooks, task?.id);
+        const launch = await validateLaunch(environment, profileId, params.cwd, params.agentId, params.agentHooks, { dataDir: loc.dataDir, pipeName: loc.pipeName }, task?.id);
         if (task) launch.taskId = task.id;
         const pane = makePane(launch);
         const tab = { id: randomUUID(), title: launch.profile.label, root: { type: 'leaf', paneId: pane.id } }; pane.tabId = tab.id;
         tab.titleMode = 'auto';
-        const workspace = { id: randomUUID(), name: name || path.basename(launch.cwd) || launch.profile.label, cwd: launch.cwd, profileId, tabs: [tab], activeTabId: tab.id, root: tab.root, panes: [pane] };
+        const autoName = boundedText((path.basename(launch.cwd) || launch.profile.label).trim(), 120) || launch.profile.label;
+        const workspace = { id: randomUUID(), name: requestedName || autoName, cwd: launch.cwd, profileId, tabs: [tab], activeTabId: tab.id, root: tab.root, panes: [pane] };
         spawnPane(pane, launch); state.workspaces.push(workspace); if (task) { task.workspaceId = workspace.id; task.archived = false; } state.settings.activeWorkspaceId = workspace.id; changed();
         return structuredClone(workspace);
       }
@@ -503,7 +560,7 @@ async function startServer(options = {}) {
         const titleMode = tabTitleMode(params.titleMode, Boolean(requestedTitle));
         const profileId = params.profileId ?? source.profileId;
         const task = state.tasks.find(item => item.workspaceId === workspace.id && !item.archived);
-        const launch = await validateLaunch(environment, profileId, params.cwd ?? (profileId === source.profileId ? source.cwd : undefined), params.agentId, params.agentHooks, task && task.agentId === params.agentId ? task.id : undefined);
+        const launch = await validateLaunch(environment, profileId, params.cwd ?? (profileId === source.profileId ? source.cwd : undefined), params.agentId, params.agentHooks, { dataDir: loc.dataDir, pipeName: loc.pipeName }, task && task.agentId === params.agentId ? task.id : undefined);
         if (task) launch.taskId = task.id;
         const pane = makePane(launch);
         const tab = { id: randomUUID(), title: requestedTitle || tabTitle(workspace, launch.agentLabel || launch.profile.label), titleMode, root: { type: 'leaf', paneId: pane.id } }; pane.tabId = tab.id;
@@ -526,11 +583,41 @@ async function startServer(options = {}) {
         if (!['horizontal', 'vertical'].includes(params.direction)) fail('INVALID_ARGUMENT', 'direction must be horizontal or vertical');
         const profileId = params.profileId ?? source.profileId;
         const task = state.tasks.find(item => item.workspaceId === workspace.id && !item.archived);
-        const launch = await validateLaunch(environment, profileId, params.cwd ?? (profileId === source.profileId ? source.cwd : undefined), params.agentId, params.agentHooks, task && task.agentId === params.agentId ? task.id : undefined);
+        const launch = await validateLaunch(environment, profileId, params.cwd ?? (profileId === source.profileId ? source.cwd : undefined), params.agentId, params.agentHooks, { dataDir: loc.dataDir, pipeName: loc.pipeName }, task && task.agentId === params.agentId ? task.id : undefined);
         if (task) launch.taskId = task.id;
         const pane = makePane(launch); pane.tabId = tab.id; spawnPane(pane, launch);
         tab.root = replaceLeaf(tab.root, source.id, { type: 'split', id: randomUUID(), direction: params.direction, ratio: 0.5, first: { type: 'leaf', paneId: source.id }, second: { type: 'leaf', paneId: pane.id } });
         workspace.panes.push(pane); syncTabs(workspace); changed(); return structuredClone(pane);
+      }
+      case 'pane.move': {
+        const paneId = string(params.paneId, 'paneId', 128);
+        const targetPaneId = string(params.targetPaneId, 'targetPaneId', 128);
+        const side = string(params.side, 'side', 16);
+        if (!['left', 'right', 'top', 'bottom'].includes(side)) fail('INVALID_ARGUMENT', 'side must be left, right, top, or bottom');
+        if (paneId === targetPaneId) fail('INVALID_ARGUMENT', 'A pane cannot be moved beside itself');
+        const source = paneById(paneId), target = paneById(targetPaneId);
+        if (source.workspace.id !== target.workspace.id) fail('INVALID_ARGUMENT', 'Cannot move a pane across workspaces');
+        if (!source.tab || !target.tab) fail('STATE_INVALID', 'Pane is not attached to a tab');
+        const { pane: movedPane, workspace, tab: sourceTab } = source;
+        const { pane: targetPane, tab: targetTab } = target;
+        const sourceRoot = replaceLeaf(sourceTab.root, movedPane.id, null);
+        if (sourceTab === targetTab) sourceTab.root = sourceRoot;
+        else if (sourceRoot) sourceTab.root = sourceRoot;
+        else workspace.tabs = workspace.tabs.filter(tab => tab !== sourceTab);
+        const horizontal = side === 'left' || side === 'right';
+        const movedFirst = side === 'left' || side === 'top';
+        const movedLeaf = { type: 'leaf', paneId: movedPane.id };
+        const targetLeaf = { type: 'leaf', paneId: targetPane.id };
+        targetTab.root = replaceLeaf(targetTab.root, targetPane.id, {
+          type: 'split', id: randomUUID(), direction: horizontal ? 'horizontal' : 'vertical', ratio: 0.5,
+          first: movedFirst ? movedLeaf : targetLeaf, second: movedFirst ? targetLeaf : movedLeaf,
+        });
+        movedPane.tabId = targetTab.id;
+        workspace.activeTabId = targetTab.id;
+        state.settings.activeWorkspaceId = workspace.id;
+        syncTabs(workspace);
+        changed();
+        return { paneId: movedPane.id, workspaceId: workspace.id, tabId: targetTab.id };
       }
       case 'pane.close': {
         const { pane, workspace, tab } = paneById(params.paneId);
@@ -541,7 +628,7 @@ async function startServer(options = {}) {
       case 'pane.input': {
         const { pane, runtime } = paneById(params.paneId);
         if (pane.status !== 'running' || !runtime?.pty) fail('PANE_EXITED', 'Terminal process has exited');
-        string(params.data, 'data', LIMITS.input, true);
+        if (typeof params.data !== 'string' || params.data.length > LIMITS.input) fail('INVALID_ARGUMENT', `data must be a string of at most ${LIMITS.input} characters`);
         if (Buffer.byteLength(params.data) > LIMITS.input) fail('LIMIT_REACHED', 'Terminal input exceeds 64 KiB');
         runtime.pty.write(params.data); return { ok: true };
       }
@@ -721,7 +808,13 @@ async function startServer(options = {}) {
     clients.add(client);
     const authTimeout = setTimeout(() => { if (!client.authorized) socket.destroy(); }, 5000);
     socket.on('error', () => {});
-    socket.on('close', () => { clients.delete(client); clearTimeout(authTimeout); });
+    socket.on('close', () => { clients.delete(client); delete client.pendingState; clearTimeout(authTimeout); });
+    socket.on('drain', () => {
+      if (!client.pendingState) return;
+      const event = client.pendingState;
+      delete client.pendingState;
+      send(client, { event });
+    });
     socket.on('data', chunk => {
       client.buffer += chunk;
       let index;

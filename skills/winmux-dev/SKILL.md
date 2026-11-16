@@ -63,7 +63,70 @@ and is blocked during pending saves; the desktop close path also protects unsave
 work. Check remount/save races, stale clean data, and orphan drafts together when
 changing lifetime or ownership. Keep error and conflict recovery visible.
 
+### Terminal links and input
+
+The topbar's empty `.workspace-tabs` area is an Electron drag region; actual tab
+and toolbar buttons remain `no-drag`. Validate computed regions and, when native
+Computer Use is available, measure the restored window position after a real
+header drag. CDP pointer events alone do not prove native window movement. A
+missing native pipe is a verification limitation, not a product pass.
+
+Terminal pane relocation uses `pane.move {paneId,targetPaneId,side}` with four
+edge positions inside one workspace. Move the existing leaf/runtime, collapse
+the source layout, and remove only an empty source tab's metadata. Never call a
+tab/pane disposal helper while moving. Verify IDs, PIDs, screen contents, drafts,
+same-tab/cross-tab layout consistency, invalid targets and persisted restoration.
+The renderer uses tab/pane headers as drag sources and a highlighted destination;
+terminal body selection and native blank-header window dragging stay independent.
+
+Terminal web links have two callers in `src/TerminalPane.tsx`: WebLinksAddon for
+plain URLs and the OSC 8 `linkHandler`. Both require Ctrl+left-click and forward to
+the owning workspace through `WorkspaceView` and App's existing browser-request
+state. Do not invoke `openExternal` from these handlers. Ordinary web-link clicks
+do not navigate; local file activation and the browser toolbar's explicit external
+action retain their contracts. BrowserPage still validates HTTP(S) and credentials.
+`test:file-preview` exercises both link types in isolated Electron against a local
+HTTP fixture, checks modifier gating and detects external-browser requests.
+
+Desktop input goes through `src/terminalInput.ts`: serialize bounded UTF-8 chunks
+across all xterm `onData` events so a large paste and later typing cannot overtake
+one another. Preserve surrogate pairs and bracketed-paste bytes, discard remaining
+queued input after a failure, and never retry it. Owner removal/unmount cancels
+pending delivery. The backend retains its 64 KiB byte limit and accepts terminal
+NUL without changing strict identifiers or path validation. The focused queue
+regression runs in `test:integrations`; `test:desktop` checks real Ctrl+Space and a
+Unicode clipboard paste over 64 KiB through Electron and ConPTY.
+
+Main installs `electron/stdio.cjs` before Electron startup. A closed launcher pipe
+must not raise a native uncaught EPIPE dialog, but non-EPIPE stream errors remain
+visible. `tests/stdio.cjs` covers real closed stdout/stderr and unexpected errors.
+Use graceful test teardown; an abruptly terminated Playwright controller can
+leave an isolated Electron process alive with broken output pipes. Match the
+fixture data directory and exact process ancestry before cleaning up, never an
+owner window or the shared Codex daemon.
+
 ### Agent lifecycle and notifications
+
+For Windows Codex session hooks, allocate pane/launch IDs before constructing the
+PowerShell arguments. `validateLaunch` receives the selected daemon data directory
+and pipe; per-launch `hooks/session/codex-<launchId>.json` and `.ps1` artifacts pass
+that context to `agent-status.cjs --codex --context-file`. Shared app-server hooks
+cannot rely on inherited terminal `WINMUX_*` variables. Never embed capability
+tokens or prompt/tool arguments in those artifacts. Clean them on normal disposal
+and failed launch. Preserve WSL's separate interop route and user hook trust.
+
+Measure the complete PowerShell command after UTF-16/base64 and Windows argv
+quoting, rather than just the hook JSON size. The launcher rejects above 30,000
+UTF-16 units before spawning; the Unicode/spaces regression measured 22,795.
+Use a shorter data-directory path if this limit is reached, preserving the owner
+instance. Same-session confirmed hooks survive ambiguous polls/disconnect;
+terminal completion events and replacement sessions still clear stale activity.
+
+Large valid notification histories approach the saved 4 MiB serialized budget.
+Coalesce replaceable state broadcasts while a socket needs drain, retaining the
+latest state; do not remove limits or drop ordered terminal output and RPC replies.
+The real backend regression must restore escaped history, move/close panes and
+observe subsequent shell exit without disconnecting the responsive client.
 
 A shell PID, discovered CLI, quiet terminal, or unavailable transport does not prove
 activity or completion. Keep unknown explicit. Clear stale exit codes when a new
@@ -210,6 +273,9 @@ English/Russian strings and six themes, and the supported 900-pixel minimum widt
 Sanitize paths, terminal text, credentials, cookies, and account data before public
 screenshots. Use available computer-use tooling for native window interaction;
 report a missing native pipe/locked desktop rather than inventing UI evidence.
+For terminal pointer checks, settle the rendered box before reading `pane.screen`
+and use that response's rows/cols together. Mixing an earlier grid snapshot with
+a later resized box can miss a visible link on a hosted Windows desktop.
 
 ## Delivery and release gates
 

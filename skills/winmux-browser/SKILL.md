@@ -69,6 +69,7 @@ node scripts/winmux-client.cjs screenshot '{"id":123}'
 - Snapshot reads at most 40,000 body-text characters and 300 visible matching elements. It does not traverse iframe documents or shadow roots and is not a full accessibility tree.
 - Snapshot references are assigned to the current DOM. Re-snapshot after navigation or structural changes; never assume `e0` always means the same control.
 - The embedded browser allows HTTP(S), blocks popups/downloads/permission requests, and shares a persistent browser session. It may contain signed-in accounts.
+- Terminal Ctrl+Click opens plain HTTP(S) links and OSC 8 web targets in the owning workspace's embedded browser. Ordinary web-link clicks do not navigate. This UI gesture is separate from the installed wrapper's `open` operation; local file links still use the Files preview. Use the browser toolbar's external-browser action only when explicitly needed.
 - Screenshot captures the embedded page, not the whole Winmux window. Captures and snapshots may contain private data; sanitize evidence before sharing.
 - The client timeout does not prove that an action failed. Inspect `list` and `snapshot` after a lost response before retrying a click, fill, open, or mutation.
 - Keep capability tokens out of output. Do not claim browser control survives UI closure or constitutes an MCP, agent-hook, or conversation-resume integration.

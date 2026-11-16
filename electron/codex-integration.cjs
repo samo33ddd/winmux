@@ -176,17 +176,21 @@ function matchHook({ agentId, event, sessionId, cwd, paneId, panes, threads, loa
   if (paneId) {
     const pane = codexPanes.find(item => item.id === paneId);
     if (!pane) return { action: 'ignore', reason: 'pane' };
+    if (eligible(pane) && pane.agentSessionId === sessionId && ['auto', 'explicit'].includes(pane.agentBinding)) {
+      return { action: 'apply', paneId: pane.id, state };
+    }
     if (pane.agentThreadId) return bound(pane.id) ? { action: 'apply', paneId: pane.id, state } : { action: 'ignore', reason: 'stale' };
     const samePanes = processPanes.filter(item => normalizeCwd(item.cwd) && normalizeCwd(item.cwd) === normalizeCwd(pane.cwd));
     const sameThreads = roots.filter(thread => normalizeCwd(thread.cwd) === normalizeCwd(pane.cwd));
     if (eligible(pane) && samePanes.length === 1 && sameThreads.length === 1 && sameThreads[0].sessionId === sessionId) return { action: 'apply', paneId: pane.id, state, thread: sameThreads[0] };
     return { action: 'ignore', reason: 'ambiguous' };
   }
+  const cwdKey = normalizeCwd(cwd);
+  const cwdPanes = processPanes.filter(pane => normalizeCwd(pane.cwd) === cwdKey);
+  if (cwdKey && cwdPanes.length > 1) return { action: 'ignore', reason: 'ambiguous' };
   const sessionPanes = codexPanes.filter(pane => bound(pane.id));
   if (sessionPanes.length === 1) return { action: 'apply', paneId: sessionPanes[0].id, state };
   if (sessionPanes.length > 1) return { action: 'ignore', reason: 'ambiguous' };
-  const cwdKey = normalizeCwd(cwd);
-  const cwdPanes = processPanes.filter(pane => normalizeCwd(pane.cwd) === cwdKey);
   const cwdThreads = roots.filter(thread => normalizeCwd(thread.cwd) === cwdKey);
   if (cwdKey && cwdPanes.length === 1 && eligible(cwdPanes[0]) && !cwdPanes[0].agentLaunchLocked && !cwdPanes[0].agentThreadId
     && cwdThreads.length === 1 && cwdThreads[0].sessionId === sessionId) return { action: 'apply', paneId: cwdPanes[0].id, state, thread: cwdThreads[0] };
@@ -280,8 +284,9 @@ function createController(options = {}) {
   let daemon = null;
   let connection = 'disconnected', connectionReason = 'starting';
   let threads = [], loadedIds = [], processes = [], plans = [];
-  let processRefresh = null;
+  let processRefresh = null, processSnapshotAvailable = false;
   const activities = new Map();
+  const hookStates = new Map();
   const closedTurns = new Set();
   const activityKey = thread => `${thread.id}\0${thread.sessionId || ''}`;
   function activityFor(plan) {
@@ -304,6 +309,26 @@ function createController(options = {}) {
     if (typeof turnId !== 'string' || !turnId) return;
     closedTurns.add(turnId);
     while (closedTurns.size > 256) closedTurns.delete(closedTurns.values().next().value);
+  }
+  function hookLocked(plan) {
+    const lock = hookStates.get(plan?.paneId);
+    if (!lock) return false;
+    if (plan.thread && (plan.thread.sessionId || '') !== lock.sessionId) {
+      hookStates.delete(plan.paneId);
+      return false;
+    }
+    const pane = (options.panes?.() || []).find(item => item.id === plan.paneId);
+    return Boolean(pane && pane.agentId === 'codex' && pane.status === 'running' && pane.agentSessionId === lock.sessionId);
+  }
+  function reconcileHookStates(panes) {
+    for (const [paneId, lock] of [...hookStates]) {
+      const pane = panes.find(item => item.id === paneId);
+      if (!pane || pane.status !== 'running' || (processSnapshotAvailable && !pane.codexPid)) {
+        hookStates.delete(paneId);
+        continue;
+      }
+      if (pane.agentSessionId && pane.agentSessionId !== lock.sessionId) hookStates.delete(paneId);
+    }
   }
   function snapshot() {
     return {
@@ -334,7 +359,7 @@ function createController(options = {}) {
       const thread = threads.find(item => item.id === params.threadId);
       if (thread && params.status) thread.status = params.status;
       const plan = plans.find(item => item.thread?.id === params.threadId && (item.action === 'auto' || item.action === 'keep'));
-      if (!plan) return;
+      if (!plan || hookLocked(plan)) return;
       const panes = options.panes?.() || [];
       const pane = panes.find(item => item.id === plan.paneId);
       const state = agentStateFor(pane, params.status, { threadId: plan.thread.id, sessionId: plan.thread.sessionId || '' });
@@ -347,6 +372,7 @@ function createController(options = {}) {
     return matches.length === 1 ? matches[0] : null;
   }
   function publishActivity(plan) {
+    if (hookLocked(plan)) return;
     const pane = (options.panes?.() || []).find(item => item.id === plan.paneId);
     if (!pane || pane.agentThreadId !== plan.thread.id || (pane.agentSessionId || '') !== (plan.thread.sessionId || '')
       || !['auto', 'explicit'].includes(pane.agentBinding)) return;
@@ -363,13 +389,19 @@ function createController(options = {}) {
     const plan = exactPlan(params.threadId);
     const turnId = params.turn?.id;
     if (!plan || typeof turnId !== 'string' || !turnId) return;
+    const locked = hookLocked(plan);
     const record = activityFor(plan);
     alignRecord(record, plan);
     if (!started) {
       rememberClosed(turnId);
-      if (record.turnId === turnId) { record.tracker.clear(); record.turnId = ''; publishActivity(plan); }
+      if (record.turnId === turnId || locked) {
+        record.tracker.clear();
+        record.turnId = '';
+        if (!locked) publishActivity(plan);
+      }
       return;
     }
+    if (locked) return;
     if (closedTurns.has(turnId)) return;
     if (record.turnId !== turnId) { record.tracker.clear(); record.turnId = turnId; publishActivity(plan); }
   }
@@ -391,7 +423,7 @@ function createController(options = {}) {
     const plan = exactPlan(params.threadId);
     const item = params.item;
     const kind = classifyItem(item);
-    if (!plan || !kind || typeof params.turnId !== 'string' || !params.turnId || typeof item?.id !== 'string' || !item.id) return;
+    if (!plan || hookLocked(plan) || !kind || typeof params.turnId !== 'string' || !params.turnId || typeof item?.id !== 'string' || !item.id) return;
     if (closedTurns.has(params.turnId)) return;
     const record = activityFor(plan);
     alignRecord(record, plan);
@@ -445,8 +477,13 @@ function createController(options = {}) {
     if (processRefresh) return processRefresh;
     processRefresh = (async () => {
       const panes = options.panes?.() || [];
-      try { processes = panes.some(pane => pane.status === 'running' && pane.pid) ? await listProcesses() : []; }
-      catch { processes = []; }
+      try {
+        processes = panes.some(pane => pane.status === 'running' && pane.pid) ? await listProcesses() : [];
+        processSnapshotAvailable = true;
+      } catch {
+        processes = [];
+        processSnapshotAvailable = false;
+      }
       if (!stopped) {
         try { options.onProcesses?.(processes); }
         catch { try { options.onProcesses?.([]); } catch { /* Detection is optional. */ } }
@@ -467,6 +504,7 @@ function createController(options = {}) {
         const detected = decorated.find(item => item.id === pane.id);
         return detected ? { ...detected, ...pane, pid: detected.pid, status: detected.status, codexPid: detected.codexPid, codexCount: detected.codexCount } : pane;
       });
+      reconcileHookStates(currentPanes);
       const cwds = [...new Set(decorated.filter(pane => pane.codexPid).map(pane => pane.cwd).filter(cwd => typeof cwd === 'string' && cwd))];
       let daemonAvailable = false;
       if (client) {
@@ -498,6 +536,7 @@ function createController(options = {}) {
         const live = new Set(plans.filter(plan => plan.thread && (plan.action === 'auto' || plan.action === 'keep')).map(plan => activityKey(plan.thread)));
         dropActivities(key => !live.has(key));
         for (const plan of plans) {
+          if (hookLocked(plan)) continue;
           if (plan.action === 'auto' || plan.action === 'keep') options.apply?.(plan.paneId, identity(plan.thread, plan.state, plan.action === 'keep' ? 'explicit' : 'auto'));
           else if (plan.action === 'stale') options.apply?.(plan.paneId, processIdentity());
           else if (plan.action === 'clear') options.apply?.(plan.paneId, null);
@@ -506,7 +545,7 @@ function createController(options = {}) {
       } else {
         dropActivities(() => true);
         plans = currentPanes.filter(pane => pane.codexPid).map(pane => ({ paneId: pane.id, action: 'unknown', candidates: [], state: 'unknown' }));
-        for (const plan of plans) options.apply?.(plan.paneId, processIdentity());
+        for (const plan of plans) if (!hookLocked(plan)) options.apply?.(plan.paneId, processIdentity());
       }
     })().finally(() => { refreshing = null; });
     return refreshing;
@@ -534,6 +573,7 @@ function createController(options = {}) {
       stopped = true; clearInterval(timer); timer = null;
       unsubscribe?.(); unsubscribe = null;
       dropActivities(() => true);
+      hookStates.clear();
       const current = client; client = null; connection = 'disconnected'; connectionReason = 'stopped';
       const currentDaemon = daemon; daemon = null;
       try { await current?.close?.(); } catch { /* Closing the proxy must not affect the user daemon. */ }
@@ -561,7 +601,12 @@ function createController(options = {}) {
       if (record) alignRecord(record, plan);
       if (record && input?.phase && typeof input.toolId === 'string') record.tracker.update({ phase: input.phase, toolId: input.toolId, toolName: input.toolName });
       if (record && !['running', 'waiting'].includes(match.state)) { record.tracker.clear(); record.turnId = ''; }
-      options.apply?.(match.paneId, plan ? identity(plan.thread, match.state, plan.action === 'keep' ? 'explicit' : 'auto') : { agentState: match.state, agentActivity: null });
+      hookStates.set(match.paneId, { sessionId: input.sessionId, state: match.state });
+      const thread = plan?.thread || match.thread;
+      const binding = plan?.action === 'auto' ? 'auto' : 'explicit';
+      options.apply?.(match.paneId, thread
+        ? identity(thread, match.state, binding)
+        : { agentId: 'codex', agentLabel: 'Codex', agentSessionId: input.sessionId, agentBinding: 'explicit', agentState: match.state, agentActivity: null });
       return { applied: true, paneId: match.paneId, state: match.state };
     },
   };
