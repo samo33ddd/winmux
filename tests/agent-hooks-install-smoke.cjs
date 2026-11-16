@@ -11,6 +11,9 @@ const { once } = require('node:events');
 const { test } = require('node:test');
 const { installAgentHooks, OWNED_STATUS } = require('../electron/agent-hooks-install.cjs');
 const { locations } = require('../electron/backend/shared.cjs');
+const { withSessionHooks } = require('../electron/backend/agent-hooks.cjs');
+const { readContextFile } = require('../electron/backend/agent-status.cjs');
+const { shellArgs, windowsCommandLineLength } = require('../electron/backend/shell-integration.cjs');
 
 function temp(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -137,6 +140,45 @@ test('helper delivers a bounded authenticated agent.hook and drops prompt conten
   assert.equal(JSON.stringify(received[0]).includes('secret'), false);
 });
 
+test('Codex session hooks use bounded per-launch wrapper and context artifacts', { skip: process.platform !== 'win32' }, t => {
+  const root = temp('winmux-hooks artifacts юникод ');
+  const dataDir = path.join(root, 'data dir юникод');
+  fs.mkdirSync(dataDir);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dataDir, 'ipc-token'), 'capability-secret-sentinel');
+  const context = {
+    paneId: 'pane-explicit',
+    launchId: 'launch-explicit',
+    dataDir,
+    pipeName: '\\\\.\\pipe\\winmux-fixture',
+  };
+  const profile = { environment: 'windows', command: process.execPath, args: ['-NoLogo', '-NoProfile', '-NoExit'] };
+  const agent = withSessionHooks({ hookAdapter: 'codex', command: process.execPath, args: [] }, profile, true, context);
+  const args = shellArgs(profile, agent);
+  const length = windowsCommandLineLength(profile.command, args);
+  t.diagnostic(`Windows launch UTF-16 units: ${length}`);
+  assert.ok(length < 30000, `Windows launch command line is ${length} UTF-16 units`);
+  assert.equal(agent.args.filter(value => value.startsWith('hooks.')).length, 7);
+  assert(fs.existsSync(agent.hookArtifacts.contextPath));
+  assert(fs.existsSync(agent.hookArtifacts.wrapperPath));
+  assert.deepEqual(readContextFile(agent.hookArtifacts.contextPath), { version: 1, ...context });
+  assert.equal(fs.readFileSync(agent.hookArtifacts.contextPath, 'utf8').includes('capability-secret-sentinel'), false);
+  const stop = agent.args.find(value => value.startsWith('hooks.Stop='));
+  const command = JSON.parse(stop.slice(stop.indexOf('commandWindows=') + 'commandWindows='.length).match(/^"(?:[^"\\]|\\.)*"/)[0]);
+  const encoded = command.slice(command.lastIndexOf(' ') + 1);
+  assert(Buffer.from(encoded, 'base64').toString('utf16le').includes(agent.hookArtifacts.wrapperPath));
+  agent.cleanupHooks();
+  assert.equal(fs.existsSync(agent.hookArtifacts.contextPath), false);
+  assert.equal(fs.existsSync(agent.hookArtifacts.wrapperPath), false);
+
+  assert.throws(() => withSessionHooks(
+    { hookAdapter: 'codex', command: process.execPath, args: [] },
+    profile,
+    true,
+    { ...context, dataDir: `C:\\${'x'.repeat(1100)}` },
+  ), { code: 'AGENT_HOOKS_CONTEXT' });
+});
+
 test('native helper ignores a stale WINMUX_PANE_ID from the shared daemon', async t => {
   const dataDir = temp('winmux-hooks-stale-pane-');
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
@@ -157,7 +199,7 @@ test('native helper ignores a stale WINMUX_PANE_ID from the shared daemon', asyn
   await new Promise(resolve => server.listen(pipe, resolve));
   t.after(() => server.close());
   const helper = path.resolve(__dirname, '..', 'electron', 'hooks', 'winmux-agent-hook.cjs');
-  const child = spawn(process.execPath, [helper, '--data-dir', dataDir, '--pipe', pipe], {
+  const child = spawn(process.execPath, [helper, '--data-dir', dataDir, '--pipe', pipe, '--pane-id', 'pane-explicit'], {
     windowsHide: true,
     env: { ...process.env, WINMUX_PANE_ID: 'stale-pane' },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -174,6 +216,7 @@ test('native helper ignores a stale WINMUX_PANE_ID from the shared daemon', asyn
     event: 'Stop',
     sessionId: 'thr_other',
     cwd: 'E:\\other\\workspace',
+    paneId: 'pane-explicit',
   });
 });
 

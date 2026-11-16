@@ -204,3 +204,58 @@ test('R1-05 explicit selection resets old completion and failure through the con
     assert.equal(selected.agentState, 'idle');
   }
 });
+
+test('hook-proven activity survives native disconnect and exact pane/session identity', async t => {
+  const panes = [
+    pane({ id: 'pane-a', agentId: 'codex', agentBinding: 'explicit', agentThreadId: 'thread-1', agentSessionId: 'session-1', agentState: 'running' }),
+    pane({ id: 'pane-b', pid: 26684, agentId: 'codex', agentBinding: 'explicit', agentThreadId: 'thread-2', agentSessionId: 'session-2', agentState: 'running' }),
+  ];
+  let unavailable = false;
+  const listed = [thread(), thread({ id: 'thread-2', sessionId: 'session-2' })];
+  const client = {
+    async listThreads() { if (unavailable) throw new Error('transport disconnected'); return { data: listed, nextCursor: null }; },
+    async listLoaded() { if (unavailable) throw new Error('transport disconnected'); return { data: ['thread-1', 'thread-2'], nextCursor: null }; },
+    close() {},
+  };
+  const controller = createController({
+    connect: async () => client,
+    listProcesses: async () => [
+      { pid: 18464, ppid: 1, name: 'pwsh.exe', executable: 'C:\\pwsh.exe', commandLine: 'pwsh' },
+      { pid: 40000, ppid: 18464, name: 'codex.exe', executable: 'C:\\codex.exe', commandLine: 'codex' },
+      { pid: 26684, ppid: 1, name: 'pwsh.exe', executable: 'C:\\pwsh.exe', commandLine: 'pwsh' },
+      { pid: 41000, ppid: 26684, name: 'codex.exe', executable: 'C:\\codex.exe', commandLine: 'codex' },
+    ],
+    panes: () => panes,
+    apply(_id, identity) {
+      const target = panes.find(item => item.id === _id);
+      if (!identity) return;
+      Object.assign(target, identity);
+      if (identity.agentActivity == null) delete target.agentActivity;
+    },
+  });
+  t.after(() => controller.stop());
+  await controller.refresh();
+
+  const ambiguous = await controller.hook({ agentId: 'codex', event: 'UserPromptSubmit', sessionId: 'session-1', cwd });
+  assert.equal(ambiguous.applied, false, 'same-cwd hooks without a pane are not assigned by guesswork');
+  const foreign = await controller.hook({ agentId: 'codex', event: 'UserPromptSubmit', sessionId: 'session-1', cwd, paneId: 'pane-b' });
+  assert.equal(foreign.applied, false, 'an explicit pane must match its own session');
+  const exact = await controller.hook({ agentId: 'codex', event: 'PreToolUse', sessionId: 'session-1', cwd, paneId: 'pane-a', phase: 'start', toolName: 'Read', toolId: 'read-1' });
+  assert.equal(exact.applied, true);
+  assert.equal(panes[0].agentActivity, 'reading');
+
+  unavailable = true;
+  await controller.refresh();
+  assert.equal(controller.status().connection, 'disconnected');
+  assert.equal(panes[0].agentState, 'running');
+  assert.equal(panes[0].agentActivity, 'reading');
+  assert.equal(panes[0].agentSessionId, 'session-1');
+  assert.equal(panes[1].agentState, 'unknown', 'another pane cannot borrow the hook lock');
+
+  const stopped = await controller.hook({ agentId: 'codex', event: 'Stop', sessionId: 'session-1', cwd, paneId: 'pane-a' });
+  assert.equal(stopped.applied, true);
+  assert.equal(panes[0].agentState, 'completed');
+  assert.equal(panes[0].agentActivity, undefined);
+  await controller.refresh();
+  assert.equal(panes[0].agentState, 'completed', 'a later disconnected poll cannot erase the hook result');
+});

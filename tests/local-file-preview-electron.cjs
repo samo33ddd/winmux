@@ -23,6 +23,7 @@ delete env.ELECTRON_RUN_AS_NODE;
 let desktop;
 let page;
 let rendererServer;
+let linkServer;
 const errors = [];
 
 function cli(command) {
@@ -87,16 +88,9 @@ async function waitScreen(paneId, text) {
 }
 
 async function screenPoint(paneId, needle) {
-  const screen = await rpc('pane.screen', { paneId });
-  const lines = screen.text.split(/\r?\n/);
-  const row = lines.findIndex(line => line.includes(needle));
-  assert.notEqual(row, -1, `Terminal screen did not contain ${needle}`);
-  const column = lines[row].indexOf(needle);
-  const state = await rpc('state');
-  const pane = state.workspaces.flatMap(workspace => workspace.panes).find(item => item.id === paneId);
-  assert(pane, `Missing terminal pane ${paneId}`);
   let box;
   let previousBox;
+  let stable = 0;
   for (let attempt = 0; attempt < 40; attempt++) {
     box = await page.locator(`[data-pane-id="${paneId}"] .xterm-screen`).boundingBox();
     if (box && previousBox
@@ -104,18 +98,22 @@ async function screenPoint(paneId, needle) {
       && Math.abs(box.y - previousBox.y) < 0.5
       && Math.abs(box.width - previousBox.width) < 0.5
       && Math.abs(box.height - previousBox.height) < 0.5) {
-      break;
-    }
+      if (++stable >= 2) break;
+    } else stable = 0;
     previousBox = box;
     await page.waitForTimeout(50);
   }
   assert(box, 'Terminal screen has no layout box');
-  const rows = Math.max(1, lines.length);
+  const screen = await rpc('pane.screen', { paneId });
+  const lines = screen.text.split(/\r?\n/);
+  const row = lines.findIndex(line => line.includes(needle));
+  assert.notEqual(row, -1, `Terminal screen did not contain ${needle}`);
+  const column = lines[row].indexOf(needle);
   return {
-    x:box.x + (column + 1) * (box.width / pane.cols),
-    y:box.y + (row + 0.5) * (box.height / rows),
-    cellWidth:box.width / pane.cols,
-    cellHeight:box.height / rows,
+    x:box.x + (column + 1) * (box.width / screen.cols),
+    y:box.y + (row + 0.5) * (box.height / screen.rows),
+    cellWidth:box.width / screen.cols,
+    cellHeight:box.height / screen.rows,
   };
 }
 
@@ -125,7 +123,7 @@ async function assertNoPreviewOrError(stage) {
   assert.equal(await page.locator('.local-file-preview-modal').count(), 0, `Unexpected preview modal after ${stage}`);
 }
 
-async function hoverRegisteredLink(paneId, needle) {
+async function hoverRegisteredLink(paneId, needle, tooltip = needle) {
   const base = await screenPoint(paneId, needle);
   const attempts = [];
   await page.mouse.move(5, 5);
@@ -142,7 +140,7 @@ async function hoverRegisteredLink(paneId, needle) {
       try {
         await page.locator('.local-file-link-tooltip').waitFor({ timeout:300 });
         const label = await page.locator('.local-file-link-tooltip').innerText();
-        if (label.includes(needle)) return point;
+        if (label.includes(tooltip)) return point;
       } catch {
         // Try adjacent rendered cells; headless snapshot and clipped browser rows can differ after layout changes.
       }
@@ -437,6 +435,49 @@ async function main() {
   await page.getByTestId('local-file-text').waitFor();
   assert.equal(await page.locator('.local-file-preview-modal').count(), 1, 'The real local preview modal selector must find the Russian preview');
   assert.equal(await page.locator('.error-banner').count(), 0, 'Russian valid open after failure must clear the stale error');
+  await page.keyboard.press('Escape');
+  await rpc('pane.close', { paneId:splitPane.id });
+  await desktop.evaluate(({ shell, dialog }) => {
+    globalThis.linkExternalCalls = 0;
+    shell.openExternal = async () => { globalThis.linkExternalCalls++; };
+    dialog.showMessageBox = async () => { globalThis.linkExternalCalls++; return { response:1 }; };
+  });
+  linkServer = http.createServer((_request, response) => {
+    response.setHeader('Content-Type', 'text/html');
+    response.end('<!doctype html><title>Terminal link fixture</title><h1>Embedded link reached</h1>');
+  });
+  await new Promise(resolve => linkServer.listen(0, '127.0.0.1', resolve));
+  const linkBase = `http://127.0.0.1:${linkServer.address().port}`;
+  for (const osc8 of [false, true]) {
+    const url = `${linkBase}/${osc8 ? 'osc8' : 'plain'}`;
+    const label = osc8 ? 'OSC8_LINK' : url;
+    const output = osc8
+      ? `([char]27 + ']8;;${url}' + [char]7 + '${label}' + [char]27 + ']8;;' + [char]7)`
+      : `'${url}'`;
+    const ready = `WEB_${osc8 ? 'OSC8' : 'PLAIN'}_READY`;
+    await rpc('pane.input', { paneId:pane.id, data:`Clear-Host; Write-Output ${output}; Write-Output ('${ready.slice(0, -5)}' + 'READY')\r` });
+    await waitScreen(pane.id, ready);
+    point = await hoverRegisteredLink(pane.id, label, url);
+    assert.match(await page.locator('.local-file-link-tooltip').innerText(), /Ctrl/);
+    const browserURLs = () => page.evaluate(() => [...document.querySelectorAll('webview')].map(view => {
+      try { return view.getURL(); } catch { return ''; }
+    }));
+    const beforeURLs = await browserURLs();
+    await page.mouse.click(point.x, point.y);
+    await page.waitForTimeout(150);
+    assert.deepEqual(await browserURLs(), beforeURLs, 'Ordinary clicks must not navigate');
+    await page.keyboard.down('Control');
+    try { await page.mouse.click(point.x, point.y); } finally { await page.keyboard.up('Control'); }
+    await page.waitForFunction(({ workspaceId, url }) => {
+      const panel = document.querySelector(`[data-workspace-id="${workspaceId}"][data-testid="workspace-tools"]`);
+      return [...(panel?.querySelectorAll('webview') || [])].some(view => {
+        try { return view.getURL() === url && !view.isLoading(); } catch { return false; }
+      });
+    }, { workspaceId:workspace.id, url }, { timeout:15000 });
+    assert.equal(await desktop.evaluate(() => globalThis.linkExternalCalls), 0, 'Terminal links must not request the OS browser');
+    await page.screenshot({ path:path.join(artifacts, 'terminal-web-links.png') });
+    await page.getByTestId('browser-toggle').click();
+  }
   assert.equal(errors.length, 0, `Renderer errors: ${errors.join('; ')}`);
 
   console.log(JSON.stringify({
@@ -449,6 +490,7 @@ async function main() {
       'A newer successful Files read and a CLI file-preview event both superseded older terminal preview failures.',
       'English and Russian missing-file errors omit the raw Electron IPC wrapper.',
       'A later valid terminal link opens the preview and clears the prior error.',
+      'Plain and OSC 8 HTTP links require Ctrl+Click and load in the owning workspace embedded browser without invoking the OS browser.',
     ],
   }, null, 2));
 }
@@ -462,5 +504,7 @@ main().catch(error => {
   if (stop.status !== 0) console.error(`Isolated daemon shutdown: ${stop.stderr || stop.error?.message || stop.stdout}`);
   rendererServer?.closeAllConnections();
   rendererServer?.close();
+  linkServer?.closeAllConnections();
+  linkServer?.close();
   await removeFixture();
 });

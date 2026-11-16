@@ -60,6 +60,15 @@ node scripts/winmux-client.cjs notify PANE_ID --title "Task finished" --body "Re
 
 `horizontal` means side by side; `vertical` means stacked. `key` accepts Enter, Tab, Escape, Backspace, arrows, Home, End, Delete, PageUp, PageDown, and Ctrl+A through Ctrl+Z. `read --json` returns a JSON object; plain `read` prints screen text. `notify` may omit the pane ID when the terminal supplies `WINMUX_PANE_ID`.
 
+The desktop also moves existing terminals by dragging their tab or pane header onto
+an edge of another pane in the same workspace. Hover a destination tab while
+dragging to reveal it. The highlighted half shows the destination. This preserves
+the process, pane ID and output; an empty source tab is removed without closing
+the moved shell. Cross-workspace and self drops are rejected. For an explicitly
+requested scripted move, use `rpc pane.move` with JSON
+`{"paneId":"SOURCE","targetPaneId":"TARGET","side":"right"}`; inspect IDs first
+and verify the returned `workspaceId`/`tabId` and live process afterward.
+
 ## Procedure
 
 1. Open Winmux and run `list` and `environment`. Confirm the intended workspace, startup directory, environment, and pane ID. Never use the installed wrapper's `start` command; it intentionally refuses because the portable runtime has no backend.
@@ -80,6 +89,8 @@ node scripts/winmux-client.cjs notify PANE_ID --title "Task finished" --body "Re
 - A lost response can follow a successful mutation. Neither CLI retries automatically. Inspect state and the pane before repeating input, splitting, creating, or closing.
 - File and Git operations belong to the desktop, not daemon `rpc` methods. Files opens a preview left of the tree, wraps text, edits complete UTF-8 files up to 512 KB, highlights known source languages and renders Markdown. Save explicitly with the button or Ctrl+S; a changed-on-disk error requires reviewing the file and using Reload, which asks before discarding a draft. Truncated, binary and image files cannot be edited. Git is read-only. Browser control belongs to its separate desktop service.
 - Use `open PATH --pane PANE_ID` only for a deliberate request to preview a local file. Outputting or hovering a path never means it should be opened. Preserve spaces, Unicode, extensions and line/column references; never invent a missing file or remap its root to hide an error. A later successful open must recover from an earlier missing-file error.
+- In the terminal UI, Ctrl+Click opens plain HTTP(S) and OSC 8 web links in that workspace's embedded browser; an ordinary web-link click does not navigate. Local file clicks retain their in-app preview. The browser toolbar's external-browser action remains explicit.
+- Terminal RPC input is limited to 64 KiB of UTF-8 per request. The desktop chunks and serializes large pastes, preserving Unicode and bracketed-paste order. Direct CLI/RPC callers must respect request limits themselves; a failed input is never replayed automatically. Ctrl+Space can deliver NUL to terminal applications without relaxing identifier/path validation.
 - Confirmed turn completion, failure and shell-observed agent exit create pane/workspace notifications. Unknown activity is not completion. An exit code is shown only for a confirmed ended launch; it is not an activity counter. If status is unavailable, inspect Settings and the relevant native connection/hook support rather than inferring activity from a running shell.
 
 ## Verification

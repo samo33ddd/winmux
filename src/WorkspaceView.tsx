@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { t } from './i18n';
-import { TerminalPane, type TerminalHandle } from './TerminalPane';
+import { TerminalPane, type PaneDropSide, type TerminalHandle } from './TerminalPane';
 import type { Direction, LayoutNode, Settings, Workspace } from './types';
 import { activeTab } from './workspaceTabs';
 
@@ -35,12 +35,15 @@ interface Props {
   workspace: Workspace; settings: Settings; visible: boolean; activePane?: string; zoomed?: string; unreadPaneIds: string[];
   register(id: string, handle: TerminalHandle | null): void; onFocus(id: string): void;
   onSplit(id: string, direction: Direction): void; onClose(id: string): void; onZoom(id: string): void;
-  onRatio(workspaceId: string, splitId: string, ratio: number): Promise<void>; onError(message: string): void;
+  onRatio(workspaceId: string, splitId: string, ratio: number): Promise<void>; onOpenBrowser(url: string): void;
+  paneMoveAvailable: boolean; draggingPaneId?: string; onPaneDragStart(paneId: string, event: React.DragEvent<HTMLElement>): void; onPaneDragEnd(): void;
+  onMovePane(paneId: string, targetPaneId: string, side: PaneDropSide): void; onError(message: string): void;
 }
 export function WorkspaceView(props: Props) {
   const container = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [drag, setDrag] = useState<{ id: string; ratio: number } | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ paneId: string; side: PaneDropSide } | null>(null);
   const dragRef = useRef<{ divider: Divider; ratio: number } | null>(null);
   useEffect(() => {
     const element = container.current; if (!element) return;
@@ -49,6 +52,15 @@ export function WorkspaceView(props: Props) {
     return () => observer.disconnect();
   }, []);
   useEffect(() => { if (!props.visible) { dragRef.current = null; setDrag(null); } }, [props.visible]);
+  useEffect(() => { if (!props.draggingPaneId) setDropTarget(null); }, [props.draggingPaneId]);
+  const dropSide = (event: React.DragEvent<HTMLElement>): PaneDropSide => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const distances: Array<[PaneDropSide, number]> = [
+      ['left', event.clientX - bounds.left], ['right', bounds.right - event.clientX],
+      ['top', event.clientY - bounds.top], ['bottom', bounds.bottom - event.clientY],
+    ];
+    return distances.reduce((nearest, item) => item[1] < nearest[1] ? item : nearest)[0];
+  };
   const rects = new Map<string, Rect>(); const dividers: Divider[] = [];
   const tab = activeTab(props.workspace);
   const root = drag ? withRatio(tab.root, drag.id, drag.ratio) : tab.root;
@@ -59,7 +71,25 @@ export function WorkspaceView(props: Props) {
     {props.workspace.panes.map(pane => <TerminalPane key={pane.id} pane={pane} settings={props.settings}
       unread={props.unreadPaneIds.includes(pane.id)} active={props.activePane === pane.id} zoomed={zoomed === pane.id} chrome={Boolean(zoomed) || tab.root.type !== 'leaf'} visible={props.visible && rects.has(pane.id) && (!zoomed || zoomed === pane.id)}
       style={zoomed === pane.id ? { left: 0, top: 0, width: size.width, height: size.height } : rects.get(pane.id) ?? { left: 0, top: 0, width: 0, height: 0 }}
-      register={props.register} onFocus={props.onFocus} onSplit={props.onSplit} onClose={props.onClose} onZoom={props.onZoom} onError={props.onError} />)}
+      paneMoveAvailable={props.paneMoveAvailable} dragging={props.draggingPaneId === pane.id} dropSide={dropTarget?.paneId === pane.id ? dropTarget.side : undefined}
+      register={props.register} onFocus={props.onFocus} onSplit={props.onSplit} onClose={props.onClose} onZoom={props.onZoom} onOpenBrowser={props.onOpenBrowser}
+      onPaneDragStart={event => props.onPaneDragStart(pane.id, event)} onPaneDragEnd={props.onPaneDragEnd}
+      onPaneDragOver={event => {
+        if (!props.paneMoveAvailable || !props.draggingPaneId || props.draggingPaneId === pane.id) return;
+        event.preventDefault(); event.dataTransfer.dropEffect = 'move';
+        setDropTarget({ paneId:pane.id, side:dropSide(event) });
+      }}
+      onPaneDragLeave={event => {
+        if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+        setDropTarget(current => current?.paneId === pane.id ? null : current);
+      }}
+      onPaneDrop={event => {
+        const source = props.draggingPaneId;
+        if (!props.paneMoveAvailable || !source || source === pane.id) return;
+        event.preventDefault(); const side = dropSide(event); setDropTarget(null);
+        props.onMovePane(source, pane.id, side);
+      }}
+      onError={props.onError} />)}
     {!zoomed && dividers.map(divider => <div key={divider.id} className={`split-divider ${divider.direction} ${drag?.id === divider.id ? 'dragging' : ''}`}
       style={{ left: divider.left, top: divider.top, width: divider.width, height: divider.height }}
       role="separator" tabIndex={0} aria-label={t("Размер панелей")} aria-orientation={divider.direction === 'horizontal' ? 'vertical' : 'horizontal'} aria-valuemin={10} aria-valuemax={90} aria-valuenow={Math.round(divider.ratio * 100)}
