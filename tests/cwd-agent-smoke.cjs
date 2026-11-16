@@ -34,7 +34,10 @@ if (process.argv.includes('--fixture-daemon')) {
     environment.agents.push({ id: 'fixture:missing', label: 'missing', available: true, profileId: 'powershell', environment: 'windows', command: path.join(process.env.WINMUX_FIXTURE_DIR, 'missing.exe') });
     return environment;
   };
-  require('../electron/backend.cjs').startServer().then(daemon => {
+  const createTaskDelivery = ({repo, base}) => ({
+    status: async spec => { await new Promise(resolve => setTimeout(resolve, 1500)); return {repo, base, source:spec.source, head:spec.head, headOid:spec.sha, state:'OPEN', code:'CHECKS_PENDING', number:12, url:'https://github.com/fixture/project/pull/12'}; },
+  });
+  require('../electron/backend.cjs').startServer({createTaskDelivery}).then(daemon => {
     daemon.server.once('close', () => setTimeout(() => process.exit(0), 150).unref());
     console.log('FIXTURE_DAEMON_READY');
   }).catch(error => { console.error(error); process.exit(1); });
@@ -323,6 +326,45 @@ app.whenReady().then(() => {
     assert.equal((await paneState(pane.id)).agentState, 'unknown'); assert.equal((await paneState(pane.id)).agentExitCode, undefined);
     assert.equal((await paneState(pane.id)).agentId, undefined); assert.equal((await paneState(pane.id)).agentLabel, undefined);
     console.log('PASS isolated daemon recovery: latest cwd preserved, fresh shell, no agent replay');
+    const taskRepo = path.join(dataDir, 'task-project');
+    fs.mkdirSync(taskRepo); fs.writeFileSync(path.join(taskRepo, 'tracked.txt'), 'fixture\n');
+    const git = (...args) => execFileSync('git', ['-C', taskRepo, ...args], {windowsHide:true, encoding:'utf8'});
+    git('init', '-b', 'main'); git('add', '.'); git('-c', 'user.name=Winmux Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'fixture'); git('remote', 'add', 'origin', 'https://github.com/fixture/project.git');
+    for (const profile of [environment.profiles.find(p => p.id === 'powershell'), wsl].filter(Boolean)) {
+      const cwd = profile.environment === 'wsl' ? linuxPath(taskRepo) : taskRepo;
+      const inspected = await client.request('project.inspect', {cwd, profileId:profile.id});
+      assert(inspected.branches.includes('main'));
+      const opened = await client.request('task.create', {projectDirectory:cwd, profileId:profile.id, name:`Task ${profile.id}`, baseBranch:'main', primaryBranch:'main', agentId:`fixture:${profile.id}`, mode:'new'});
+      const item = (await client.request('state')).tasks.find(task => task.workspaceId === opened.id);
+      assert(item && item.managed && item.branch.startsWith('winmux/'));
+      await assert.rejects(client.request('task.archive', {taskId:item.id}), {code:'TASK_IN_USE'});
+      const pendingDelivery = client.request('task.delivery.refresh', {taskId:item.id});
+      await sleep(400);
+      await client.request('workspace.close', {workspaceId:opened.id});
+      await assert.rejects(client.request('task.archive', {taskId:item.id}), {code:'TASK_IN_USE'});
+      const delivery = await pendingDelivery;
+      assert.equal(delivery.repo, 'fixture/project'); assert.equal(delivery.base, 'main'); assert.equal(delivery.head, item.branch); assert.match(delivery.headOid, /^[0-9a-f]{40}$/);
+      assert.equal((await client.request('task.delivery.context', {taskId:item.id})).delivery.code, 'CHECKS_PENDING');
+      assert.equal((await client.request('state')).tasks.find(task => task.id === item.id).workspaceId, undefined);
+      await stop(); await launch();
+      assert.equal((await client.request('state')).tasks.find(task => task.id === item.id).branch, item.branch);
+      const archived = await client.request('task.archive', {taskId:item.id});
+      assert.equal(archived.removed, true, archived.reason);
+        const attempts = await Promise.allSettled([
+          client.request('task.open', {taskId:item.id}),
+          client.request('task.open', {taskId:item.id}),
+          client.request('task.archive', {taskId:item.id}),
+        ]);
+        const reopened = attempts.find(result => result.status === 'fulfilled' && result.value.panes)?.value;
+        assert(reopened, 'one task open must succeed');
+        assert(attempts.filter(result => result.status === 'fulfilled' && result.value.panes).every(result => result.value.id === reopened.id));
+        assert(attempts.some(result => result.status === 'rejected' && result.reason.code === 'TASK_IN_USE'));
+      assert(reopened.panes.length);
+      await client.request('workspace.close', {workspaceId:reopened.id});
+      assert.equal((await client.request('task.archive', {taskId:item.id})).removed, true);
+      assert(git('show-ref', '--verify', `refs/heads/${item.branch}`).trim());
+      console.log(`PASS ${profile.id}: task worktree creation, close, archive, restore and retained branch`);
+    }
     await stop();
   }
   async function cleanup() {

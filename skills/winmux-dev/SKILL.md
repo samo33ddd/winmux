@@ -36,6 +36,8 @@ before choosing the smallest complete change in the existing layers.
 | CLI/types | `cli.cjs`, `electron/backend/shared.cjs`, `src/types.ts` | Commands, endpoint/capability resolution, shared contracts |
 | Browser | `electron/browser-control.cjs`, `scripts/browser.cjs`, `src/BrowserTabs.tsx` | Desktop-owned browser service, separate from daemon RPC |
 | File editing | `src/FileEditor.tsx`, `src/fileDrafts.ts`, `src/HighlightedCode.tsx`, `electron/workspace.cjs` | Draft ownership, safe text writes, rendering/highlighting |
+| Project tasks | `electron/backend.cjs`, `electron/backend/task-git.cjs`, `src/TaskDialog.tsx`, `src/ProjectTasks.tsx` | Project identity, worktree ownership/archive, task workspace lifecycle |
+| PR delivery | `electron/backend/task-delivery.cjs`, `electron/backend/environment.cjs` | GitHub identity, review/check/merge gates, task-agent instructions |
 | Verification | `tests/**`, `scripts/run-electron-node.cjs` | Contract, Electron runtime, installed clients, release publisher |
 
 Follow `renderer -> preload -> main IPC -> service` or `CLI -> client -> daemon`.
@@ -82,6 +84,78 @@ agent when finished and check that it creates no duplicate completion notice.
 Application notification state, visible panel, and Windows toast are separate
 claims; report unavailable GUI capture without pretending an API result is a screenshot.
 
+### Project tasks and delivery
+
+Projects are inferred during `task.create` and grouped by the Git common
+directory, shell environment, and WSL distribution. Task state is persisted with
+workspaces in state version 3. Loading version 1 or 2 produces a byte-identical
+`state.json.pre-tasks-*` backup, initializes empty project/task arrays, and
+leaves the source file unchanged on that load. Reject state with a task whose
+project is missing, duplicate identifiers, invalid ownership, or more than 1,024
+projects / 4,096 tasks.
+
+The task RPC surface is:
+
+- `project.inspect {cwd,profileId}` resolves an available Windows/WSL profile,
+  inspects the repository and linked worktrees, lists local branches, and detects
+  `origin/HEAD`, then `main` or `master`, as the primary branch.
+- `task.create` requires `projectDirectory`, `name`, `profileId`, `agentId`,
+  `baseBranch`, and `mode`; `primaryBranch` is required when detection fails.
+  `new` creates a sibling managed worktree and `winmux/<slug>-<short-id>` branch;
+  `attach` requires a non-primary, non-detached linked worktree with a branch and
+  rejects a worktree already attached to a task. The selected agent must match
+  the profile. The call creates the task workspace and exports
+  `WINMUX_TASK_ID` to matching agent panes.
+- `task.open` returns an existing workspace, opens a ready task, or restores a
+  removed managed worktree on its retained branch. It must reject incomplete
+  tasks and missing branches without fabricating replacement history.
+- `task.archive` requires the task workspace and delivery operation to be
+  inactive. It removes a managed worktree only when ownership is unambiguous and
+  the worktree is clean, including tracked, untracked, and ignored data. The
+  branch is preserved. Imported, dirty, locked, in-use, or ownership-conflicted
+  worktrees stay on disk and return a visible `reason`.
+
+Worktree ownership uses the task ID, normalized absolute path, expected branch,
+Git administration directory, and a marker in `winmux-task-owner`; directory
+existence or branch equality alone is insufficient for removal. Use argument
+arrays for Windows `git` and `wsl.exe --exec git`, with prompt access disabled
+and bounded output/timeouts. Never delete or overwrite a worktree through a raw
+shell fallback after an ownership or cleanliness rejection.
+
+`task.delivery.context` returns the task's branch, cwd, primary branch, and last
+delivery result. `refresh`, `submit`, and `merge` parse `origin` without embedded
+credentials, verify the worktree is on its recorded branch, read the current
+HEAD, and operate through authenticated `gh`. They do not stage, commit, or push.
+Only one delivery operation may run per task.
+
+Delivery is fail-closed. The PR must match the task's GitHub source repository,
+base branch, head branch, and exact HEAD commit. Merge additionally requires an
+independent approval on that head, no requested changes, all required checks,
+and a clean mergeable PR. The merge command is a merge commit with
+`--match-head-commit`; never add admin, auto-merge, squash, rebase, or branch
+deletion bypasses. Re-read the PR after any uncertain submit or merge response
+and reconcile instead of retrying a mutation blindly.
+
+Task-created Claude and OMP launches receive appended system instructions that
+refer to `$winmux-terminal` and the delivery RPCs. Other agents may still call
+the RPC, but task state marks them `deliverySupport: "unsupported"` and must not
+claim automatic delivery instructions were installed. Agent completion is not
+PR readiness, review, CI, or merge evidence.
+
+Exercise these checks when this contract changes:
+
+```powershell
+node --test tests/task-git.cjs tests/task-delivery.cjs tests/task-state.cjs tests/task-instructions.cjs
+npm run test:cwd-agent
+```
+
+The task Git test covers managed and imported worktrees, dirty/untracked/ignored
+preservation, and real WSL when available. The delivery test mocks `gh` and
+checks stale heads, reviews, checks, no-admin merge, and uncertain reconciliation.
+The cwd-agent smoke covers real task creation, close/archive/reopen, retained
+branches, and delivery against a disposable daemon. Add renderer/runtime evidence
+when task dialogs, project lists, or status presentation change.
+
 ## Choose and run verification
 
 Start with the narrowest meaningful existing check; broaden for affected shared
@@ -99,6 +173,7 @@ contracts and the requirements in `CONTRIBUTING.md`.
 | File links/previews | `npm run test:file-preview` |
 | Actual Electron UI/screenshots | `npm run test:desktop` |
 | Release publisher | `node --test tests/release-workflow-regression.cjs` |
+| Task Git, state, delivery unit contracts | `node --test tests/task-git.cjs tests/task-delivery.cjs tests/task-state.cjs tests/task-instructions.cjs` |
 
 For node-pty ABI mismatch, use the Electron runner through the package commands
 or `scripts/run-electron-node.cjs`; run `npm run rebuild` when required and retry

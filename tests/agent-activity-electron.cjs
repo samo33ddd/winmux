@@ -52,8 +52,9 @@ const environment = {
   platform: process.platform, defaultCwd: fixtureCwd,
   profiles: [{ id: 'powershell', label: 'PowerShell', environment: 'windows', command: 'pwsh.exe', args: [], cwd: fixtureCwd }],
   agents: agents.map(agent => ({ id: agent.id, label: agent.label, profileId: 'powershell', environment: 'windows', available: true, command: null })),
-  capabilities: { terminalTabs: true, agentLaunch: true, agentStatus: true, nativeCodex: true, ompHooks: true, agentActivity: true },
+  capabilities: { terminalTabs: true, agentLaunch: true, agentStatus: true, nativeCodex: true, ompHooks: true, agentActivity: true, projectTasks:true },
 };
+const taskRequests = [];
 const gatewayStatus = {
   sessions: [{ agentId: 'hermes', sessionId: 'hermes-root-fixture', cwd: fixtureCwd, pid: 5000, state: 'running', lastSeen: Date.now() }],
   panes: [{ paneId: 'pane-hermes', agentId: 'hermes', sessionId: null }],
@@ -76,6 +77,15 @@ const server = net.createServer(socket => {
       else if (request.method === 'environment') result = environment;
       else if (request.method === 'codex.status') result = { connection: 'disconnected', threads: [], panes: [] };
       else if (request.method === 'agent.sessions') result = gatewayStatus;
+      else if (request.method === 'project.inspect') result = { root:fixtureCwd, commonDir:`${fixtureCwd}\\.git`, branches:['main'], primary:'main', worktrees:[] };
+      else if (request.method === 'task.create') {
+        taskRequests.push(request.params);
+        const item = workspace({id:'task', label:'Safe agent', state:'running'});
+        item.name = request.params.name; state.workspaces.push(item);
+        state.projects = [{id:'project-1', name:'Fixture', root:fixtureCwd, profileId:'powershell', primaryBranch:'main'}];
+        state.tasks = [{id:'task-1', name:request.params.name, projectId:'project-1', cwd:fixtureCwd, branch:'winmux/fixture', base:'main', managed:true, archived:false, workspaceId:item.id}];
+        result = item;
+      }
       else if (request.method === 'agent.bind') {
         assert.equal(request.params.paneId, 'pane-hermes');
         assert.equal(request.params.sessionId, 'hermes-root-fixture');
@@ -219,6 +229,29 @@ async function run() {
       assert.equal(await metadata.locator('[data-testid="agent-action"]').count(), 0);
       assert.equal(await metadata.getAttribute('data-agent-state'), item.state);
     }
+    await page.setViewportSize({ width: 900, height: 700 });
+    await page.getByTestId('attention-toggle').click();
+    const inbox = page.getByTestId('attention-inbox');
+    assert.equal(await inbox.getByTestId('attention-item').count(), 5);
+    assert.equal(await inbox.getByTestId('attention-item').first().getAttribute('data-attention-group'), 'waiting');
+    await page.screenshot({ path: path.join(artifacts, 'attention-inbox-900.png') });
+    await inbox.locator('[data-pane-id="pane-omp"]').click();
+    await page.waitForFunction(() => document.querySelector('.header-agent [data-agent-id="omp"]'));
+    assert.equal(await inbox.count(), 0);
+    await page.getByTestId('projects-toggle').click();
+    await page.getByRole('button', {name:'Новая задача'}).click();
+    await page.getByTestId('task-name').fill('Fixture task');
+    await page.getByTestId('task-agent').selectOption('codex');
+    await page.getByRole('button', {name:'Проверить репозиторий'}).click();
+    await page.getByTestId('task-base-branch').waitFor();
+    await page.screenshot({ path:path.join(artifacts, 'task-dialog-900.png') });
+    await page.getByTestId('task-create').click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="workspace-item"][data-workspace-id="workspace-task"]'));
+    assert.equal(taskRequests.length, 1);
+    assert.equal(taskRequests[0].baseBranch, 'main');
+    assert.equal(taskRequests[0].agentId, 'codex');
+    await page.getByTestId('projects-toggle').click();
+    assert.match(await page.getByTestId('project-tasks').innerText(), /Fixture task/);
     const visible = await page.locator('body').innerText();
     assert.doesNotMatch(visible, /krach|Users\\|Authorization|sk-|token/i);
     console.log(`PASS real Electron activity fixture: five agents, ru/en, six themes, stale actions hidden. Screenshots: ${shots.join(', ')}`);
