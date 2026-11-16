@@ -21,7 +21,7 @@ User-visible changes are recorded here. Release availability and downloadable as
 ### Maintenance and limitations
 
 - Update both bundled Winmux skills for the current file, cwd and status behavior, require reviewing them after product updates, and verify installed terminal/browser client operations on isolated fixtures (Issue #25).
-- The original initiating request behind Issue #13 remains unproven; existing automatic-open prevention and readable-error regressions remain in place. This release does not claim to identify that historical request.
+- The owner confirmed that Issue #13 no longer recurs after 0.2.1; the current automatic-open/error/recovery regression passes. The historical initiating request remains unproven; its diagnosis is not claimed by this release.
 
 - Queue short terminal request bursts within count and byte limits; cancel unsent input on disconnect or an active request timeout instead of replaying it (Issue #15).
 - Leave stopped WSL distributions stopped during environment discovery; check their agents only when explicitly launched (Issue #16).
