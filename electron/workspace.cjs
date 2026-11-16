@@ -3,7 +3,7 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const run = promisify(execFile);
-const workspaceMethods = new Set(['files.list','files.read','git.status','git.diff']);
+const workspaceMethods = new Set(['files.list','files.read','files.write','git.status','git.diff']);
 const LIMIT = 12 * 1024 * 1024;
 const imageTypes = {'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.bmp':'image/bmp','.ico':'image/x-icon','.avif':'image/avif','.svg':'image/svg+xml'};
 function relative(value='') {
@@ -49,7 +49,7 @@ function preview(buffer,name,size) {
   if(buffer.subarray(0,8192).includes(0)) return {kind:'binary',size};
   return {kind:'text',text:buffer.subarray(0,512*1024).toString('utf8'),size,truncated:size>512*1024};
 }
-async function localFiles(root,method,rel) {
+async function localFiles(root,method,rel,params) {
   const target=await resolveLocal(root,rel);
   if(method==='files.list') {
     const all=await fs.readdir(target,{withFileTypes:true});
@@ -58,6 +58,23 @@ async function localFiles(root,method,rel) {
   }
   const stat=await fs.stat(target);
   if(!stat.isFile()) throw new Error('Select a file to preview');
+  if(method==='files.write') {
+    if(stat.size>512*1024) throw new Error('Only complete UTF-8 text files can be edited');
+    const handle=await fs.open(target,'r+');
+    try {
+      const data=await handle.readFile();
+      if(data.length>512*1024 || imageTypes[path.extname(rel).toLowerCase()] || data.includes(0) || !Buffer.from(data.toString('utf8')).equals(data)) throw new Error('Only complete UTF-8 text files can be edited');
+      if(data.toString('utf8')!==params.expectedText) throw new Error('File changed on disk. Reopen it before saving.');
+      const output=Buffer.from(params.text,'utf8');
+      for(let offset=0;offset<output.length;) {
+        const {bytesWritten}=await handle.write(output,offset,output.length-offset,offset);
+        if(!bytesWritten) throw new Error('File write made no progress');
+        offset+=bytesWritten;
+      }
+      await handle.truncate(Buffer.byteLength(params.text));
+    } finally { await handle.close(); }
+    return localFiles(root,'files.read',rel);
+  }
   if(stat.size>LIMIT) throw new Error('Preview limit is 12 MB');
   return {path:rel,...preview(await fs.readFile(target),rel,stat.size)};
 }
@@ -74,6 +91,17 @@ if method=='files.list':
    entries.append(dict(name=item.name,path=(rel+'/' if rel else '')+item.name,type=kind,size=0))
  entries.sort(key=lambda x:(x['type']!='directory',x['name'].lower()))
  print(json.dumps(dict(path=rel,entries=entries[:2000],truncated=len(entries)>2000)))
+elif method=='files.write':
+ payload=json.load(sys.stdin)
+ if os.path.splitext(target)[1].lower() in {'.png','.jpg','.jpeg','.gif','.webp','.bmp','.ico','.avif','.svg'}: raise ValueError('Only complete UTF-8 text files can be edited')
+ with open(target,'r+b') as f:
+  data=f.read(512*1024+1)
+  if len(data)>512*1024 or b'\0' in data: raise ValueError('Only complete UTF-8 text files can be edited')
+  try: original=data.decode('utf8')
+  except UnicodeDecodeError: raise ValueError('Only complete UTF-8 text files can be edited')
+  if original!=payload['expectedText']: raise ValueError('File changed on disk. Reopen it before saving.')
+  f.seek(0); f.write(payload['text'].encode('utf8')); f.truncate()
+ print(json.dumps(dict(path=rel,kind='text',text=payload['text'],size=len(payload['text'].encode('utf8')),truncated=False)))
 else:
  size=os.path.getsize(target)
  if size>12*1024*1024: raise ValueError('Preview limit is 12 MB')
@@ -125,10 +153,13 @@ async function workspaceRequest(client,method,params) {
   if(!workspaceMethods.has(method))throw new Error('Unknown workspace operation');
   const {workspace,profile}=await context(client,params);
   const rel=relative(params.path);
+  if(method==='files.write' && (typeof params.text!=='string' || typeof params.expectedText!=='string' || Buffer.byteLength(params.text)>512*1024 || Buffer.byteLength(params.expectedText)>512*1024 || params.text.includes('\0'))) throw new Error('Only complete UTF-8 text up to 512 KB can be saved');
   if(method.startsWith('files.')){
-    if(profile.environment!=='wsl')return localFiles(workspace.cwd,method,rel);
+    if(profile.environment!=='wsl')return localFiles(workspace.cwd,method,rel,params);
     try {
-      const {stdout}=await run('wsl.exe',['-d',profile.distro,'--','python3','-c',pythonFiles,workspace.cwd,rel,method],{windowsHide:true,timeout:15000,maxBuffer:20*1024*1024,encoding:'utf8'});
+      const operation=run('wsl.exe',['-d',profile.distro,'--','python3','-c',pythonFiles,workspace.cwd,rel,method],{windowsHide:true,timeout:15000,maxBuffer:20*1024*1024,encoding:'utf8'});
+      if(method==='files.write') operation.child.stdin.end(JSON.stringify({text:params.text,expectedText:params.expectedText}));
+      const {stdout}=await operation;
       return JSON.parse(stdout);
     }catch(error){throw new Error(`Cannot open WSL file; python3 is required in the distribution. ${(error.stderr || error.message).trim().slice(0,1200)}`);}
   }

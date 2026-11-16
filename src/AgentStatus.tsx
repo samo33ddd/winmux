@@ -15,7 +15,7 @@ export function activityLabel(pane: Pane): string {
     case 'idle': return t('Ожидает');
     case 'completed': return t('Завершено');
     case 'failed': return t('Ошибка');
-    default: return t('Активность неизвестна');
+    default: return t('Нет данных об активности');
   }
 }
 
@@ -36,7 +36,8 @@ export function agentActionLabel(pane: Pane): string {
 
 export function AgentStatus({ pane, showName = true }: { pane: Pane; showName?: boolean }) {
   const name = agentName(pane), state = name ? pane.agentState ?? 'unknown' : pane.status;
-  const label = activityLabel(pane), code = name ? pane.agentExitCode : pane.exitCode;
+  const label = activityLabel(pane);
+  const code = name ? (state === 'completed' || state === 'failed' ? pane.agentExitCode : undefined) : (pane.status === 'exited' ? pane.exitCode : undefined);
   const actionLabel = agentActionLabel(pane);
   const ActionIcon = pane.agentActivity && actions[pane.agentActivity]?.icon;
   const details = [name, label, actionLabel, code !== undefined ? t('Код выхода: {0}', code) : '',

@@ -5,6 +5,8 @@ import { BrowserPanel } from './BrowserTabs';
 import { bridge, errorMessage, type Workspace } from './types';
 import { selectedPane } from './workspaceTabs';
 import { beginPreviewIntent, previewPresented } from './previewCoordinator';
+import { FileEditor } from './FileEditor';
+import { getFileDraft, setFileDraft } from './fileDrafts';
 
 export type ToolTab = 'files' | 'git' | 'browser';
 interface Entry { name: string; path: string; type: 'directory' | 'file' | 'symlink'; size: number }
@@ -14,31 +16,35 @@ interface GitState { available: boolean; branch: string; entries: { path: string
 const text = (en: string, ru: string) => getLanguage() === 'ru' ? ru : en;
 function sizeLabel(size: number) { return size < 1024 ? t("{0} Б", size) : size < 1048576 ? t("{0} КБ", (size / 1024).toFixed(1)) : t("{0} МБ", (size / 1048576).toFixed(1)); }
 function Message({ children, error = false }: { children: ReactNode; error?: boolean }) { return <div className={`tool-message ${error ? 'inline-error' : ''}`} role={error ? 'alert' : 'status'}>{error && <CircleAlert />}{children}</div>; }
-function ToolSplit({ first, second, label, testId }: { first: ReactNode; second?: ReactNode; label: string; testId: string }) {
+function ToolSplit({ first, second, label, testId, horizontal = false }: { first: ReactNode; second?: ReactNode; label: string; testId: string; horizontal?: boolean }) {
   const container = useRef<HTMLDivElement>(null);
   const drag = useRef<{ pointer: number; offset: number } | null>(null);
   const [ratio, setRatio] = useState(38);
   const [dragging, setDragging] = useState(false);
   function clamp(value: number) {
-    const height = (container.current?.getBoundingClientRect().height || 400) - 6;
+    const bounds = container.current?.getBoundingClientRect();
+    const height = ((horizontal ? bounds?.width : bounds?.height) || 400) - 6;
     const minimum = Math.min(30, 64 / Math.max(1, height) * 100);
     return Math.min(100 - minimum, Math.max(minimum, value));
   }
-  return <div ref={container} className={`tool-split ${second ? 'has-preview' : ''} ${dragging ? 'dragging' : ''}`} style={second ? { gridTemplateRows: `minmax(0, ${ratio}fr) 6px minmax(0, ${100 - ratio}fr)` } : undefined}>
+  return <div ref={container} className={`tool-split ${horizontal ? 'horizontal' : ''} ${second ? 'has-preview' : ''} ${dragging ? 'dragging' : ''}`} style={second ? { [horizontal ? 'gridTemplateColumns' : 'gridTemplateRows']: `minmax(0, ${horizontal ? 100 - ratio : ratio}fr) 6px minmax(0, ${horizontal ? ratio : 100 - ratio}fr)` } : undefined}>
     {first}
-    {second && <><div className="tool-content-resizer" role="separator" aria-orientation="horizontal" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(ratio)} tabIndex={0} data-testid={testId} title={text('Drag to resize · Arrow keys to adjust', 'Потяните для изменения размера · Клавиши со стрелками')} onPointerDown={event => {
+    {second && <><div className="tool-content-resizer" role="separator" aria-orientation={horizontal ? 'vertical' : 'horizontal'} aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(horizontal ? 100 - ratio : ratio)} tabIndex={0} data-testid={testId} title={text('Drag to resize · Arrow keys to adjust', 'Потяните для изменения размера · Клавиши со стрелками')} onPointerDown={event => {
       if (event.button !== 0) return;
       event.preventDefault(); event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId);
-      drag.current = { pointer: event.pointerId, offset: event.clientY - event.currentTarget.getBoundingClientRect().top };
+      const bounds = event.currentTarget.getBoundingClientRect();
+      drag.current = { pointer: event.pointerId, offset: horizontal ? event.clientX - bounds.left : event.clientY - bounds.top };
       setDragging(true);
     }} onPointerMove={event => {
       if (drag.current?.pointer !== event.pointerId || !container.current) return;
       const bounds = container.current.getBoundingClientRect();
-      setRatio(clamp((event.clientY - bounds.top - drag.current.offset) / Math.max(1, bounds.height - 6) * 100));
+      const position = horizontal ? event.clientX - bounds.left : event.clientY - bounds.top;
+      const value = (position - drag.current.offset) / Math.max(1, (horizontal ? bounds.width : bounds.height) - 6) * 100;
+      setRatio(clamp(horizontal ? 100 - value : value));
     }} onPointerUp={event => { if (drag.current?.pointer === event.pointerId) { drag.current = null; setDragging(false); event.currentTarget.releasePointerCapture(event.pointerId); } }} onLostPointerCapture={() => { drag.current = null; setDragging(false); }} onPointerCancel={() => { drag.current = null; setDragging(false); }} onDoubleClick={() => setRatio(38)} onKeyDown={event => {
-      if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+      if (!(horizontal ? ['ArrowLeft', 'ArrowRight', 'Home', 'End'] : ['ArrowUp', 'ArrowDown', 'Home', 'End']).includes(event.key)) return;
       event.preventDefault();
-      setRatio(previous => clamp(event.key === 'Home' ? 0 : event.key === 'End' ? 100 : previous + (event.key === 'ArrowDown' ? 1 : -1) * (event.shiftKey ? 10 : 2)));
+      setRatio(previous => clamp(event.key === 'Home' ? (horizontal ? 100 : 0) : event.key === 'End' ? (horizontal ? 0 : 100) : previous + (horizontal ? (event.key === 'ArrowLeft' ? 1 : -1) : (event.key === 'ArrowDown' ? 1 : -1)) * (event.shiftKey ? 10 : 2)));
     }} />{second}</>}
   </div>;
 }
@@ -69,6 +75,8 @@ function FilesPanel({ workspace, active, paneId, cwd }: { workspace: Workspace; 
       return;
     }
     const request = ++latestRead.current, epoch = generation.current;
+    const key = JSON.stringify([workspace.id, paneId, cwd, entry.path]), draft = getFileDraft(key);
+    if (draft && !draft.saving && draft.text === draft.expectedText) setFileDraft(key);
     const valid = () => alive.current && epoch === generation.current && request === latestRead.current;
     const previewIntent = beginPreviewIntent(`files:${workspace.id}:${paneId ?? 'workspace'}`, epoch);
     setSelected(entry.path); setReading(true); setContent(null); setError('');
@@ -95,9 +103,9 @@ function FilesPanel({ workspace, active, paneId, cwd }: { workspace: Workspace; 
   return <div className="tool-tab-content files-panel" hidden={!active}>
     <div className="tool-subheader" data-testid="files-root" data-pane-id={paneId} data-cwd={cwd}><Folder /><span title={cwd}>{cwd}</span><button className="icon-button" aria-label={t("Обновить файлы")} title={t("Обновить файлы")} disabled={loading.size > 0} onClick={() => { generation.current++; latestRead.current++; setDirectories({}); setLoading(new Set()); setExpanded(new Set([''])); setSelected(''); setContent(null); setReading(false); void load(); }}><RefreshCw /></button></div>
     {error && <Message error>{error}</Message>}
-    <ToolSplit label={text('Resize file tree and preview', 'Изменить размер дерева файлов и предпросмотра')} testId="files-content-resizer" first={<div className="file-tree" aria-label={t("Файлы проекта")}>{entries('')}</div>}
+    <ToolSplit horizontal label={text('Resize file tree and preview', 'Изменить размер дерева файлов и предпросмотра')} testId="files-content-resizer" first={<div className="file-tree" aria-label={t("Файлы проекта")}>{entries('')}</div>}
     second={selected ? <div className="file-preview" data-testid="file-preview"><div className="preview-heading"><File /><span title={selected}>{selected}</span>{content && <small>{sizeLabel(content.size)}</small>}<button className="icon-button" aria-label={t("Закрыть просмотр файла")} onClick={() => { latestRead.current++; setSelected(''); setContent(null); setReading(false); }}><X /></button></div>
-      {reading ? <Message>{t("Чтение файла…")}</Message> : content?.kind === 'image' ? <div className="image-preview"><img src={content.dataUrl} alt={content.path} data-testid="image-preview" /></div> : content?.kind === 'text' ? <><pre className="text-preview" data-testid="text-preview">{content.text || t("Пустой файл")}</pre>{content.truncated && <div className="preview-note">{t("Предпросмотр ограничен 512 КБ.")}</div>}</> : content?.kind === 'binary' ? <Message>{t("Двоичный файл ·")} {sizeLabel(content.size)}{t(". Предпросмотр недоступен.")}</Message> : null}
+      {reading ? <Message>{t("Чтение файла…")}</Message> : content?.kind === 'image' ? <div className="image-preview"><img src={content.dataUrl} alt={content.path} data-testid="image-preview" /></div> : content?.kind === 'text' ? <><FileEditor key={selected} content={content} workspaceId={workspace.id} paneId={paneId} cwd={cwd} onReload={() => void open({ name: selected, path: selected, type: 'file', size: 0 })} />{content.truncated && <div className="preview-note">{t("Предпросмотр ограничен 512 КБ.")}</div>}</> : content?.kind === 'binary' ? <Message>{t("Двоичный файл ·")} {sizeLabel(content.size)}{t(". Предпросмотр недоступен.")}</Message> : null}
     </div> : undefined} />
   </div>;
 }

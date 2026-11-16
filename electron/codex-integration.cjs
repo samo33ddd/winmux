@@ -216,9 +216,9 @@ function codexCommand() {
 function clientVersion() {
   try {
     const version = require('../package.json').version;
-    return typeof version === 'string' && version ? version : '0.2.1';
+    return typeof version === 'string' && version ? version : '0.2.2';
   } catch {
-    return '0.2.1';
+    return '0.2.2';
   }
 }
 function openDaemon(options = {}) {

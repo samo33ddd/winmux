@@ -4,6 +4,25 @@ User-visible changes are recorded here. Release availability and downloadable as
 
 ## Unreleased
 
+## 0.2.2 — Files, agent notifications and skill maintenance
+
+### Added
+
+- Open file previews to the left of the project tree with a keyboard and pointer resizer. Wrap and edit complete UTF-8 text up to 512 KB, save with Ctrl+S or the Save button, and reject stale external changes (Issue #22).
+- Render Markdown headings, lists, emphasis and fenced code without executing raw HTML or loading remote images. Highlight known source languages while editing and in fenced Markdown blocks (Issues #22 and #26).
+- Create pane/workspace notifications for confirmed completed agent turns, failures and process exits; repeated status observations do not duplicate them (Issue #27).
+
+### Fixed
+
+- Keep file drafts and save locks consistent across file and terminal switches; warn before discarding unsaved edits and clean up drafts when their owner closes (Issue #22).
+- Clear exit codes from previous agent launches when a new identity is observed, and display them only for completed or failed launches. Unavailable activity remains explicit (Issue #23).
+- Keep terminal tabs close to the project name instead of reserving a wide empty header slot (Issue #24).
+
+### Maintenance and limitations
+
+- Update both bundled Winmux skills for the current file, cwd and status behavior, require reviewing them after product updates, and verify installed terminal/browser client operations on isolated fixtures (Issue #25).
+- The original initiating request behind Issue #13 remains unproven; existing automatic-open prevention and readable-error regressions remain in place. This release does not claim to identify that historical request.
+
 - Queue short terminal request bursts within count and byte limits; cancel unsent input on disconnect or an active request timeout instead of replaying it (Issue #15).
 - Leave stopped WSL distributions stopped during environment discovery; check their agents only when explicitly launched (Issue #16).
 

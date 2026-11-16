@@ -165,11 +165,18 @@ app.whenReady().then(() => {
     assert.equal((await paneState(paneId)).agentState, 'unknown');
     await deliver('UserPromptSubmit', 'running'); await deliver('PermissionRequest', 'waiting');
     await deliver('PreToolUse', 'running'); await deliver('Stop', 'completed');
+    const notices = async title => (await client.request('state')).notifications.filter(n => n.paneId === paneId && n.title === title);
+    assert.equal((await notices('Agent completed')).length, 1);
+    await deliver('Stop', 'completed');
+    assert.equal((await notices('Agent completed')).length, 1, 'repeated completion is not duplicated');
+    await deliver('UserPromptSubmit', 'running'); await deliver('Stop', 'completed');
+    assert.equal((await notices('Agent completed')).length, 2, 'a new turn can notify again');
     // A completed turn does not end the launch; the next turn can run.
     await deliver('UserPromptSubmit', 'running');
     fs.writeFileSync(base + '.exit', '7');
     await eventually(async () => (await paneState(paneId)).agentExitCode === 7, 'actual agent exit code');
     assert.equal((await paneState(paneId)).agentState, 'failed'); assert.equal((await paneState(paneId)).status, 'running');
+    assert.equal((await notices('Agent failed')).length, 1);
     await checkShellEnv(paneId, isWsl);
     await assert.rejects(client.request('agent.status', { paneId, state: 'running', launchId: captured.env.WINMUX_AGENT_LAUNCH_ID }), { code: 'AGENT_NOT_ACTIVE' });
     await client.request('tab.close', { workspaceId: workspace.id, tabId: tab.id });
@@ -233,6 +240,9 @@ app.whenReady().then(() => {
     await screen(pane.id, 'SAFE_AGENT_STARTED'); assert.equal(runs('windows-runs.txt'), 1);
     await eventually(async () => (await paneState(pane.id)).agentState === 'completed', 'agent completion from OSC');
     assert.equal((await paneState(pane.id)).agentExitCode, 0); assert.equal((await paneState(pane.id)).agentLabel, 'Safe fixture');
+    const finishedNotices = (await client.request('state')).notifications.filter(n => n.paneId === pane.id && n.title === 'Agent completed');
+    assert.equal(finishedNotices.length, 1, 'confirmed process exit creates one completion notification');
+    assert.equal(finishedNotices[0].workspaceId, workspace.id);
     const launchCapture = path.join(dataDir, 'selected-launch.json');
     await client.request('pane.input', { paneId: pane.id, data: `Set-Content -LiteralPath ${psQuote(launchCapture)} -Value $env:WINMUX_AGENT_LAUNCH_ID -NoNewline\r` });
     await eventually(async () => fs.existsSync(launchCapture), 'selected launch identity');

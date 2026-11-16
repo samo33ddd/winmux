@@ -1,6 +1,6 @@
 # Project tools contract
 
-User requirement: files, image previews, embedded browser and Git are part of the first deliverable. Backend owner: electron/workspace.cjs in the Electron main process. Renderer calls use the same preload request bridge. These services are read-only; existing terminal input can execute the commands the user enters.
+Backend owner: electron/workspace.cjs in the Electron main process. Renderer calls use the existing preload request bridge. Files supports explicit text saves; Git remains read-only. Embedded pages cannot access either service.
 
 ## Boundary and responses
 
@@ -8,11 +8,12 @@ Only the exact top-level Winmux webContents and main frame may call IPC. Embedde
 
 - files.list {workspaceId,paneId?,path?} -> {path,entries:[{name,path,type,size}],truncated}; directories first, up to 2000 rows, .git omitted. Size is not loaded during browsing (0); read returns actual size.
 - files.read {workspaceId,paneId?,path} -> {path,kind:text|image|binary,size,text?,dataUrl?,truncated?}; images up to12MiB, text preview up to512KiB, no HTML execution.
+- files.write {workspaceId,paneId?,path,text,expectedText} -> file content; existing complete UTF-8 text only, both strings bounded to512KiB, images/binary/invalid UTF-8 rejected. The current full text must equal expectedText before writing, so stale saves fail. Uses the same Windows/WSL root containment as reads. No implicit retry.
 - git.status {workspaceId,paneId?} -> {available,branch,entries:[{path,index,worktree,originalPath?}],error?}; actual porcelain status, limited to the selected root.
 - git.diff {workspaceId,paneId?,path?,staged?} -> {text}; disables textconv and external diff helpers, literal pathspecs, no shell command concatenation. New untracked text is displayed as actual content with a label.
 - writeClipboard(text)/readClipboard() -> native text clipboard, bound write size.
 
-IPC rejects with a human error for malformed path, closed workspace, inaccessible files, file-too-large, Python missing, process timeout or permission failure. Git unavailable/not-a-repository uses available:false with its error for a useful empty state. No implicit retry for state mutations. File reads and Git operations are idempotent; process operations bounded to12–15s and bounded buffers. No persistence/schema migration needed for these read-only services.
+IPC rejects with a human error for malformed path, closed workspace, inaccessible files, file-too-large, Python missing, process timeout, save conflict or permission failure. Git unavailable/not-a-repository uses available:false with its error for a useful empty state. File reads and Git operations are idempotent; process operations use timeouts and bounded buffers. No persistence/schema migration is needed. Unsaved drafts stay in renderer memory across file/tab switches; a shared save lock prevents competing editor instances. Closing an owner explicitly discards its drafts after confirmation; closing the window warns about remaining unsaved changes.
 
 ## Browser
 

@@ -26,7 +26,7 @@ const agents = [
 const themes = ['dark', 'midnight', 'nord', 'dracula', 'sand', 'light'];
 const runningLabel = { en: 'Running', ru: 'Работает' };
 const completedLabel = { en: 'Completed', ru: 'Завершено' };
-const unknownLabel = { en: 'Activity unknown', ru: 'Активность неизвестна' };
+const unknownLabel = { en: 'Activity unavailable', ru: 'Нет данных об активности' };
 
 function pane(agent) {
   return {
@@ -192,6 +192,9 @@ async function run() {
     for (const item of hidden) {
       const pane = stale.workspaces.find(entry => entry.id === `workspace-${item.id}`).panes[0];
       pane.agentState = item.state;
+      // A cached exit code from a previous launch must not appear on current
+      // unknown/idle/waiting activity or be mistaken for an activity counter.
+      if (!['completed', 'failed'].includes(item.state)) pane.agentExitCode = 0;
       if (item.state !== 'running') delete pane.agentActivity;
     }
     delete stale.workspaces[4].panes[0].agentActivity;

@@ -28,7 +28,7 @@ Store the launch environment explicitly as Windows or WSL with a distribution id
 - Provide CLI operations for state, environment discovery, workspace creation, pane splitting, text/key input, screen reading, resizing, notifications, and explicit termination.
 - Keep terminal processes in a separate daemon so the UI can detach and reconnect.
 - Open real HTTP(S) pages in an embedded browser with local snapshot, click, fill, evaluate, and screenshot operations while the desktop is open.
-- Show project files, text and image previews, Git branch/status, and staged or working-tree diffs. These tools are read-only.
+- Show project files, editable text and image previews, Markdown rendering, Git branch/status, and staged or working-tree diffs. Git tools are read-only.
 
 File browsing, images, browser previews, Git inspection, and selection copying are part of the initial scope. The interface stays compact and supports English and Russian labels.
 
@@ -67,7 +67,7 @@ Cloud synchronization, a mobile client, built-in AI chat or model billing, autom
 4. Deliver a notification to the correct pane and verify unread state. Test Windows and any claimed WSL interop route independently.
 5. Create a workspace and split pane through the terminal CLI, submit input, and inspect resulting screen state.
 6. Verify fresh-shell restoration after daemon restart, and clear handling of missing directories and unavailable WSL distributions.
-7. Inspect real project files, images, Git status, and diffs without modifying the project through those panels.
+7. Inspect project files and images, edit eligible text files, and inspect Git status and diffs.
 8. Open a real page in the embedded browser, inspect it, act on returned element references, and verify the resulting state and screenshot while the desktop remains open.
 
 The first engineering milestone is working terminal input/output and lifecycle behavior. Attractive screenshots are useful evidence of the interface, but cannot substitute for those runtime checks.

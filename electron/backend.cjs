@@ -148,6 +148,16 @@ async function startServer(options = {}) {
     asyncChanged(); broadcast({ type: 'notification', notification });
     return notification;
   }
+  function notifyAgentState(pane) {
+    const runtime = runtimes.get(pane.id);
+    if (!runtime || !pane.agentId) return;
+    if (['starting','running','waiting','idle'].includes(pane.agentState)) { runtime.lastAgentNotice = ''; return; }
+    if (!['completed','failed'].includes(pane.agentState)) return;
+    const notice = `${pane.agentId}:${pane.agentState}`;
+    if (runtime.lastAgentNotice === notice) return;
+    runtime.lastAgentNotice = notice;
+    addNotification(pane.id, pane.agentState === 'failed' ? 'Agent failed' : 'Agent completed', pane.agentLabel || pane.agentId);
+  }
   function terminalFor(pane) {
     pane.shellReady = false;
     const terminal = new Terminal({ cols: pane.cols, rows: pane.rows, scrollback: LIMITS.scrollback, allowProposedApi: true });
@@ -168,6 +178,7 @@ async function startServer(options = {}) {
       }
       // The shell can confirm invocation and exit, never model activity.
       if (state !== 'unknown' || !['running', 'waiting', 'completed', 'failed'].includes(pane.agentState)) pane.agentState = state;
+      notifyAgentState(pane);
       pane.agentUpdatedAt = Date.now(); asyncChanged(); return true;
     }));
     runtime.subscriptions.push(terminal.parser.registerOscHandler(7, data => {
@@ -402,6 +413,7 @@ async function startServer(options = {}) {
         const toolId = params.toolId === undefined ? undefined : string(params.toolId, 'toolId', 256);
         if (params.phase) runtime.activity.update({ phase: params.phase, toolName, toolId });
         pane.agentState = params.state; pane.agentUpdatedAt = Date.now();
+        notifyAgentState(pane);
         if (params.state === 'running') pane.agentActivity = runtime.activity.current();
         else { delete pane.agentActivity; if (params.state !== 'waiting') runtime.activity.clear(); }
         changed(); return { paneId: pane.id, state: pane.agentState, updatedAt: pane.agentUpdatedAt };
@@ -474,6 +486,9 @@ async function startServer(options = {}) {
     const runtime = runtimes.get(pane.id);
     if (runtime?.agentSessionHooks && runtime.agentLaunchId && !runtime.agentEnded) return;
     if (pane.agentId && pane.agentId !== 'codex' && (!identity || pane.agentPid)) return;
+    // Process/thread observations describe a current agent, not the previous
+    // shell-launched command whose exit code may still be on this pane.
+    delete pane.agentExitCode;
     if (!identity) {
       delete pane.agentId; delete pane.agentLabel; delete pane.agentThreadId;
       delete pane.agentSessionId; delete pane.agentBinding;
@@ -497,6 +512,7 @@ async function startServer(options = {}) {
       if (pane.agentState === 'running' && ACTIVITY_KINDS.has(identity.agentActivity)) pane.agentActivity = identity.agentActivity;
       else delete pane.agentActivity;
     }
+    notifyAgentState(pane);
     pane.agentUpdatedAt = Date.now(); asyncChanged();
   }
   function applyAgentIdentity(paneId, identity) {
@@ -505,7 +521,8 @@ async function startServer(options = {}) {
     const runtime = runtimes.get(pane.id);
     if (runtime?.agentSessionHooks && runtime.agentLaunchId && !runtime.agentEnded) return;
     if (!identity && pane.agentId === 'codex') return;
-    const before = JSON.stringify([pane.agentId, pane.agentLabel, pane.agentPid, pane.agentSessionId, pane.agentState, pane.agentActivity]);
+    const before = JSON.stringify([pane.agentId, pane.agentLabel, pane.agentPid, pane.agentSessionId, pane.agentState, pane.agentActivity, pane.agentExitCode]);
+    delete pane.agentExitCode;
     for (const key of ['agentId', 'agentLabel', 'agentPid', 'agentSessionId']) {
       if (identity?.[key]) pane[key] = identity[key]; else delete pane[key];
     }
@@ -513,8 +530,8 @@ async function startServer(options = {}) {
     pane.agentState = identity?.agentState || 'unknown';
     if (pane.agentState === 'running' && ACTIVITY_KINDS.has(identity?.agentActivity)) pane.agentActivity = identity.agentActivity;
     else delete pane.agentActivity;
-    const after = JSON.stringify([pane.agentId, pane.agentLabel, pane.agentPid, pane.agentSessionId, pane.agentState, pane.agentActivity]);
-    if (after !== before) { pane.agentUpdatedAt = Date.now(); asyncChanged(); }
+    const after = JSON.stringify([pane.agentId, pane.agentLabel, pane.agentPid, pane.agentSessionId, pane.agentState, pane.agentActivity, pane.agentExitCode]);
+    if (after !== before) { notifyAgentState(pane); pane.agentUpdatedAt = Date.now(); asyncChanged(); }
   }
   agentController = createAgentController({ panes: codexPanes, apply: applyAgentIdentity });
   codexController = createCodexController({

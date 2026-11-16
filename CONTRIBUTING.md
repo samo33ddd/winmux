@@ -82,7 +82,7 @@ Keep test data isolated. Preserve useful failure evidence in ignored `.artifacts
 
 - Terminal processes belong to the background daemon. Closing the UI must not silently kill them; restarting the daemon starts fresh shells without replaying commands.
 - The terminal CLI and desktop browser service have separate contracts. Browser automation requires an open desktop and does not go through daemon `rpc` methods.
-- Files and Git panels are read-only. Keep project paths within the selected workspace and use the workspace's Windows or WSL environment.
+- The Files panel can edit eligible text files; Git remains read-only. Keep project paths within the selected workspace and use the workspace's Windows or WSL environment.
 - Web content must not gain Node.js access or access to the app's privileged preload bridge.
 - Preserve explicit unknown states: a running shell or discovered executable does not prove agent activity, hooks, or conversation resume.
 
