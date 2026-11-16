@@ -142,12 +142,12 @@ export function WorkspaceTools({ workspace, activePaneId, requestedBrowser, tab,
   const [visited, setVisited] = useState<Set<ToolTab>>(new Set());
   const pane = workspace.panes.find(item => item.id === activePaneId) ?? selectedPane(workspace, {});
   const cwd = pane?.cwd || workspace.cwd;
-  // Remount only filesystem views on terminal/directory changes. Old requests lose their alive guard.
+  // Remount each filesystem view on pane/cwd changes, with a view prefix to keep sibling keys unique.
   const rootKey = JSON.stringify([workspace.id, pane?.id, cwd]);
   useEffect(() => { if (visible && tab) setVisited(previous => previous.has(tab) ? previous : new Set(previous).add(tab)); }, [visible, tab]);
   return <aside className={`workspace-tools ${expanded ? 'expanded' : ''}`} hidden={!visible || !tab} aria-label={t("Инструменты проекта")} data-testid="workspace-tools" data-workspace-id={workspace.id}><div className="tools-heading"><div className="tool-tabs" role="tablist" aria-label={t("Инструменты проекта")}>{([{ id: 'files', label: t("Файлы"), Icon: Folder }, { id: 'git', label: 'Git', Icon: GitBranch }, { id: 'browser', label: t("Браузер"), Icon: Globe }] as const).map(({ id, label, Icon }) => <button key={id} role="tab" aria-selected={tab === id} data-testid={`tool-tab-${id}`} onClick={() => onTab(id)}><Icon />{label}</button>)}</div><button className="icon-button" aria-label={expanded ? t("Уменьшить инструменты") : t("Расширить инструменты")} title={expanded ? t("Уменьшить") : t("Расширить")} onClick={onExpand}>{expanded ? <Minimize2 /> : <Maximize2 />}</button><button className="icon-button" aria-label={t("Закрыть инструменты")} onClick={onClose}><X /></button></div>
-    {visited.has('files') && <FilesPanel key={rootKey} workspace={workspace} paneId={pane?.id} cwd={cwd} active={visible && tab === 'files'} /> }
-    {visited.has('git') && <GitPanel key={rootKey} workspace={workspace} paneId={pane?.id} active={visible && tab === 'git'} /> }
+    {visited.has('files') && <FilesPanel key={`files:${rootKey}`} workspace={workspace} paneId={pane?.id} cwd={cwd} active={visible && tab === 'files'} /> }
+    {visited.has('git') && <GitPanel key={`git:${rootKey}`} workspace={workspace} paneId={pane?.id} active={visible && tab === 'git'} /> }
     {visited.has('browser') && <BrowserPanel active={visible && tab === 'browser'} requested={requestedBrowser} />}
   </aside>;
 }
