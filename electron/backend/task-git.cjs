@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('node:path');
+const fs = require('node:fs');
 const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 
@@ -64,7 +65,9 @@ function normalizePath(value, environment) {
 
 function pathIdentity(value, environment) {
   const normalized = normalizePath(value, environment);
-  return environment === 'wsl' ? normalized : normalized.toLowerCase();
+  if (environment === 'wsl') return normalized;
+  try { return fs.realpathSync.native(normalized).toLowerCase(); }
+  catch { return normalized.toLowerCase(); }
 }
 
 function validateTaskId(taskId, operation) {

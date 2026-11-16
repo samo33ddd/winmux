@@ -441,7 +441,11 @@ async function startServer(options = {}) {
         const agentHooks = Boolean(environment.agents?.find(agent => agent.id === agentId)?.hookAdapter);
         await validateLaunch(environment, profileId, inspected.root, agentId, false);
         const profile = environment.profiles.find(item => item.id === profileId);
-        const identity = value => profile.environment === 'windows' ? path.win32.normalize(value).toLowerCase() : path.posix.normalize(value);
+        const identity = value => {
+          if (profile.environment !== 'windows') return path.posix.normalize(value);
+          try { return fs.realpathSync.native(value).toLowerCase(); }
+          catch { return path.win32.normalize(value).toLowerCase(); }
+        };
         let project = state.projects.find(item => {
           const projectProfile = environment.profiles.find(candidate => candidate.id === item.profileId);
           return identity(item.commonDir || '') === identity(inspected.commonDir) && projectProfile?.environment === profile.environment && projectProfile.distro === profile.distro;

@@ -183,7 +183,10 @@ The task RPC surface is:
 
 Worktree ownership uses the task ID, normalized absolute path, expected branch,
 Git administration directory, and a marker in `winmux-task-owner`; directory
-existence or branch equality alone is insufficient for removal. Use argument
+existence or branch equality alone is insufficient for removal.
+Windows identity comparison resolves existing paths so short names and junction
+aliases match the same Git worktree without bypassing its ownership marker.
+Use argument
 arrays for Windows `git` and `wsl.exe --exec git`, with prompt access disabled
 and bounded output/timeouts. Never delete or overwrite a worktree through a raw
 shell fallback after an ownership or cleanliness rejection.

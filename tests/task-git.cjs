@@ -26,7 +26,7 @@ function git(cwd, ...args) {
 }
 
 async function fixture(t) {
-  const root = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'winmux-task-git-'));
+  const root = fs.realpathSync.native(await fsPromises.mkdtemp(path.join(os.tmpdir(), 'winmux-task-git-')));
   t.after(() => fsPromises.rm(root, { recursive: true, force: true }));
   const repo = path.join(root, 'repo');
   await fsPromises.mkdir(repo);
@@ -106,6 +106,17 @@ test('create, inspect, attach, and clean removal', async (t) => {
     /^[0-9a-f]{40,64}\s/
   );
   await fsPromises.access(path.join(importedPath, '.git'));
+});
+
+test('Windows path aliases retain managed worktree identity', { skip:process.platform !== 'win32' }, async (t) => {
+  const { root, repo } = await fixture(t);
+  const alias = path.join(root, 'alias');
+  fs.symlinkSync(root, alias, 'junction');
+  const service = createTaskGitService();
+  const target = path.join(alias, 'managed');
+  await service.createWorktree({repo, path:target, branch:'task/alias', base:'main', taskId:'alias-task'});
+  assert.equal((await service.removeWorktree({repo, path:target, taskId:'alias-task'})).removed, true);
+  assert.equal(fs.existsSync(path.join(root, 'managed')), false);
 });
 
 test('changed, untracked, ignored data and imported worktrees are preserved', async (t) => {

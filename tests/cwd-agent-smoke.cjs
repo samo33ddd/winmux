@@ -393,7 +393,9 @@ app.whenReady().then(() => {
     const attachPath = path.join(fs.realpathSync.native(dataDir), 'task-project.attached');
     git('branch', attachBranch, 'main');
     git('worktree', 'add', attachPath, attachBranch);
-    const attachParams = {projectDirectory:taskRepo, profileId:'powershell', name:'Interrupted attach', baseBranch:'main', primaryBranch:'main', agentId:'fixture:powershell', mode:'attach', worktreePath:attachPath};
+    const attachAlias = path.join(dataDir, 'task-attach-alias');
+    fs.symlinkSync(attachPath, attachAlias, 'junction');
+    const attachParams = {projectDirectory:taskRepo, profileId:'powershell', name:'Interrupted attach', baseBranch:'main', primaryBranch:'main', agentId:'fixture:powershell', mode:'attach', worktreePath:attachAlias};
     const firstAttach = await client.request('task.create', attachParams);
     const interrupted = (await client.request('state')).tasks.find(task => task.workspaceId === firstAttach.id);
     assert(interrupted && !interrupted.managed);
