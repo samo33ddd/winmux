@@ -2,14 +2,14 @@
 const assert=require('node:assert/strict');
 const {spawnSync}=require('node:child_process');
 const {shellArgs,cwdFromOsc}=require('../electron/backend/shell-integration.cjs');
-const profile={id:'powershell',environment:'windows',args:['-NoLogo','-NoExit']};
+const command=process.env.ProgramFiles ? `${process.env.ProgramFiles}/PowerShell/7/pwsh.exe` : 'pwsh.exe';
+const profile={id:'powershell',environment:'windows',command,args:['-NoLogo','-NoExit']};
 const args=shellArgs(profile);
 assert(!args.includes('-NoProfile'),'Normal PowerShell must load the native user profiles');
 assert(shellArgs({...profile,args:[...profile.args,'-NoProfile']}).includes('-NoProfile'));
 const integration=Buffer.from(args.at(-1),'base64').toString('utf16le');
 const script=`function global:prompt { 'USER_PROFILE_' + $global:LASTEXITCODE + '> ' }\n${integration}\n$global:LASTEXITCODE=17\n[Console]::Write((prompt))`;
 const encoded=Buffer.from(script,'utf16le').toString('base64');
-const command=process.env.ProgramFiles ? `${process.env.ProgramFiles}/PowerShell/7/pwsh.exe` : 'pwsh.exe';
 let result=spawnSync(command,['-NoLogo','-NoProfile','-EncodedCommand',encoded],{encoding:'utf8',timeout:15000});
 if(result.error?.code==='ENOENT')result=spawnSync('powershell.exe',['-NoLogo','-NoProfile','-EncodedCommand',encoded],{encoding:'utf8',timeout:15000});
 assert.equal(result.status,0,result.error?.message || result.stderr);
