@@ -189,6 +189,9 @@ English/Russian strings and six themes, and the supported 900-pixel minimum widt
 Sanitize paths, terminal text, credentials, cookies, and account data before public
 screenshots. Use available computer-use tooling for native window interaction;
 report a missing native pipe/locked desktop rather than inventing UI evidence.
+For terminal pointer checks, settle the rendered box before reading `pane.screen`
+and use that response's rows/cols together. Mixing an earlier grid snapshot with
+a later resized box can miss a visible link on a hosted Windows desktop.
 
 ## Delivery and release gates
 

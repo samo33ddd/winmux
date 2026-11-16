@@ -67,3 +67,9 @@ desktop run passed without another product change. Hosted current-head CI is an
 additional merge gate. Hosted Windows has no WSL distro and cannot replace the
 local Ubuntu-24.04 evidence. No installer/package/release or owner restart is
 claimed by these source checks.
+
+Hosted CI also exposed an outdated profile fixture without its executable field
+and a pointer helper mixing a pre-resize terminal grid with later DOM geometry.
+The profile now passes its existing executable; pointer coordinates read one
+rows/cols/screen response after the rendered box settles. The original real-click
+and native-profile assertions remain required.

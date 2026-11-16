@@ -88,16 +88,9 @@ async function waitScreen(paneId, text) {
 }
 
 async function screenPoint(paneId, needle) {
-  const screen = await rpc('pane.screen', { paneId });
-  const lines = screen.text.split(/\r?\n/);
-  const row = lines.findIndex(line => line.includes(needle));
-  assert.notEqual(row, -1, `Terminal screen did not contain ${needle}`);
-  const column = lines[row].indexOf(needle);
-  const state = await rpc('state');
-  const pane = state.workspaces.flatMap(workspace => workspace.panes).find(item => item.id === paneId);
-  assert(pane, `Missing terminal pane ${paneId}`);
   let box;
   let previousBox;
+  let stable = 0;
   for (let attempt = 0; attempt < 40; attempt++) {
     box = await page.locator(`[data-pane-id="${paneId}"] .xterm-screen`).boundingBox();
     if (box && previousBox
@@ -105,18 +98,22 @@ async function screenPoint(paneId, needle) {
       && Math.abs(box.y - previousBox.y) < 0.5
       && Math.abs(box.width - previousBox.width) < 0.5
       && Math.abs(box.height - previousBox.height) < 0.5) {
-      break;
-    }
+      if (++stable >= 2) break;
+    } else stable = 0;
     previousBox = box;
     await page.waitForTimeout(50);
   }
   assert(box, 'Terminal screen has no layout box');
-  const rows = Math.max(1, lines.length);
+  const screen = await rpc('pane.screen', { paneId });
+  const lines = screen.text.split(/\r?\n/);
+  const row = lines.findIndex(line => line.includes(needle));
+  assert.notEqual(row, -1, `Terminal screen did not contain ${needle}`);
+  const column = lines[row].indexOf(needle);
   return {
-    x:box.x + (column + 1) * (box.width / pane.cols),
-    y:box.y + (row + 0.5) * (box.height / rows),
-    cellWidth:box.width / pane.cols,
-    cellHeight:box.height / rows,
+    x:box.x + (column + 1) * (box.width / screen.cols),
+    y:box.y + (row + 0.5) * (box.height / screen.rows),
+    cellWidth:box.width / screen.cols,
+    cellHeight:box.height / screen.rows,
   };
 }
 
