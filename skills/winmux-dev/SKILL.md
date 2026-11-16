@@ -77,6 +77,14 @@ and toolbar buttons remain `no-drag`. Validate computed regions and, when native
 Computer Use is available, measure the restored window position after a real
 header drag. CDP pointer events alone do not prove native window movement. A
 missing native pipe is a verification limitation, not a product pass.
+The standalone `cua-driver` can remain available when `@oai/sky` reports a missing
+pipe. Use `cua-driver doctor`, enumerate the exact test window, capture fresh
+window state, then attempt a native drag in blank header space. If background
+delivery is refused or verified ineffective, use the driver's explicit foreground
+route on that test window. Measure before/after OS bounds; `effect: unverifiable`
+in the gesture response alone proves nothing. The 0.2.3 check observed movement
+with one/two tabs and at 900px, plus native restoration by dragging a maximized
+window. Never substitute `setBounds` for the gesture being tested.
 
 Terminal pane relocation uses `pane.move {paneId,targetPaneId,side}` with four
 edge positions inside one workspace. Move the existing leaf/runtime, collapse
@@ -226,7 +234,7 @@ and bounded output/timeouts. Never delete or overwrite a worktree through a raw
 shell fallback after an ownership or cleanliness rejection.
 
 `task.delivery.context` returns the task's branch, cwd, primary branch, and last
-delivery result. `refresh`, `submit`, and `merge` parse `origin` without embedded
+delivery result and review evidence. `refresh`, `submit`, and `merge` parse `origin` without embedded
 credentials, verify the worktree is on its recorded branch, read the current
 HEAD, and operate through authenticated `gh`. They do not stage, commit, or push.
 Only one delivery operation may run per task. A successful `submit` confirms PR
@@ -240,6 +248,29 @@ and a clean mergeable PR. The merge command is a merge commit with
 `--match-head-commit`; never add admin, auto-merge, squash, rebase, or branch
 deletion bypasses. Re-read the PR after any uncertain submit or merge response
 and reconcile instead of retrying a mutation blindly.
+
+`task.delivery.review` records an explicit local attestation after an independent
+review actually completed. It requires task ID, exact current 40-hex HEAD, a
+nonempty reviewer label (120 characters maximum), an evidence summary (4096
+maximum), and outcome `approved` or `changes_requested`. The daemon timestamps,
+validates and persists the record. It does not run a reviewer, prove a process
+identity, or manufacture a GitHub approval; trusted local orchestration owns the
+independence claim. A new commit invalidates previous approval. Local approval
+or an eligible non-author GitHub approval may satisfy the product gate, but
+local changes requests, outstanding formal changes requests and GitHub's
+`REVIEW_REQUIRED` decision remain blockers. Never record approval before the
+independent pass or remove required CI. Owner-selected local review may use a
+zero GitHub approval count; that is a deliberate policy choice, not an admin
+bypass. Exercise validation, restart retention, stale heads, requested changes,
+required checks and both pre-merge rechecks in backend and delivery regressions.
+
+`src/AgentStatus.tsx` owns both header and workspace-list presentation. Identity,
+state and action remain separate; a generic task-processing caption is allowed
+only for a named agent with confirmed `running` state when no tool activity is
+available. Preserve unknown/waiting/ended action hiding, exit-code rules and
+complete tooltips. The Electron activity fixture checks aligned icon/text
+columns, the 900px width, English/Russian, six themes, generic-to-specific action
+changes and sanitized captures. This UI fallback does not invent a tool event.
 
 Task-created Claude and OMP launches receive appended system instructions that
 refer to `$winmux-terminal` and the delivery RPCs. Codex receives the same bounded

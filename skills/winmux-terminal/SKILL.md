@@ -1,7 +1,7 @@
 ---
 name: winmux-terminal
 description: Control persistent Windows terminal workspaces, project tasks, and GitHub delivery.
-version: 0.2.2
+version: 0.2.3
 author: samo33ddd, Hermes Agent
 license: UNLICENSED
 platforms: [windows, linux]
@@ -155,6 +155,7 @@ From an ordinary client, pass `taskId`. From a task-agent pane, the CLI adds
 
 ```powershell
 node scripts/winmux-client.cjs rpc task.delivery.context '{"taskId":"TASK_ID"}'
+node scripts/winmux-client.cjs rpc task.delivery.review '{"taskId":"TASK_ID","sha":"REVIEWED_40_HEX_COMMIT","reviewer":"Independent native reviewer","summary":"Scope, findings and verification evidence.","outcome":"approved"}'
 node scripts/winmux-client.cjs rpc task.delivery.refresh '{"taskId":"TASK_ID"}'
 node scripts/winmux-client.cjs rpc task.delivery.submit '{"taskId":"TASK_ID","title":"fix: explain the change","body":"Problem, change, and verification."}'
 node scripts/winmux-client.cjs rpc task.delivery.merge '{"taskId":"TASK_ID"}'
@@ -169,9 +170,27 @@ without changing its title or body. A successful `submit` confirms identity,
 not review or CI readiness; call `refresh` to inspect those gates. `refresh` reads the existing PR. `merge`
 uses a merge commit and only proceeds when the PR's source repository, base
 branch, head branch, and current head commit match the task; an independent
-non-author approval exists on that head without requested changes; all required
+review is recorded for that exact head, either through an eligible non-author
+GitHub approval or the explicit local review operation below; all required
 checks pass; and GitHub reports the PR mergeable and clean. The service never
 uses `--admin`, auto-merge, squash, rebase, or branch deletion.
+
+Run an independent review and resolve its findings before recording local
+approval. `task.delivery.review` records an explicit attestation from an
+authenticated local operator; it does not execute a reviewer, verify a process's
+identity, or create a GitHub approval. Supply the reviewed 40-character commit
+SHA, a nonempty reviewer label (up to 120 characters), a nonempty evidence summary
+(up to 4096 characters), and `outcome: "approved"` or `"changes_requested"`.
+The daemon checks the task's current HEAD and records the time itself. Review
+evidence is retained across restarts and returned by `task.delivery.context`.
+New commits require a fresh review; stale evidence cannot authorize their merge.
+Do not attest your own implementation as independently approved.
+
+A current local `changes_requested` result, an outstanding independent GitHub
+changes request, or GitHub's `REVIEW_REQUIRED` decision still blocks delivery.
+Local evidence cannot bypass a repository's formal-review policy. A sole-owner
+repository may deliberately use local native review with zero required GitHub
+approvals while retaining required CI; configure that only with owner direction.
 
 Each operation returns fields such as `ok`, `action`, `code`, `blockers`,
 `reconciled`, `repo`, `base`, `head`, `sha`, `number`, `url`, and `state`, and
@@ -183,7 +202,7 @@ the latest result is stored on the task. Act on `blockers` in returned order:
 | `STALE_HEAD` | The PR head commit differs from the task worktree HEAD. Determine which commit is intended; commit or push the task head or reconcile the remote deliberately, then refresh. |
 | `AMBIGUOUS_PR` | Multiple exact PRs exist, or the search reached its 30-result limit. Resolve duplicates manually before refreshing. |
 | `NOT_FOUND` | No matching PR was found. Push the branch and submit when the change is ready. |
-| `NO_INDEPENDENT_APPROVAL` | The current head lacks approval from someone other than the PR author, or still requests changes. Obtain a fresh review on the current commit. |
+| `NO_INDEPENDENT_APPROVAL` | The current head lacks valid local independent-review evidence or an eligible GitHub approval, or still requests changes. Perform independent review, resolve findings and record the current commit; honor any required formal GitHub review. |
 | `CHECKS_PENDING` | Required CI is still running. Wait and refresh; do not poll by resubmitting or merging. |
 | `CHECKS_FAILED` | A required check failed. Fix it, update the PR head, and obtain checks and approval for the new head. |
 | `CHECKS_UNKNOWN` | Required-check state could not be established. Confirm `gh pr checks --required`, repository permissions, and network access, then refresh. |
@@ -233,6 +252,7 @@ and verify the returned `workspaceId`/`tabId` and live process afterward.
 - In the terminal UI, Ctrl+Click opens plain HTTP(S) and OSC 8 web links in that workspace's embedded browser; an ordinary web-link click does not navigate. Local file clicks retain their in-app preview. The browser toolbar's external-browser action remains explicit.
 - Terminal RPC input is limited to 64 KiB of UTF-8 per request. The desktop chunks and serializes large pastes, preserving Unicode and bracketed-paste order. Direct CLI/RPC callers must respect request limits themselves; a failed input is never replayed automatically. Ctrl+Space can deliver NUL to terminal applications without relaxing identifier/path validation.
 - Confirmed turn completion, failure and shell-observed agent exit create pane/workspace notifications. Unknown activity is not completion. An exit code is shown only for a confirmed ended launch; it is not an activity counter. If status is unavailable, inspect Settings and the relevant native connection/hook support rather than inferring activity from a running shell.
+- For a confirmed running agent without a specific tool event, the header and workspace list show a generic task-processing caption. Specific action captions replace it when available; unknown, waiting and ended states show no current action. This presentation does not infer which tool is running or establish task delivery.
 
 ## Verification
 

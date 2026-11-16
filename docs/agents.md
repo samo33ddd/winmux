@@ -60,6 +60,30 @@ Set `WINMUX_DATA_DIR` consistently for the desktop, terminal CLI, and browser CL
 
 The commands below use a source checkout. Do not assume an installed or portable executable has added a global `winmux` command to PATH.
 
+## Task review and delivery
+
+Project tasks can create isolated Git worktrees or attach existing linked
+worktrees. The bundled `winmux-terminal` skill documents their RPC commands,
+archive safeguards and recovery. A task's delivery context includes its branch,
+working directory, primary branch, PR result and recorded review evidence.
+
+For a single-maintainer workflow, first run an independent native review, resolve
+findings and record the reviewed task HEAD with `task.delivery.review`. Provide
+`taskId`, `sha`, a bounded `reviewer` label and evidence `summary`, and `outcome`
+(`approved` or `changes_requested`). The daemon validates the task and current
+commit, timestamps the record and preserves it across restarts. The operation
+records a trusted local operator's attestation; it does not run a reviewer or
+create a GitHub approval. Never record independent approval for your own
+unreviewed implementation. A new commit requires a new review.
+
+`task.delivery.refresh` reports missing review, stale heads and CI blockers.
+`task.delivery.merge` accepts exact-commit local approval or an eligible GitHub
+approval, but still blocks requested changes, repository-required formal review,
+failed or unknown required checks, and non-mergeable PRs. It rechecks the remote
+head and uses a merge commit with `--match-head-commit`, without admin bypass.
+Repository protection must match the owner-selected review workflow: local
+review may use zero required GitHub approvals while retaining strict required CI.
+
 ## Terminal workflow
 
 ```powershell

@@ -15,6 +15,7 @@ const execFileAsync = promisify(execFile); // Run the CLI directly with argument
 const root = path.resolve(__dirname, '..');
 const dataDir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'winmux-smoke-'));
 const stateFile = path.join(dataDir, 'state.json');
+const reviewRepo = path.join(dataDir, 'review-repository');
 const stateMaxBytes = 4 * 1024 * 1024;
 const pipeName = process.platform === 'win32' ? `\\\\.\\pipe\\winmux-smoke-${randomUUID()}` : path.join(dataDir, 'ipc.sock');
 const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', WINMUX_NO_PROFILE: '1', WINMUX_DATA_DIR: dataDir, WINMUX_PIPE_NAME: pipeName };
@@ -23,6 +24,17 @@ let daemon, client, logs = '', shuttingDown = false;
 const sockets = new Set();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const psQuote = text => `'${text.replace(/'/g, "''")}'`;
+function clearReadOnly(target) {
+  const stat = fs.lstatSync(target);
+  if (stat.isDirectory()) for (const name of fs.readdirSync(target)) clearReadOnly(path.join(target, name));
+  if ((stat.mode & 0o200) === 0) fs.chmodSync(target, stat.mode | 0o200);
+}
+function removeFixture(directory) {
+  const gitObjects = path.join(directory, 'review-repository', '.git', 'objects');
+  // Windows Git marks loose object files read-only; clear only this fixture's object tree before recursive removal.
+  if (fs.existsSync(gitObjects)) clearReadOnly(gitObjects);
+  fs.rmSync(directory, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 });
+}
 function log(label, details = '') { console.log(`PASS ${label}${details ? ` — ${details}` : ''}`); }
 async function eventually(action, label, timeout = 12000) {
   const end = Date.now() + timeout; let last;
@@ -74,12 +86,55 @@ async function raw(frame) {
   });
 }
 async function run() {
+  fs.mkdirSync(reviewRepo);
+  await execFileAsync('git', ['init', reviewRepo], { cwd: root, windowsHide: true });
+  await execFileAsync('git', ['-C', reviewRepo, 'checkout', '-b', 'winmux/review-test'], { cwd: root, windowsHide: true });
+  await execFileAsync('git', ['-C', reviewRepo, 'config', 'user.email', 'review@example.invalid'], { cwd: root, windowsHide: true });
+  await execFileAsync('git', ['-C', reviewRepo, 'config', 'user.name', 'Winmux Review'], { cwd: root, windowsHide: true });
+  await execFileAsync('git', ['-C', reviewRepo, 'commit', '--allow-empty', '-m', 'Initial review fixture'], { cwd: root, windowsHide: true });
+  await execFileAsync('git', ['-C', reviewRepo, 'remote', 'add', 'origin', 'https://github.com/samo33ddd/winmux.git'], { cwd: root, windowsHide: true });
+  const reviewSha = (await execFileAsync('git', ['-C', reviewRepo, 'rev-parse', 'HEAD'], { cwd: root, windowsHide: true })).stdout.trim();
+  fs.writeFileSync(stateFile, JSON.stringify({
+    version: 3,
+    state: {
+      workspaces: [],
+      projects: [{ id: 'review-project', name: 'Winmux review', root: reviewRepo, profileId: 'powershell', primaryBranch: 'main' }],
+      tasks: [{
+        id: 'review-task', name: 'Review task', projectId: 'review-project', cwd: reviewRepo, branch: 'winmux/review-test',
+        base: 'main', agentId: 'codex', managed: true, archived: false, phase: 'ready', deliverySupport: 'hooks',
+        review: { sha: '0'.repeat(40), reviewer: 'Seed reviewer', summary: 'Seed evidence', outcome: 'approved', reviewedAt: 1 },
+      }],
+      notifications: [],
+      settings: { fontSize: 14, theme: 'dark' },
+    },
+  }));
   await launch();
   const environment = await client.request('environment');
   assert.ok(environment.profiles.some(p => p.id === 'powershell'));
   assert.ok(environment.agents.some(agent => agent.id === 'claude' && typeof agent.available === 'boolean'));
   assert.equal((await client.request('state')).workspaces.length, 0);
   log('daemon startup + environment', `${process.versions.electron ? 'Electron ' + process.versions.electron : 'Node ' + process.version}; ${environment.profiles.map(p => p.id).join(', ')}`);
+
+  await assert.rejects(client.request('task.delivery.review', {
+    taskId: 'review-task', sha: reviewSha, reviewer: ' ', summary: 'Independent review', outcome: 'approved',
+  }), { code: 'INVALID_ARGUMENT' });
+  await assert.rejects(client.request('task.delivery.review', {
+    taskId: 'review-task', sha: '1'.repeat(40), reviewer: 'Sol', summary: 'Stale review', outcome: 'approved',
+  }), { code: 'STALE_HEAD' });
+  await client.request('task.delivery.review', {
+    taskId: 'review-task', sha: reviewSha, reviewer: 'Sol', summary: 'Changes requested', outcome: 'changes_requested',
+  });
+  await client.request('task.delivery.review', {
+    taskId: 'review-task', sha: reviewSha, reviewer: 'Sol', summary: 'Independent approval', outcome: 'approved',
+  });
+  const recordedReview = (await client.request('task.delivery.context', { taskId: 'review-task' })).review;
+  assert.equal(recordedReview.sha, reviewSha);
+  assert.equal(recordedReview.outcome, 'approved');
+  await stop();
+  await launch();
+  const restoredReview = (await client.request('task.delivery.context', { taskId: 'review-task' })).review;
+  assert.deepEqual(restoredReview, recordedReview);
+  log('task delivery review RPC validates current HEAD and survives daemon restart');
 
   for (const token of ['wrong', 'Ж'.repeat(64)]) {
     const reply = await raw(JSON.stringify({ id: 1, token, method: 'state' }) + '\n');
@@ -292,7 +347,7 @@ async function run() {
 }
 const deadline = setTimeout(() => { console.error('FAIL backend smoke exceeded 150 seconds'); shuttingDown = true; client?.close(); for (const socket of sockets) socket.destroy(); daemon?.kill(); process.exit(1); }, 150000);
 run().then(async () => {
-  clearTimeout(deadline); fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 });
+  clearTimeout(deadline); removeFixture(dataDir);
   console.log('BACKEND_SMOKE_OK'); process.exit(0);
 }).catch(async error => {
   console.error(error.stack); if (logs.trim()) console.error('Daemon output:\n' + logs.slice(-12000));

@@ -11,7 +11,7 @@ const { createController: createCodexController } = require('./codex-integration
 const { createController: createAgentController } = require('./agent-integration.cjs');
 const { ACTIVITY_KINDS, createActivityTracker } = require('./agent-activity.cjs');
 const { createTaskGitService, createGitExecutor } = require('./backend/task-git.cjs');
-const { createTaskDelivery } = require('./backend/task-delivery.cjs');
+const { createTaskDelivery, normalizeTaskReview } = require('./backend/task-delivery.cjs');
 const { deliverySupportFor } = require('./backend/task-instructions.cjs');
 
 function replaceLeaf(node, paneId, replacement) {
@@ -138,6 +138,12 @@ function loadState(file) {
     if (!state.projects.some(project => project.id === task.projectId) || typeof task.managed !== 'boolean' || typeof task.archived !== 'boolean') fail('STATE_INVALID', 'Invalid task ownership');
     if (task.ownership && (task.ownership.taskId !== task.id || task.ownership.path !== task.cwd || task.ownership.branch !== task.branch || typeof task.ownership.marker !== 'string' || typeof task.ownership.adminDir !== 'string')) fail('STATE_INVALID', 'Invalid worktree ownership record');
     if (task.workspaceId !== undefined && !state.workspaces.some(workspace => workspace.id === task.workspaceId)) delete task.workspaceId;
+    if (task.review !== undefined) {
+      try {
+        const review = normalizeTaskReview(task.review);
+        if (JSON.stringify(review) !== JSON.stringify(task.review)) { task.review = review; recovered = true; }
+      } catch { fail('STATE_INVALID', 'Invalid task review record'); }
+    }
   }
   if (!state.settings || !['dark', 'light'].includes(state.settings.theme)) fail('STATE_INVALID', 'Invalid saved settings');
   integer(state.settings.fontSize, 'fontSize', 9, 32);
@@ -237,7 +243,7 @@ async function startServer(options = {}) {
     const match = /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(remote);
     if (!match) fail('GITHUB_UNAVAILABLE', 'The origin must be a GitHub repository without embedded credentials');
     const repo = match[1];
-    return { delivery:(options.createTaskDelivery || createTaskDelivery)({ repo, base:project.primaryBranch }), spec:{source:repo, head:task.branch, sha, ...(task.delivery?.number ? {number:task.delivery.number} : {})}, project };
+    return { delivery:(options.createTaskDelivery || createTaskDelivery)({ repo, base:project.primaryBranch }), spec:{source:repo, head:task.branch, sha, ...(task.delivery?.number ? {number:task.delivery.number} : {}), ...(task.review ? {review:task.review} : {})}, project };
   }
   function forgetWorkspace(id) { for (const task of state.tasks) if (task.workspaceId === id) delete task.workspaceId; }
   function paneById(id) {
@@ -513,7 +519,18 @@ async function startServer(options = {}) {
       case 'task.delivery.context': {
         const task = taskById(params.taskId), project = state.projects.find(item => item.id === task.projectId);
         if (!project) fail('NOT_FOUND', 'Task project not found');
-        return { taskId:task.id, name:task.name, branch:task.branch, cwd:task.cwd, primaryBranch:project.primaryBranch, delivery:task.delivery || null };
+        return { taskId:task.id, name:task.name, branch:task.branch, cwd:task.cwd, primaryBranch:project.primaryBranch, delivery:task.delivery || null, review:task.review || null };
+      }
+      case 'task.delivery.review': {
+        const task = taskById(params.taskId);
+        if (deliveries.has(task.id)) fail('TASK_IN_USE', 'Another delivery operation is running for this task');
+        deliveries.add(task.id);
+        try {
+          const review = normalizeTaskReview({ sha:params.sha, reviewer:params.reviewer, summary:params.summary, outcome:params.outcome, reviewedAt:Date.now() });
+          const { spec } = await deliveryFor(task);
+          if (review.sha !== spec.sha) fail('STALE_HEAD', 'Review commit does not match the current task HEAD');
+          task.review = review; changed(); return review;
+        } finally { deliveries.delete(task.id); }
       }
       case 'task.delivery.refresh':
       case 'task.delivery.submit':

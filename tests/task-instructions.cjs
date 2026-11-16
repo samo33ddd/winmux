@@ -25,6 +25,9 @@ test('task instructions are shared by Claude, OMP, and root Codex UserPromptSubm
   });
   assert.equal(codexUserPromptSubmitOutput(undefined), null);
   assert.match(expected, /independent review/);
+  assert.match(expected, /task\.delivery\.review/);
+  assert.match(expected, /current HEAD/);
+  assert.match(expected, /never record an approval you did not receive/);
   assert.match(expected, /Never push directly/);
   assert.equal(JSON.stringify(taskInstructionArgs({id:'codex'}, 'task-123')).includes('developer_instructions'), false);
 });

@@ -1,7 +1,7 @@
 ---
 name: winmux-browser
 description: Inspect and automate embedded browser pages.
-version: 0.2.2
+version: 0.2.3
 author: samo33ddd, Hermes Agent
 license: UNLICENSED
 platforms: [windows, linux]

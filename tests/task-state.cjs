@@ -30,3 +30,51 @@ test('version 3 rejects task records with missing project ownership', () => {
     assert.throws(() => loadState(file), { code: 'STATE_INVALID' });
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('version 3 restores and normalizes exact-head task review evidence', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'winmux-task-state-'));
+  try {
+    const file = path.join(dir, 'state.json');
+    fs.writeFileSync(file, JSON.stringify({
+      version: 3,
+      state: {
+        workspaces: [],
+        projects: [{ id: 'project', name: 'Winmux', root: 'C:/winmux', profileId: 'powershell', primaryBranch: 'main' }],
+        tasks: [{
+          id: 'task', name: 'Task', projectId: 'project', cwd: 'C:/task', branch: 'winmux/review', base: 'main',
+          managed: true, archived: false, phase: 'ready',
+          review: { sha: 'A'.repeat(40), reviewer: '  Sol reviewer  ', summary: '  Independent review  ', outcome: 'approved', reviewedAt: 123 },
+        }],
+        notifications: [],
+        settings: { fontSize: 14, theme: 'dark' },
+      },
+    }));
+    const state = loadState(file);
+    assert.deepEqual(state.tasks[0].review, {
+      sha: 'a'.repeat(40), reviewer: 'Sol reviewer', summary: 'Independent review', outcome: 'approved', reviewedAt: 123,
+    });
+    assert.ok(fs.readdirSync(dir).some(name => name.startsWith('state.json.recovery-')));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('version 3 rejects malformed restored task review evidence', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'winmux-task-state-'));
+  try {
+    const file = path.join(dir, 'state.json');
+    fs.writeFileSync(file, JSON.stringify({
+      version: 3,
+      state: {
+        workspaces: [],
+        projects: [{ id: 'project', name: 'Winmux', root: 'C:/winmux', profileId: 'powershell', primaryBranch: 'main' }],
+        tasks: [{
+          id: 'task', name: 'Task', projectId: 'project', cwd: 'C:/task', branch: 'winmux/review', base: 'main',
+          managed: true, archived: false, phase: 'ready',
+          review: { sha: 'a'.repeat(40), reviewer: 'reviewer', summary: 'summary', outcome: 'unknown', reviewedAt: 1 },
+        }],
+        notifications: [],
+        settings: { fontSize: 14, theme: 'dark' },
+      },
+    }));
+    assert.throws(() => loadState(file), { code: 'STATE_INVALID' });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

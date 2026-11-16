@@ -1,6 +1,6 @@
 # Verification
 
-The 0.2.2 candidate has a separate [verification record](verification-0.2.2.md), including the file editor, highlighting, installed skill clients and completion notifications. The older observations below retain their original scope.
+The 0.2.3 candidate has a separate [verification record](verification-0.2.3.md) for project tasks, native review delivery, agent status, portable recovery and native window dragging. The [0.2.2 record](verification-0.2.2.md) covers the earlier file editor and notifications. Older observations below retain their original scope.
 
 Verified on Windows 11 x64 with Node.js 24.12.0, Electron 45.3.2, PowerShell 7, Git, and WSL Ubuntu-24.04. Tests use disposable data directories and authenticated pipes. The user's existing Winmux daemon and terminal sessions were retained.
 

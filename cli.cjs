@@ -35,8 +35,8 @@ workspace.close, tab.create, tab.select, tab.close, pane.split, pane.close, pane
 pane.snapshot, pane.screen, layout.ratio, notify, notifications.read,
 agent.status, settings.update, daemon.shutdown.
 
-Task delivery RPC: task.delivery.context, task.delivery.refresh,
-task.delivery.submit, task.delivery.merge. A task terminal supplies
+Task delivery RPC: task.delivery.context, task.delivery.review,
+task.delivery.refresh, task.delivery.submit, task.delivery.merge. A task terminal supplies
 WINMUX_TASK_ID; otherwise pass taskId in the RPC JSON.
 
 Windows cwd must be an existing absolute Windows path. WSL cwd must be an

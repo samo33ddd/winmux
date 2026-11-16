@@ -26,11 +26,11 @@ const actions = {
   command: { label: 'Выполняет команду', icon: TerminalSquare },
   searching: { label: 'Ищет информацию', icon: Search },
   browser: { label: 'Работает с браузером', icon: Globe },
-  delegating: { label: 'Поручает работу агентам', icon: Network },
+  delegating: { label: 'Работает с агентами', icon: Network },
 };
 
 export function agentActionLabel(pane: Pane): string {
-  const action = pane.agentActivity && actions[pane.agentActivity];
+  const action = actions[pane.agentActivity ?? 'thinking'];
   return agentName(pane) && pane.agentState === 'running' && action ? t(action.label) : '';
 }
 
@@ -39,7 +39,7 @@ export function AgentStatus({ pane, showName = true }: { pane: Pane; showName?: 
   const label = activityLabel(pane);
   const code = name ? (state === 'completed' || state === 'failed' ? pane.agentExitCode : undefined) : (pane.status === 'exited' ? pane.exitCode : undefined);
   const actionLabel = agentActionLabel(pane);
-  const ActionIcon = pane.agentActivity && actions[pane.agentActivity]?.icon;
+  const ActionIcon = actions[pane.agentActivity ?? 'thinking'].icon;
   const details = [name, label, actionLabel, code !== undefined ? t('Код выхода: {0}', code) : '',
     name && state === 'unknown' ? t('Состояние оболочки не определяет активность агента.') : ''].filter(Boolean).join(' · ');
   return <span className="agent-metadata" data-testid="agent-metadata" data-agent-id={pane.agentId} data-agent-state={state} title={details}>

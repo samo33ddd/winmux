@@ -4,6 +4,30 @@ User-visible changes are recorded here. Release availability and downloadable as
 
 ## Unreleased
 
+## 0.2.3 — Project tasks and clearer agent activity
+
+### Added
+
+- Group isolated tasks by project, create or attach Git worktrees on Windows and WSL, and retain task metadata when terminals close (Issue #41).
+- Find agents that need input, failed, or completed in a dedicated attention inbox, with confirmed state durations and navigation to the owning pane (Issue #41).
+- Submit task pull requests and inspect delivery blockers from Winmux. Guarded merge requires independent review and green required checks on the exact task head; missing prerequisites remain visible (Issues #41 and #49).
+- Record completed independent native reviews against the exact task commit for single-maintainer delivery. Explicit local review evidence survives restarts; new commits, requested changes, repository review rules and failed CI still block merging (Issue #54).
+- Deliver task instructions to Codex through a reviewed, trusted UserPromptSubmit hook without replacing user instructions, hooks, model, provider, or permissions (Issue #41).
+
+### Fixed
+
+- Keep large Unicode pastes ordered and allow Ctrl+Space terminal input; open Ctrl+Click web links in the owning workspace's embedded browser (Issues #32 and #38).
+- Move terminal panes across tabs without restarting their processes, and make empty tab-strip space available for native window dragging (Issues #33 and #34).
+- Keep Windows Codex hook activity associated with its launch context even when the shared daemon has stale environment (Issue #39).
+- Preserve a single Files tree and editor when switching terminals or directories; retain shared drafts and browser state (Issue #48).
+- Refine agent identity, lifecycle and action hierarchy in the workspace list and terminal header. Keep a generic task-processing caption during confirmed activity before a specific tool event is available (Issue #52).
+
+### Recovery and compatibility
+
+- Document safe recovery when an active portable extraction loses ICU or V8 snapshot resources: restore only missing files from the matching build and verify real hooks without restarting terminal sessions (Issue #51).
+- Existing running daemons retain their original capabilities. Closing the window alone does not upgrade the daemon; finish active sessions before deliberately restarting to enable project tasks.
+- Codex task hooks require explicit review and trust. A fresh launch can require renewed trust; unavailable native Linux Codex runtime coverage is not implied by Windows or WSL bridge checks.
+
 ## 0.2.2 — Files, agent notifications and skill maintenance
 
 ### Added

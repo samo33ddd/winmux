@@ -68,6 +68,31 @@ additional merge gate. Hosted Windows has no WSL distro and cannot replace the
 local Ubuntu-24.04 evidence. No installer/package/release or owner restart is
 claimed by these source checks.
 
+## 0.2.3 native window-drag follow-up
+
+The historical native-pipe limitation above was resolved for a later acceptance
+pass with the installed standalone `cua-driver` 0.28.2 in interactive Windows
+session 1. It operated only a separate Electron 45.3.2 Winmux window and disposable
+daemon. The original owner window, terminals and shared Codex daemon were left
+alone. Every gesture used a fresh exact-window snapshot and visibly empty
+tab-strip space.
+
+| Prepared window | Before OS origin | After native drag | Observed result |
+| --- | --- | --- | --- |
+| One tab, restored 1440px | 299, 180 | 375, 237 | Moved 76px right and 57px down |
+| Two tabs, restored 1440px | 299, 180 | 356, 227 | Moved 57px right and 47px down |
+| Two tabs, restored 900px | 299, 180 | 356, 218 | Moved 57px right and 38px down |
+| Two tabs, maximized 2560px | 0, 0 | 761, 130 | Restored to the prior 900px window; Electron confirmed `isMaximized() === false` |
+
+The initial background gesture did not move the window. The driver's explicit
+foreground route supplied the required native pointer gesture. Its response
+reported `effect: unverifiable`; the independent window-manager before/after
+bounds and Electron maximization readback establish the results instead.
+Programmatic bounds changes prepared the cases and were never counted as the
+drag under test. Existing desktop checks separately preserve tab, launch,
+keyboard and window controls. Local captures and geometry are task artifacts,
+not a claim that hosted CI supplies native pointer coverage.
+
 Hosted CI also exposed an outdated profile fixture without its executable field
 and a pointer helper mixing a pre-resize terminal grid with later DOM geometry.
 The profile now passes its existing executable; pointer coordinates read one
