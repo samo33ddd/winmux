@@ -63,6 +63,13 @@ and is blocked during pending saves; the desktop close path also protects unsave
 work. Check remount/save races, stale clean data, and orphan drafts together when
 changing lifetime or ownership. Keep error and conflict recovery visible.
 
+Files and Git sibling keys must include their view identity as well as workspace,
+pane and cwd. Reusing one context key for both siblings can leave orphaned Files
+DOM after remounts. Keep the browser guest identity stable and retain shared file
+drafts across those remounts. `tests/files-panel-context-electron.cjs`, included in
+`test:desktop`, checks total and visible root counts across same-cwd pane switches
+and directory changes, draft retention, expansion and browser form state.
+
 ### Terminal links and input
 
 The topbar's empty `.workspace-tabs` area is an Electron drag region; actual tab
