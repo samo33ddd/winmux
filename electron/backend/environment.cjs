@@ -95,9 +95,15 @@ async function discover() {
       agents.push(wslAgent(profile, name, Boolean(command), command));
     }
   }
-  return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { paneMove: true, terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, nativeCodex: true, ompHooks: true, agentActivity: true, protocolVersion: 3 } };
+  return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { paneMove: true, terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, nativeCodex: true, ompHooks: true, agentActivity: true, projectTasks: true, protocolVersion: 3 } };
 }
-async function validateLaunch(environment, profileId, requestedCwd, agentId, agentHooks, hookContext) {
+function taskInstructionArgs(agent, taskId) {
+  if (!taskId) return [];
+  const name = agent?.id?.split(':').pop();
+  if (!['claude', 'omp'].includes(name)) return [];
+  return ['--append-system-prompt', `This terminal belongs to Winmux task ${taskId}. Follow the repository instructions. When the user's task is complete, use the installed winmux-terminal skill and task.delivery RPCs to create a PR into the primary branch, obtain independent review, resolve findings, wait for required CI on the current PR head, then merge through task.delivery.merge. Never push directly to the primary branch or bypass protection. If the skill, review, CI, or permissions are unavailable, explain the blocker. Do not treat agent completion as task delivery.`];
+}
+async function validateLaunch(environment, profileId, requestedCwd, agentId, agentHooks, hookContext, taskId) {
   const profile = environment.profiles.find(p => p.id === profileId);
   if (!profile) fail('PROFILE_UNAVAILABLE', `Terminal profile is unavailable: ${profileId}`);
   if (agentHooks !== undefined && typeof agentHooks !== 'boolean') fail('INVALID_ARGUMENT', 'agentHooks must be a boolean');
@@ -110,7 +116,7 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
     agentSessionHooks: agent.sessionHooks === true, hookArtifacts: agent.hookArtifacts, cleanupHooks: agent.cleanupHooks,
   } : {};
   const argsFor = (agent, bashAvailable) => {
-    try { return shellArgs(profile, agent, bashAvailable); }
+    try { if (agent && taskId) agent.args.push(...taskInstructionArgs(agent, taskId)); return shellArgs(profile, agent, bashAvailable); }
     catch (error) { agent?.cleanupHooks?.(); throw error; }
   };
   let cwd = requestedCwd;
@@ -139,4 +145,4 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
   const agent = prepare(context);
   return { paneId, profile, cwd: path.resolve(cwd), ...fields(agent), spawnCwd: path.resolve(cwd), args: argsFor(agent) };
 }
-module.exports = { discover, validateLaunch, executable };
+module.exports = { discover, validateLaunch, executable, taskInstructionArgs };

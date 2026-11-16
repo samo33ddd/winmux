@@ -34,7 +34,10 @@ if (process.argv.includes('--fixture-daemon')) {
     environment.agents.push({ id: 'fixture:missing', label: 'missing', available: true, profileId: 'powershell', environment: 'windows', command: path.join(process.env.WINMUX_FIXTURE_DIR, 'missing.exe') });
     return environment;
   };
-  require('../electron/backend.cjs').startServer().then(daemon => {
+  const createTaskDelivery = ({repo, base}) => ({
+    status: async spec => { await new Promise(resolve => setTimeout(resolve, 1500)); return {repo, base, source:spec.source, head:spec.head, headOid:spec.sha, state:'OPEN', code:'CHECKS_PENDING', number:12, url:'https://github.com/fixture/project/pull/12'}; },
+  });
+  require('../electron/backend.cjs').startServer({createTaskDelivery}).then(daemon => {
     daemon.server.once('close', () => setTimeout(() => process.exit(0), 150).unref());
     console.log('FIXTURE_DAEMON_READY');
   }).catch(error => { console.error(error); process.exit(1); });
@@ -191,6 +194,17 @@ app.whenReady().then(() => {
     await eventually(async () => /ELECTRON_ENV_(CLEAR|LEAK)/.test((await client.request('pane.screen', { paneId })).text), 'Electron shell environment check');
     assert((await client.request('pane.screen', { paneId })).text.includes('ELECTRON_ENV_CLEAR'), 'pane shell must not inherit ELECTRON_RUN_AS_NODE');
   }
+  async function checkTaskEnv(paneId, isWsl, taskId) {
+    const capture = path.join(dataDir, `task-env-${paneId}-${randomUUID()}.txt`);
+    const command = isWsl
+      ? `printf '%s' "$WINMUX_TASK_ID" > ${shQuote(linuxPath(capture))}`
+      : `Set-Content -LiteralPath ${psQuote(capture)} -Value $env:WINMUX_TASK_ID -NoNewline`;
+    await eventually(async () => (await paneState(paneId)).shellReady === true, `shell ready for WINMUX_TASK_ID ${paneId}`);
+    await sleep(250);
+    await client.request('pane.input', { paneId, data: command + '\r' });
+    await eventually(() => fs.existsSync(capture), `WINMUX_TASK_ID for ${paneId}`);
+    assert.equal(fs.readFileSync(capture, 'utf8'), taskId);
+  }
   async function checkElectronApp(paneId) {
     assert(process.versions.electron, 'Run this test with scripts/run-electron-node.cjs to exercise Electron helpers and app mode');
     // A pipeline makes interactive PowerShell wait for the GUI executable to exit.
@@ -324,6 +338,91 @@ app.whenReady().then(() => {
     assert.equal((await paneState(pane.id)).agentState, 'unknown'); assert.equal((await paneState(pane.id)).agentExitCode, undefined);
     assert.equal((await paneState(pane.id)).agentId, undefined); assert.equal((await paneState(pane.id)).agentLabel, undefined);
     console.log('PASS isolated daemon recovery: latest cwd preserved, fresh shell, no agent replay');
+    const taskRepo = path.join(dataDir, 'task-project');
+    fs.mkdirSync(taskRepo); fs.writeFileSync(path.join(taskRepo, 'tracked.txt'), 'fixture\n');
+    const git = (...args) => execFileSync('git', ['-C', taskRepo, ...args], {windowsHide:true, encoding:'utf8'});
+    git('init', '-b', 'main'); git('add', '.'); git('-c', 'user.name=Winmux Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'fixture'); git('remote', 'add', 'origin', 'https://github.com/fixture/project.git');
+    for (const profile of [environment.profiles.find(p => p.id === 'powershell'), wsl].filter(Boolean)) {
+      const cwd = profile.environment === 'wsl' ? linuxPath(taskRepo) : taskRepo;
+      const inspected = await client.request('project.inspect', {cwd, profileId:profile.id});
+      assert(inspected.branches.includes('main'));
+      const opened = await client.request('task.create', {projectDirectory:cwd, profileId:profile.id, name:`Task ${profile.id}`, baseBranch:'main', primaryBranch:'main', agentId:`fixture:${profile.id}`, mode:'new'});
+      const item = (await client.request('state')).tasks.find(task => task.workspaceId === opened.id);
+      assert(item && item.managed && item.branch.startsWith('winmux/'));
+      await eventually(async () => (await paneState(opened.panes[0].id)).agentState === 'completed', `${profile.id} task fixture completion`);
+      await checkTaskEnv(opened.panes[0].id, profile.environment === 'wsl', item.id);
+      const beforeTaskRestore = {windows:runs('windows-runs.txt'), wsl:runs('wsl-runs.txt'), pid:opened.panes[0].pid};
+      await stop(); await launch();
+      const restoredTask = (await client.request('state')).tasks.find(task => task.id === item.id);
+      const restoredWorkspace = (await client.request('state')).workspaces.find(workspace => workspace.id === restoredTask.workspaceId);
+      assert(restoredWorkspace, 'task workspace must survive daemon restart');
+      assert.notEqual(restoredWorkspace.panes[0].pid, beforeTaskRestore.pid);
+      assert.equal(runs('windows-runs.txt'), beforeTaskRestore.windows);
+      assert.equal(runs('wsl-runs.txt'), beforeTaskRestore.wsl);
+      await checkTaskEnv(restoredWorkspace.panes[0].id, profile.environment === 'wsl', item.id);
+      console.log(`PASS ${profile.id}: task workspace restore keeps WINMUX_TASK_ID and does not replay its agent`);
+      await assert.rejects(client.request('task.archive', {taskId:item.id}), {code:'TASK_IN_USE'});
+      const pendingDelivery = client.request('task.delivery.refresh', {taskId:item.id});
+      await sleep(400);
+      await client.request('workspace.close', {workspaceId:restoredWorkspace.id});
+      await assert.rejects(client.request('task.archive', {taskId:item.id}), {code:'TASK_IN_USE'});
+      const delivery = await pendingDelivery;
+      assert.equal(delivery.repo, 'fixture/project'); assert.equal(delivery.base, 'main'); assert.equal(delivery.head, item.branch); assert.match(delivery.headOid, /^[0-9a-f]{40}$/);
+      assert.equal((await client.request('task.delivery.context', {taskId:item.id})).delivery.code, 'CHECKS_PENDING');
+      assert.equal((await client.request('state')).tasks.find(task => task.id === item.id).workspaceId, undefined);
+      await stop(); await launch();
+      assert.equal((await client.request('state')).tasks.find(task => task.id === item.id).branch, item.branch);
+      const archived = await client.request('task.archive', {taskId:item.id});
+      assert.equal(archived.removed, true, archived.reason);
+        const attempts = await Promise.allSettled([
+          client.request('task.open', {taskId:item.id}),
+          client.request('task.open', {taskId:item.id}),
+          client.request('task.archive', {taskId:item.id}),
+        ]);
+        const reopened = attempts.find(result => result.status === 'fulfilled' && result.value.panes)?.value;
+        assert(reopened, 'one task open must succeed');
+        assert(attempts.filter(result => result.status === 'fulfilled' && result.value.panes).every(result => result.value.id === reopened.id));
+        assert(attempts.some(result => result.status === 'rejected' && result.reason.code === 'TASK_IN_USE'));
+      assert(reopened.panes.length);
+      await client.request('workspace.close', {workspaceId:reopened.id});
+      assert.equal((await client.request('task.archive', {taskId:item.id})).removed, true);
+      assert(git('show-ref', '--verify', `refs/heads/${item.branch}`).trim());
+      console.log(`PASS ${profile.id}: task worktree creation, close, archive, restore and retained branch`);
+    }
+    const attachBranch = 'recover-attach';
+    const attachPath = path.join(fs.realpathSync.native(dataDir), 'task-project.attached');
+    git('branch', attachBranch, 'main');
+    git('worktree', 'add', attachPath, attachBranch);
+    const attachAlias = path.join(dataDir, 'task-attach-alias');
+    fs.symlinkSync(attachPath, attachAlias, 'junction');
+    const attachParams = {projectDirectory:taskRepo, profileId:'powershell', name:'Interrupted attach', baseBranch:'main', primaryBranch:'main', agentId:'fixture:powershell', mode:'attach', worktreePath:attachAlias};
+    const firstAttach = await client.request('task.create', attachParams);
+    const interrupted = (await client.request('state')).tasks.find(task => task.workspaceId === firstAttach.id);
+    assert(interrupted && !interrupted.managed);
+    await client.request('workspace.close', {workspaceId:firstAttach.id});
+    await stop();
+    const savedStateFile = path.join(dataDir, 'state.json');
+    const saved = JSON.parse(fs.readFileSync(savedStateFile, 'utf8'));
+    const savedTask = saved.state.tasks.find(task => task.id === interrupted.id);
+    savedTask.phase = 'creating'; savedTask.archived = false; savedTask.error = 'fixture interrupted attach';
+    delete savedTask.workspaceId;
+    fs.writeFileSync(savedStateFile, JSON.stringify(saved));
+    await launch();
+    await assert.rejects(client.request('task.open', {taskId:interrupted.id}), {code:'TASK_INCOMPLETE'});
+    await assert.rejects(client.request('task.create', attachParams), {code:'ALREADY_EXISTS'});
+    const archivedInterrupted = await client.request('task.archive', {taskId:interrupted.id});
+    assert.equal(archivedInterrupted.archived, true);
+    assert.equal(archivedInterrupted.removed, false);
+    const recovered = await client.request('task.create', attachParams);
+    const recoveredTask = (await client.request('state')).tasks.find(task => task.workspaceId === recovered.id);
+    assert(recoveredTask && recoveredTask.id !== interrupted.id);
+    assert.equal(path.normalize(recoveredTask.cwd).toLowerCase(), path.normalize(attachPath).toLowerCase());
+    assert.equal(recoveredTask.branch, attachBranch);
+    assert.equal((await client.request('state')).tasks.find(task => task.id === interrupted.id).archived, true);
+    await client.request('workspace.close', {workspaceId:recovered.id});
+    await client.request('task.archive', {taskId:recoveredTask.id});
+    await assert.rejects(client.request('task.create', attachParams), {code:'ALREADY_EXISTS'});
+    console.log('PASS interrupted attach: archive preserves worktree and allows a new task attachment');
     await stop();
   }
   async function cleanup() {

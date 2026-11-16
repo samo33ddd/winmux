@@ -35,6 +35,10 @@ workspace.close, tab.create, tab.select, tab.close, pane.split, pane.close, pane
 pane.snapshot, pane.screen, layout.ratio, notify, notifications.read,
 agent.status, settings.update, daemon.shutdown.
 
+Task delivery RPC: task.delivery.context, task.delivery.refresh,
+task.delivery.submit, task.delivery.merge. A task terminal supplies
+WINMUX_TASK_ID; otherwise pass taskId in the RPC JSON.
+
 Windows cwd must be an existing absolute Windows path. WSL cwd must be an
 existing absolute Linux path and --profile must be wsl:<distribution>.
 Closing a CLI/client does not stop terminals. Restart restores fresh shells,
@@ -121,7 +125,7 @@ async function main(argv = process.argv.slice(2)) {
         workspaceId:options.workspace,
       }, { dataDir:connection.dataDir }), null, 2));
     case 'shutdown': method = 'daemon.shutdown'; break;
-    case 'rpc': method = args[0]; if (!method) throw new Error('rpc requires METHOD'); params = JSON.parse(args.slice(1).join(' ') || '{}'); break;
+    case 'rpc': method = args[0]; if (!method) throw new Error('rpc requires METHOD'); params = JSON.parse(args.slice(1).join(' ') || '{}'); if (method.startsWith('task.delivery.') && params && typeof params === 'object' && !Array.isArray(params) && params.taskId === undefined && process.env.WINMUX_TASK_ID) params.taskId = process.env.WINMUX_TASK_ID; break;
     default: throw new Error(`Unknown command: ${command}. Run node cli.cjs help`);
   }
   const client = await connect(connection);

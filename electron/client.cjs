@@ -83,7 +83,7 @@ async function connect(options = {}) {
         if (index !== -1) {
           waiting.splice(index, 1); waitingBytes -= entry.bytes; clearEntry(entry); entry.reject(timeout);
         }
-      }, options.requestTimeout ?? 20000);
+      }, options.requestTimeout ?? (method.startsWith('task.delivery.') ? 300000 : method.startsWith('task.') || method === 'project.inspect' ? 120000 : 20000));
       waiting.push(entry); waitingBytes += bytes; pump();
     });
   };

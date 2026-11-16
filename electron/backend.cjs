@@ -10,6 +10,8 @@ const { terminalEnvironment } = require('./backend/terminal-env.cjs');
 const { createController: createCodexController } = require('./codex-integration.cjs');
 const { createController: createAgentController } = require('./agent-integration.cjs');
 const { ACTIVITY_KINDS, createActivityTracker } = require('./agent-activity.cjs');
+const { createTaskGitService, createGitExecutor } = require('./backend/task-git.cjs');
+const { createTaskDelivery } = require('./backend/task-delivery.cjs');
 
 function replaceLeaf(node, paneId, replacement) {
   if (node.type === 'leaf') return node.paneId === paneId ? replacement : node;
@@ -28,6 +30,10 @@ function syncTabs(workspace) {
   workspace.root = workspace.tabs.find(tab => tab.id === workspace.activeTabId)?.root;
 }
 const AGENT_STATES = new Set(['starting', 'running', 'waiting', 'idle', 'completed', 'failed', 'unknown']);
+function setAgentState(pane, next, reset = false) {
+  if (reset || pane.agentState !== next || !Number.isFinite(pane.agentStateSince)) pane.agentStateSince = Date.now();
+  pane.agentState = next;
+}
 const STATE_MAX_BYTES = 4 * 1024 * 1024;
 const STATE_RECOVERY_MAX_BYTES = 16 * 1024 * 1024;
 function tabTitleMode(titleMode, hasTitle) {
@@ -44,7 +50,7 @@ function boundedText(value, max) {
   }
   return result;
 }
-function stateDocument(state) { return JSON.stringify({ version: 2, state }); }
+function stateDocument(state) { return JSON.stringify({ version: 3, state }); }
 function fitStateSize(state) {
   let serialized = stateDocument(state);
   if (Buffer.byteLength(serialized) <= STATE_MAX_BYTES) return { serialized, dropped: 0 };
@@ -67,14 +73,18 @@ function backupRecoveredState(file) {
   try { fs.chmodSync(backup, 0o600); } catch {}
 }
 function loadState(file) {
-  const initial = { workspaces: [], notifications: [], settings: { fontSize: 14, theme: 'dark' } };
+  const initial = { workspaces: [], projects: [], tasks: [], notifications: [], settings: { fontSize: 14, theme: 'dark' } };
   if (!fs.existsSync(file)) return initial;
   const savedBytes = fs.statSync(file).size;
   if (savedBytes > STATE_RECOVERY_MAX_BYTES) fail('STATE_INVALID', 'Saved state exceeds the recovery size limit');
   let saved;
   try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { fail('STATE_INVALID', `Cannot parse saved state; preserve and repair ${file}`); }
-  if (![1, 2].includes(saved.version) || !saved.state || !Array.isArray(saved.state.workspaces)) fail('STATE_INVALID', `Unsupported saved state in ${file}`);
+  if (![1, 2, 3].includes(saved.version) || !saved.state || !Array.isArray(saved.state.workspaces)) fail('STATE_INVALID', `Unsupported saved state in ${file}`);
   const state = saved.state;
+  if (saved.version < 3) {
+    fs.copyFileSync(file, `${file}.pre-tasks-${randomUUID()}.bak`, fs.constants.COPYFILE_EXCL);
+    state.projects = []; state.tasks = [];
+  }
   let recovered = savedBytes > STATE_MAX_BYTES;
   const ids = new Set(); let count = 0;
   const unique = id => { string(id, 'saved id', 128); if (ids.has(id)) fail('STATE_INVALID', 'Duplicate saved identifier'); ids.add(id); };
@@ -93,7 +103,7 @@ function loadState(file) {
       integer(pane.cols, 'cols', 2, 300); integer(pane.rows, 'rows', 1, 200);
       pane.pid = null; pane.status = 'exited'; delete pane.exitCode;
       delete pane.agentId; delete pane.agentLabel; delete pane.agentThreadId; delete pane.agentSessionId; delete pane.agentBinding;
-      pane.agentState = 'unknown'; delete pane.agentExitCode; delete pane.agentUpdatedAt; delete pane.agentActivity; delete pane.agentPid;
+      pane.agentState = 'unknown'; delete pane.agentStateSince; delete pane.agentExitCode; delete pane.agentUpdatedAt; delete pane.agentActivity; delete pane.agentPid;
     }
     const walk = (node, depth) => {
       if (!node || depth > LIMITS.panes) fail('STATE_INVALID', 'Invalid saved layout');
@@ -115,6 +125,18 @@ function loadState(file) {
     }
     syncTabs(workspace);
     if (leaves.size !== workspace.panes.length) fail('STATE_INVALID', 'Saved panes do not match layout');
+  }
+  if (!Array.isArray(state.projects) || !Array.isArray(state.tasks) || state.projects.length > 1024 || state.tasks.length > 4096) fail('STATE_INVALID', 'Invalid project or task records');
+  for (const project of state.projects) {
+    unique(project.id); string(project.name, 'project name', 120); string(project.root, 'project root', 4096);
+    string(project.profileId, 'project profile', 256); string(project.primaryBranch, 'primary branch', 256);
+  }
+  for (const task of state.tasks) {
+    unique(task.id); string(task.name, 'task name', 120); string(task.projectId, 'task project', 128);
+    string(task.cwd, 'task directory', 4096); string(task.branch, 'task branch', 256); string(task.base, 'task base', 256);
+    if (!state.projects.some(project => project.id === task.projectId) || typeof task.managed !== 'boolean' || typeof task.archived !== 'boolean') fail('STATE_INVALID', 'Invalid task ownership');
+    if (task.ownership && (task.ownership.taskId !== task.id || task.ownership.path !== task.cwd || task.ownership.branch !== task.branch || typeof task.ownership.marker !== 'string' || typeof task.ownership.adminDir !== 'string')) fail('STATE_INVALID', 'Invalid worktree ownership record');
+    if (task.workspaceId !== undefined && !state.workspaces.some(workspace => workspace.id === task.workspaceId)) delete task.workspaceId;
   }
   if (!state.settings || !['dark', 'light'].includes(state.settings.theme)) fail('STATE_INVALID', 'Invalid saved settings');
   integer(state.settings.fontSize, 'fontSize', 9, 32);
@@ -157,7 +179,14 @@ async function startServer(options = {}) {
     ({ Terminal } = require('@xterm/headless'));
     ({ SerializeAddon } = require('@xterm/addon-serialize'));
   } catch (error) { releaseLock(); throw error; }
-  const clients = new Set(), runtimes = new Map();
+  const clients = new Set(), runtimes = new Map(), deliveries = new Set(), archives = new Set(), deliveryRequests = new Set();
+  const ownership = {
+    get: id => state.tasks.find(task => task.id === id)?.ownership,
+    set: (id, record) => { const task = state.tasks.find(item => item.id === id); if (!task) fail('NOT_FOUND', 'Task not found'); task.ownership = record; changed(); },
+    delete: id => { const task = state.tasks.find(item => item.id === id); if (task) { delete task.ownership; changed(); } },
+    entries: () => state.tasks.map(task => task.ownership).filter(Boolean),
+  };
+  const taskGit = createTaskGitService({store:ownership}), executeTaskGit = createGitExecutor();
   let codexController, agentController;
   let stopping = false, closePromise, persistTimer, mutationTail = Promise.resolve();
   const publicState = () => structuredClone(state);
@@ -189,6 +218,27 @@ async function startServer(options = {}) {
   function changed() { save(); broadcast({ type: 'state', state: publicState() }); }
   function asyncChanged() { safeSave(); broadcast({ type: 'state', state: publicState() }); }
   function workspaceById(id) { const w = state.workspaces.find(w => w.id === id); if (!w) fail('NOT_FOUND', 'Workspace not found'); return w; }
+  function taskById(id) { const task = state.tasks.find(item => item.id === id); if (!task) fail('NOT_FOUND', 'Task not found'); return task; }
+  function projectContext(project) {
+    const profile = environment.profiles.find(item => item.id === project.profileId);
+    if (!profile || profile.available === false) fail('PROFILE_UNAVAILABLE', 'Project shell environment is unavailable');
+    return { repo:project.root, environment:profile.environment, distro:profile.distro };
+  }
+  async function deliveryFor(task) {
+    const project = state.projects.find(item => item.id === task.projectId);
+    if (!project || task.archived || archives.has(task.id) || task.phase !== 'ready') fail('TASK_UNAVAILABLE', 'Task is unavailable for delivery');
+    const context = { ...projectContext(project), cwd:task.cwd };
+    const git = async args => (await executeTaskGit(args, context)).stdout.trim();
+    const branch = await git(['symbolic-ref', '--quiet', '--short', 'HEAD']);
+    if (branch !== task.branch) fail('TASK_BRANCH_MISMATCH', 'Task worktree is not on its assigned branch');
+    const sha = await git(['rev-parse', '--verify', 'HEAD']);
+    const remote = await git(['remote', 'get-url', 'origin']);
+    const match = /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(remote);
+    if (!match) fail('GITHUB_UNAVAILABLE', 'The origin must be a GitHub repository without embedded credentials');
+    const repo = match[1];
+    return { delivery:(options.createTaskDelivery || createTaskDelivery)({ repo, base:project.primaryBranch }), spec:{source:repo, head:task.branch, sha, ...(task.delivery?.number ? {number:task.delivery.number} : {})}, project };
+  }
+  function forgetWorkspace(id) { for (const task of state.tasks) if (task.workspaceId === id) delete task.workspaceId; }
   function paneById(id) {
     for (const workspace of state.workspaces) { const pane = workspace.panes.find(p => p.id === id); if (pane) return { pane, workspace, tab: workspace.tabs.find(t => t.id === pane.tabId), runtime: runtimes.get(id) }; }
     fail('NOT_FOUND', 'Pane not found');
@@ -230,7 +280,7 @@ async function startServer(options = {}) {
         runtime.agentLaunchId = '';
       }
       // The shell can confirm invocation and exit, never model activity.
-      if (state !== 'unknown' || !['running', 'waiting', 'completed', 'failed'].includes(pane.agentState)) pane.agentState = state;
+      if (state !== 'unknown' || !['running', 'waiting', 'completed', 'failed'].includes(pane.agentState)) setAgentState(pane, state);
       notifyAgentState(pane);
       pane.agentUpdatedAt = Date.now(); asyncChanged(); return true;
     }));
@@ -303,9 +353,10 @@ async function startServer(options = {}) {
       const forwardedEnv = (process.env.WSLENV || '').split(':').filter(entry => entry.split('/')[0].toUpperCase() !== 'ELECTRON_RUN_AS_NODE');
       const shellEnv = terminalEnvironment(process.env);
       Object.assign(shellEnv, { WINMUX_PANE_ID: pane.id, WINMUX_DATA_DIR: loc.dataDir, WINMUX_PIPE_NAME: loc.pipeName,
+        WINMUX_TASK_ID: launch.taskId || '',
         WINMUX_AGENT_LAUNCH_ID: launch.agentLaunchId || '',
         WINMUX_AGENT_NODE: process.execPath, WINMUX_AGENT_HELPER: path.join(__dirname, 'backend', 'agent-status.cjs'),
-        WSLENV: [...forwardedEnv, 'WINMUX_PANE_ID', 'WINMUX_DATA_DIR', 'WINMUX_PIPE_NAME', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER'].filter(Boolean).join(':') });
+        WSLENV: [...forwardedEnv, 'WINMUX_PANE_ID', 'WINMUX_DATA_DIR', 'WINMUX_PIPE_NAME', 'WINMUX_TASK_ID', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER'].filter(Boolean).join(':') });
       for (const key of Object.keys(shellEnv)) {
         if ((process.platform === 'win32' ? key.toUpperCase() : key) === 'ELECTRON_RUN_AS_NODE') delete shellEnv[key];
       }
@@ -322,7 +373,7 @@ async function startServer(options = {}) {
         fence(runtime, () => {
           if (runtime.disposed || stopping) return;
           pane.status = 'exited'; pane.exitCode = exitCode; pane.pid = null;
-          if (runtime.agentLaunchId && !runtime.agentEnded) { pane.agentState = 'unknown'; delete pane.agentExitCode; runtime.agentEnded = true; }
+          if (runtime.agentLaunchId && !runtime.agentEnded) { setAgentState(pane, 'unknown'); delete pane.agentExitCode; runtime.agentEnded = true; }
           runtime.agentLaunchId = '';
           asyncChanged(); broadcast({ type: 'exit', paneId: pane.id, exitCode });
         }).catch(error => { if (!runtime.disposed && !stopping) console.error(error.message); });
@@ -354,6 +405,7 @@ async function startServer(options = {}) {
     if (workspace.activeTabId === tab.id) workspace.activeTabId = workspace.tabs[Math.min(index, workspace.tabs.length - 1)]?.id;
     syncTabs(workspace);
     if (!workspace.tabs.length) {
+      forgetWorkspace(workspace.id);
       state.workspaces = state.workspaces.filter(w => w !== workspace);
       if (state.settings.activeWorkspaceId === workspace.id) state.settings.activeWorkspaceId = state.workspaces[0]?.id;
     }
@@ -363,17 +415,134 @@ async function startServer(options = {}) {
     switch (method) {
       case 'state': return publicState();
       case 'environment': return structuredClone(environment);
+      case 'project.inspect': {
+        const profile = environment.profiles.find(item => item.id === params.profileId);
+        if (!profile || profile.available === false || !['windows', 'wsl'].includes(profile.environment)) fail('PROFILE_UNAVAILABLE', 'Project shell environment is unavailable');
+        const repo = string(params.cwd, 'cwd', 4096);
+        const context = { repo, environment: profile.environment, distro: profile.distro };
+        const repository = await taskGit.inspectRepository(context);
+        const branches = await taskGit.listBranches(context);
+        const worktrees = await taskGit.listWorktrees(context);
+        let primary = '';
+        try { primary = (await executeTaskGit(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], { cwd:repo, environment:profile.environment, distro:profile.distro })).stdout.trim().replace(/^origin\//, ''); } catch {}
+        if (!branches.some(branch => branch.name === primary)) primary = ['main', 'master'].find(name => branches.some(branch => branch.name === name)) || '';
+        return { root:worktrees[0]?.path || repository.root, commonDir:repository.commonDir, branches:branches.map(branch => branch.name), primary, worktrees:worktrees.map((worktree, index) => ({ path:worktree.path, branch:worktree.branch || '', primary:index === 0, detached:worktree.detached })) };
+      }
+      case 'task.create': {
+        const profileId = string(params.profileId, 'profileId', 256);
+        const name = string(params.name, 'name', 120).trim();
+        const agentId = string(params.agentId, 'agentId', 256);
+        const base = string(params.baseBranch, 'baseBranch', 256);
+        if (!['new', 'attach'].includes(params.mode)) fail('INVALID_ARGUMENT', 'Invalid task mode');
+        const inspected = await dispatch('project.inspect', { cwd:params.projectDirectory, profileId });
+        const primary = inspected.primary || string(params.primaryBranch, 'primaryBranch', 256);
+        if (!inspected.branches.includes(primary)) fail('PRIMARY_UNAVAILABLE', 'Select an existing primary branch');
+        if (!inspected.branches.includes(base)) fail('INVALID_ARGUMENT', 'Base branch must be local');
+        const agentHooks = Boolean(environment.agents?.find(agent => agent.id === agentId)?.hookAdapter);
+        await validateLaunch(environment, profileId, inspected.root, agentId, false);
+        const profile = environment.profiles.find(item => item.id === profileId);
+        const identity = value => {
+          if (profile.environment !== 'windows') return path.posix.normalize(value);
+          try { return fs.realpathSync.native(value).toLowerCase(); }
+          catch { return path.win32.normalize(value).toLowerCase(); }
+        };
+        let project = state.projects.find(item => {
+          const projectProfile = environment.profiles.find(candidate => candidate.id === item.profileId);
+          return identity(item.commonDir || '') === identity(inspected.commonDir) && projectProfile?.environment === profile.environment && projectProfile.distro === profile.distro;
+        });
+        if (!project) {
+          const paths = profile.environment === 'wsl' ? path.posix : path.win32;
+          project = { id:randomUUID(), name:paths.basename(inspected.root).slice(0,120) || 'Project', root:inspected.root, commonDir:inspected.commonDir, profileId, primaryBranch:primary };
+          state.projects.push(project);
+        }
+        const paths = profile.environment === 'wsl' ? path.posix : path.win32;
+        const id = randomUUID(), slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'task';
+        let cwd = paths.join(paths.dirname(project.root), `${paths.basename(project.root)}.winmux-worktrees`, id);
+        let branch = `winmux/${slug}-${id.slice(0,8)}`;
+        if (params.mode === 'attach') {
+          cwd = string(params.worktreePath, 'worktreePath', 4096);
+          const found = inspected.worktrees.find(item => identity(item.path) === identity(cwd));
+          if (!found || found.primary || found.detached || !found.branch) fail('INVALID_ARGUMENT', 'Select a linked worktree with a branch');
+          branch = found.branch; cwd = found.path;
+          if (state.tasks.some(item => (!item.archived || item.phase === 'ready') && item.projectId === project.id && identity(item.cwd) === identity(cwd))) fail('ALREADY_EXISTS', 'This worktree is already attached to a task');
+        }
+        const task = { id, name, projectId:project.id, cwd, branch, base, agentId, managed:params.mode === 'new', archived:false, phase:'creating', deliverySupport:['claude','omp'].includes(agentId.split(':').pop()) ? 'instructions' : 'unsupported' };
+        state.tasks.push(task); changed();
+        try {
+          const context = { ...projectContext(project), path:cwd, branch, base, taskId:id };
+          if (task.managed) await taskGit.createWorktree(context); else await taskGit.attachWorktree(context);
+          task.phase = 'ready'; changed();
+          const workspace = await dispatch('workspace.create', { name, cwd, profileId, agentId, agentHooks, taskId:task.id });
+          delete task.error; changed();
+          return workspace;
+        } catch (error) { task.error = String(error.message || error).slice(0, 1024); changed(); throw error; }
+      }
+      case 'task.open': {
+        const task = taskById(params.taskId), project = state.projects.find(item => item.id === task.projectId);
+        if (!project) fail('NOT_FOUND', 'Task project not found');
+        const existing = state.workspaces.find(item => item.id === task.workspaceId);
+        if (existing) return structuredClone(existing);
+        if (task.phase !== 'ready') fail('TASK_INCOMPLETE', task.error || 'Task creation did not finish; inspect the worktree before retrying');
+        if (task.archived && task.removed) {
+          await taskGit.createWorktree({ ...projectContext(project), path:task.cwd, branch:task.branch, base:task.base, taskId:task.id, restore:true });
+          task.removed = false; changed();
+        }
+        const workspace = await dispatch('workspace.create', {name:task.name,cwd:task.cwd,profileId:project.profileId,taskId:task.id});
+        delete task.error; changed(); return workspace;
+      }
+      case 'task.archive': {
+        const task = taskById(params.taskId), project = state.projects.find(item => item.id === task.projectId);
+        if (!project) fail('NOT_FOUND', 'Task project not found');
+        if (deliveries.has(task.id)) fail('TASK_IN_USE', 'Wait for the task delivery operation to finish');
+        if (state.workspaces.some(item => item.id === task.workspaceId)) fail('TASK_IN_USE', 'Close task terminals before archiving');
+        archives.add(task.id);
+        try {
+        let reason = '';
+        const context = projectContext(project), paths = context.environment === 'wsl' ? path.posix : path.win32;
+        const contains = value => { const relative = paths.relative(task.cwd, value); return relative === '' || (!relative.startsWith('..' + paths.sep) && relative !== '..' && !paths.isAbsolute(relative)); };
+        const sameEnvironment = profileId => { const profile = environment.profiles.find(item => item.id === profileId); return profile?.environment === context.environment && profile.distro === context.distro; };
+        if (state.workspaces.some(workspace => (sameEnvironment(workspace.profileId) && contains(workspace.cwd)) || workspace.panes.some(pane => sameEnvironment(pane.profileId) && contains(pane.cwd)))) reason = 'Worktree is used by another workspace';
+        else if (task.managed && task.ownership) {
+          try { await taskGit.removeWorktree({ ...context, path:task.cwd, taskId:task.id }); task.removed = true; }
+          catch (error) { reason = String(error.message || error).slice(0, 1024); }
+        }
+        task.archived = true; task.archiveReason = reason; changed(); return { archived:true, removed:task.removed === true, reason };
+        } finally { archives.delete(task.id); }
+      }
+      case 'task.delivery.context': {
+        const task = taskById(params.taskId), project = state.projects.find(item => item.id === task.projectId);
+        if (!project) fail('NOT_FOUND', 'Task project not found');
+        return { taskId:task.id, name:task.name, branch:task.branch, cwd:task.cwd, primaryBranch:project.primaryBranch, delivery:task.delivery || null };
+      }
+      case 'task.delivery.refresh':
+      case 'task.delivery.submit':
+      case 'task.delivery.merge': {
+        const task = taskById(params.taskId);
+        if (deliveries.has(task.id)) fail('TASK_IN_USE', 'Another delivery operation is running for this task');
+        deliveries.add(task.id);
+        try {
+          const { delivery, spec } = await deliveryFor(task);
+          const result = method === 'task.delivery.submit' ? await delivery.submit({ ...spec, title:params.title, body:params.body }) : method === 'task.delivery.merge' ? await delivery.merge(spec) : await delivery.status(spec);
+          task.delivery = result; changed(); return result;
+        } catch (error) {
+          task.delivery = { state:null, code:typeof error.code === 'string' ? error.code : 'UNAVAILABLE', number:task.delivery?.number || null, url:task.delivery?.url || null, headOid:null };
+          changed(); throw error;
+        } finally { deliveries.delete(task.id); }
+      }
       case 'workspace.create': {
         if (runtimes.size >= LIMITS.panes) fail('LIMIT_REACHED', 'Maximum number of terminal panes reached');
         const profileId = params.profileId ?? 'powershell'; string(profileId, 'profileId', 256);
         const requestedName = params.name === undefined ? null : string(params.name, 'name', 120).trim();
-        const launch = await validateLaunch(environment, profileId, params.cwd, params.agentId, params.agentHooks, { dataDir: loc.dataDir, pipeName: loc.pipeName });
+        const task = params.taskId === undefined ? null : taskById(params.taskId);
+        if (task && (task.cwd !== params.cwd || state.projects.find(item => item.id === task.projectId)?.profileId !== profileId || (params.agentId !== undefined && task.agentId !== params.agentId) || task.phase !== 'ready' || state.workspaces.some(item => item.id === task.workspaceId))) fail('INVALID_ARGUMENT', 'Task does not match the launch');
+        const launch = await validateLaunch(environment, profileId, params.cwd, params.agentId, params.agentHooks, { dataDir: loc.dataDir, pipeName: loc.pipeName }, task?.id);
+        if (task) launch.taskId = task.id;
         const pane = makePane(launch);
         const tab = { id: randomUUID(), title: launch.profile.label, root: { type: 'leaf', paneId: pane.id } }; pane.tabId = tab.id;
         tab.titleMode = 'auto';
         const autoName = boundedText((path.basename(launch.cwd) || launch.profile.label).trim(), 120) || launch.profile.label;
         const workspace = { id: randomUUID(), name: requestedName || autoName, cwd: launch.cwd, profileId, tabs: [tab], activeTabId: tab.id, root: tab.root, panes: [pane] };
-        spawnPane(pane, launch); state.workspaces.push(workspace); state.settings.activeWorkspaceId = workspace.id; changed();
+        spawnPane(pane, launch); state.workspaces.push(workspace); if (task) { task.workspaceId = workspace.id; task.archived = false; } state.settings.activeWorkspaceId = workspace.id; changed();
         return structuredClone(workspace);
       }
       case 'workspace.rename': {
@@ -381,6 +550,7 @@ async function startServer(options = {}) {
       }
       case 'workspace.close': {
         const workspace = workspaceById(params.workspaceId); workspace.panes.forEach(disposePane);
+        forgetWorkspace(workspace.id);
         state.workspaces = state.workspaces.filter(w => w !== workspace);
         if (state.settings.activeWorkspaceId === workspace.id) state.settings.activeWorkspaceId = state.workspaces[0]?.id;
         changed(); return { ok: true };
@@ -393,7 +563,9 @@ async function startServer(options = {}) {
         const requestedTitle = params.title === undefined ? null : string(params.title, 'title', 120).trim();
         const titleMode = tabTitleMode(params.titleMode, Boolean(requestedTitle));
         const profileId = params.profileId ?? source.profileId;
-        const launch = await validateLaunch(environment, profileId, params.cwd ?? (profileId === source.profileId ? source.cwd : undefined), params.agentId, params.agentHooks, { dataDir: loc.dataDir, pipeName: loc.pipeName });
+        const task = state.tasks.find(item => item.workspaceId === workspace.id && !item.archived);
+        const launch = await validateLaunch(environment, profileId, params.cwd ?? (profileId === source.profileId ? source.cwd : undefined), params.agentId, params.agentHooks, { dataDir: loc.dataDir, pipeName: loc.pipeName }, task && task.agentId === params.agentId ? task.id : undefined);
+        if (task) launch.taskId = task.id;
         const pane = makePane(launch);
         const tab = { id: randomUUID(), title: requestedTitle || tabTitle(workspace, launch.agentLabel || launch.profile.label), titleMode, root: { type: 'leaf', paneId: pane.id } }; pane.tabId = tab.id;
         spawnPane(pane, launch); workspace.panes.push(pane); workspace.tabs.push(tab); workspace.activeTabId = tab.id;
@@ -414,7 +586,9 @@ async function startServer(options = {}) {
         const { pane: source, workspace, tab } = paneById(params.paneId);
         if (!['horizontal', 'vertical'].includes(params.direction)) fail('INVALID_ARGUMENT', 'direction must be horizontal or vertical');
         const profileId = params.profileId ?? source.profileId;
-        const launch = await validateLaunch(environment, profileId, params.cwd ?? (profileId === source.profileId ? source.cwd : undefined), params.agentId, params.agentHooks, { dataDir: loc.dataDir, pipeName: loc.pipeName });
+        const task = state.tasks.find(item => item.workspaceId === workspace.id && !item.archived);
+        const launch = await validateLaunch(environment, profileId, params.cwd ?? (profileId === source.profileId ? source.cwd : undefined), params.agentId, params.agentHooks, { dataDir: loc.dataDir, pipeName: loc.pipeName }, task && task.agentId === params.agentId ? task.id : undefined);
+        if (task) launch.taskId = task.id;
         const pane = makePane(launch); pane.tabId = tab.id; spawnPane(pane, launch);
         tab.root = replaceLeaf(tab.root, source.id, { type: 'split', id: randomUUID(), direction: params.direction, ratio: 0.5, first: { type: 'leaf', paneId: source.id }, second: { type: 'leaf', paneId: pane.id } });
         workspace.panes.push(pane); syncTabs(workspace); changed(); return structuredClone(pane);
@@ -499,7 +673,7 @@ async function startServer(options = {}) {
         const toolName = params.toolName === undefined ? undefined : string(params.toolName, 'toolName', 256);
         const toolId = params.toolId === undefined ? undefined : string(params.toolId, 'toolId', 256);
         if (params.phase) runtime.activity.update({ phase: params.phase, toolName, toolId });
-        pane.agentState = params.state; pane.agentUpdatedAt = Date.now();
+        setAgentState(pane, params.state); pane.agentUpdatedAt = Date.now();
         notifyAgentState(pane);
         if (params.state === 'running') pane.agentActivity = runtime.activity.current();
         else { delete pane.agentActivity; if (params.state !== 'waiting') runtime.activity.clear(); }
@@ -559,7 +733,7 @@ async function startServer(options = {}) {
       default: fail('METHOD_NOT_FOUND', `Unknown method: ${method}`);
     }
   }
-  const reads = new Set(['state', 'environment', 'pane.snapshot', 'pane.screen', 'pane.input', 'codex.status', 'agent.sessions']);
+  const reads = new Set(['state', 'environment', 'project.inspect', 'task.delivery.context', 'task.delivery.refresh', 'task.delivery.submit', 'task.delivery.merge', 'pane.snapshot', 'pane.screen', 'pane.input', 'codex.status', 'agent.sessions']);
   function codexPanes() {
     return state.workspaces.flatMap(workspace => workspace.panes.map(pane => ({
       id: pane.id, pid: pane.pid, status: pane.status, cwd: pane.cwd, agentId: pane.agentId,
@@ -575,6 +749,8 @@ async function startServer(options = {}) {
     if (pane.agentId && pane.agentId !== 'codex' && (!identity || pane.agentPid)) return;
     // Process/thread observations describe a current agent, not the previous
     // shell-launched command whose exit code may still be on this pane.
+    const oldIdentity = `${pane.agentId || ''}:${pane.agentPid || ''}:${pane.agentSessionId || ''}:${pane.agentThreadId || ''}`;
+    const oldState = pane.agentState;
     delete pane.agentExitCode;
     if (!identity) {
       delete pane.agentId; delete pane.agentLabel; delete pane.agentThreadId;
@@ -599,6 +775,7 @@ async function startServer(options = {}) {
       if (pane.agentState === 'running' && ACTIVITY_KINDS.has(identity.agentActivity)) pane.agentActivity = identity.agentActivity;
       else delete pane.agentActivity;
     }
+    setAgentState(pane, pane.agentState, oldState !== pane.agentState || oldIdentity !== `${pane.agentId || ''}:${pane.agentPid || ''}:${pane.agentSessionId || ''}:${pane.agentThreadId || ''}`);
     notifyAgentState(pane);
     pane.agentUpdatedAt = Date.now(); asyncChanged();
   }
@@ -609,6 +786,8 @@ async function startServer(options = {}) {
     if (runtime?.agentSessionHooks && runtime.agentLaunchId && !runtime.agentEnded) return;
     if (!identity && pane.agentId === 'codex') return;
     const before = JSON.stringify([pane.agentId, pane.agentLabel, pane.agentPid, pane.agentSessionId, pane.agentState, pane.agentActivity, pane.agentExitCode]);
+    const oldIdentity = `${pane.agentId || ''}:${pane.agentPid || ''}:${pane.agentSessionId || ''}`;
+    const oldState = pane.agentState;
     delete pane.agentExitCode;
     for (const key of ['agentId', 'agentLabel', 'agentPid', 'agentSessionId']) {
       if (identity?.[key]) pane[key] = identity[key]; else delete pane[key];
@@ -618,7 +797,7 @@ async function startServer(options = {}) {
     if (pane.agentState === 'running' && ACTIVITY_KINDS.has(identity?.agentActivity)) pane.agentActivity = identity.agentActivity;
     else delete pane.agentActivity;
     const after = JSON.stringify([pane.agentId, pane.agentLabel, pane.agentPid, pane.agentSessionId, pane.agentState, pane.agentActivity, pane.agentExitCode]);
-    if (after !== before) { notifyAgentState(pane); pane.agentUpdatedAt = Date.now(); asyncChanged(); }
+    if (after !== before) { setAgentState(pane, pane.agentState, oldState !== pane.agentState || oldIdentity !== `${pane.agentId || ''}:${pane.agentPid || ''}:${pane.agentSessionId || ''}`); notifyAgentState(pane); pane.agentUpdatedAt = Date.now(); asyncChanged(); }
   }
   agentController = createAgentController({ panes: codexPanes, apply: applyAgentIdentity });
   codexController = createCodexController({
@@ -659,6 +838,10 @@ async function startServer(options = {}) {
         const invoke = () => dispatch(method, params);
         const result = reads.has(method) ? Promise.resolve().then(invoke) : mutationTail.then(invoke);
         if (!reads.has(method)) mutationTail = result.catch(() => {});
+        if (method.startsWith('task.delivery.') && method !== 'task.delivery.context') {
+          deliveryRequests.add(result);
+          result.finally(() => deliveryRequests.delete(result)).catch(() => {});
+        }
         result.then(value => send(client, { id: request.id, result: value }), error => send(client, { id: request.id, error: { code: typeof error.code === 'string' ? error.code : 'INTERNAL_ERROR', message: error.message || 'Request failed' } })).finally(() => client.inflight--);
       }
       if (Buffer.byteLength(client.buffer) > LIMITS.request) socket.destroy();
@@ -670,6 +853,7 @@ async function startServer(options = {}) {
     closePromise = (async () => {
       clearTimeout(persistTimer);
       await mutationTail;
+      await Promise.allSettled([...deliveryRequests]);
       await codexController?.stop();
       safeSave();
       for (const workspace of state.workspaces) workspace.panes.forEach(disposePane);
@@ -682,13 +866,19 @@ async function startServer(options = {}) {
   }
   try {
     // Restore identifiers/layout and start fresh shells. No command history is replayed.
-    for (const workspace of state.workspaces) for (const pane of workspace.panes) {
-      try { const launch = await validateLaunch(environment, pane.profileId, pane.cwd); spawnPane(pane, launch); }
-      catch (error) {
-        pane.pid = null; pane.status = 'exited'; pane.exitCode = -1;
-        const runtime = runtimes.get(pane.id) || terminalFor(pane);
-        queueOutput(pane, runtime, `\r\n[Winmux could not restore this terminal]\r\n${error.message}\r\n`);
-        addNotification(pane.id, 'Terminal could not be restored', error.message.slice(0, 4096));
+    for (const workspace of state.workspaces) {
+      const task = state.tasks.find(item => item.workspaceId === workspace.id && !item.archived);
+      for (const pane of workspace.panes) {
+        try {
+          const launch = await validateLaunch(environment, pane.profileId, pane.cwd);
+          if (task) launch.taskId = task.id;
+          spawnPane(pane, launch);
+        } catch (error) {
+          pane.pid = null; pane.status = 'exited'; pane.exitCode = -1;
+          const runtime = runtimes.get(pane.id) || terminalFor(pane);
+          queueOutput(pane, runtime, `\r\n[Winmux could not restore this terminal]\r\n${error.message}\r\n`);
+          addNotification(pane.id, 'Terminal could not be restored', error.message.slice(0, 4096));
+        }
       }
     }
     safeSave();
@@ -700,7 +890,7 @@ async function startServer(options = {}) {
   server.on('error', error => console.error(`Winmux IPC server error: ${error.message}`));
   return { server, dataDir: loc.dataDir, pipeName: loc.pipeName, close, shutdown: close };
 }
-module.exports = { startServer, tabTitleMode };
+module.exports = { startServer, tabTitleMode, setAgentState, loadState };
 if (require.main === module) {
   startServer().then(daemon => {
     const stop = () => daemon.close().then(() => process.exit(0), error => { console.error(error); process.exit(1); });

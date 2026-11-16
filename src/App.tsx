@@ -13,9 +13,13 @@ import { WorkspaceView } from './WorkspaceView';
 import { WorkspaceTools, type ToolTab } from './WorkspaceTools';
 import type { PaneDropSide, TerminalHandle } from './TerminalPane';
 import { subscribePreviewError } from './previewCoordinator';
+import { AttentionInbox } from './AttentionInbox';
+import { attentionSections } from './attentionGrouping';
+import { TaskDialog } from './TaskDialog';
+import { ProjectTasks } from './ProjectTasks';
 import { bridge, errorMessage, type Direction, type Environment, type Pane, type Settings, type State, type TerminalTab, type Workspace } from './types';
 
-type Dialog = { type: 'create' } | { type: 'rename'; workspace: Workspace } | { type: 'settings' } | { type: 'shortcuts' } | { type: 'close-pane'; pane: Pane } | { type: 'close-tab'; workspaceId: string; tab: TerminalTab } | { type: 'close-workspace'; workspace: Workspace } | null;
+type Dialog = { type: 'create' } | { type: 'create-task' } | { type: 'archive-task'; taskId: string; name: string; workspaceId?: string } | { type: 'rename'; workspace: Workspace } | { type: 'settings' } | { type: 'shortcuts' } | { type: 'close-pane'; pane: Pane } | { type: 'close-tab'; workspaceId: string; tab: TerminalTab } | { type: 'close-workspace'; workspace: Workspace } | null;
 type BannerError = { message: string; previewToken?: number };
 type PaneDrag = { workspaceId: string; paneId: string };
 const agentHooksStorageKey = 'winmux.agent-status-hooks';
@@ -37,6 +41,8 @@ export default function App() {
   const [zoomed, setZoomed] = useState<Record<string, string | undefined>>({});
   const [paneDrag, setPaneDrag] = useState<PaneDrag | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null); const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [attentionOpen, setAttentionOpen] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(false);
   const [toolTab, setToolTab] = useState<ToolTab | null>(null);
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [browserRequests, setBrowserRequests] = useState<Record<string, { url: string; serial: number }>>({});
@@ -257,6 +263,10 @@ export default function App() {
     if (activeWorkspaceId && !state.workspaces.some(item => item.id === activeWorkspaceId)) setActiveWorkspace(state.workspaces[0]?.id);
   }, [state, activeWorkspaceId]);
   async function refresh() { const next = await bridge().call<State>('state'); setState(next); stateRef.current = next; return next; }
+  async function openTask(taskId: string) {
+    try { const result = await bridge().call<Workspace>('task.open', {taskId}); await refresh(); setProjectsOpen(false); setAttentionOpen(false); selectWorkspace(result.id, result.panes[0]?.id); }
+    catch(error) { setError(errorMessage(error)); }
+  }
   async function launchAgent(agentId: string) {
     const agent=environment?.agents?.find(item=>item.id===agentId && item.available !== false);
     if (agent) await createTerminalTab(agent.id);
@@ -356,6 +366,7 @@ export default function App() {
   }, []);
   const profiles = environment?.profiles ?? [];
   const unread = state?.notifications.filter(item => !item.read).length ?? 0;
+  const attentionCount = attentionSections(state).filter(section => section.group === 'waiting' || section.group === 'failed').reduce((count, section) => count + section.entries.length, 0);
   const tabLabel = (owner: Workspace, tab: TerminalTab) => terminalTabLabel(owner, terminalTabs(owner).find(item => item.id === tab.id) ?? tab, activePanes, profiles);
   return <div className={`app-shell ${sidebarOpen ? '' : 'sidebar-hidden'}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--tools-width':`${effectiveToolsWidth}px`} as CSSProperties}>
     <aside className={`sidebar ${sidebarExpanded ? 'expanded' : 'rail'}`} data-testid="workspace-rail" aria-label={t("Рабочие пространства")}>
@@ -384,7 +395,9 @@ export default function App() {
       </nav>
       <div className="sidebar-bottom">
         {!sidebarExpanded && <button className="icon-button" title={t("Новое пространство (Ctrl+Shift+N)")} aria-label={t("Новое рабочее пространство")} data-testid="new-workspace" disabled={!environment || loading} onClick={() => setDialog({ type: 'create' })}><Plus /></button>}
-        <button className={`sidebar-action ${notificationsOpen ? 'active' : ''}`} data-testid="notifications-toggle" aria-expanded={notificationsOpen} aria-label={t("Уведомления")} title={t("Уведомления")} onClick={() => setNotificationsOpen(value => !value)}><Bell />{sidebarExpanded && <span>{t("Уведомления")}</span>}{unread > 0 && <span className="unread-badge" aria-label={t("{0} непрочитанных", unread)}>{unread}</span>}</button>
+        <button className={`sidebar-action ${attentionOpen ? 'active' : ''}`} data-testid="attention-toggle" aria-expanded={attentionOpen} aria-label={t('Внимание')} title={t('Внимание')} onClick={() => { setNotificationsOpen(false); setProjectsOpen(false); setAttentionOpen(value => !value); }}><CircleAlert />{sidebarExpanded && <span>{t('Внимание')}</span>}{attentionCount > 0 && <span className="unread-badge" aria-label={t('{0} требуют внимания', attentionCount)}>{attentionCount}</span>}</button>
+        <button className={`sidebar-action ${projectsOpen ? 'active' : ''}`} data-testid="projects-toggle" aria-expanded={projectsOpen} aria-label={t('Проекты и задачи')} title={t('Проекты и задачи')} disabled={!environment?.capabilities?.projectTasks} onClick={() => { setProjectsOpen(value => !value); setAttentionOpen(false); setNotificationsOpen(false); }}><GitBranch />{sidebarExpanded && <span>{t('Проекты и задачи')}</span>}</button>
+        <button className={`sidebar-action ${notificationsOpen ? 'active' : ''}`} data-testid="notifications-toggle" aria-expanded={notificationsOpen} aria-label={t("Уведомления")} title={t("Уведомления")} onClick={() => { setAttentionOpen(false); setProjectsOpen(false); setNotificationsOpen(value => !value); }}><Bell />{sidebarExpanded && <span>{t("Уведомления")}</span>}{unread > 0 && <span className="unread-badge" aria-label={t("{0} непрочитанных", unread)}>{unread}</span>}</button>
         <button className="sidebar-action" data-testid="settings-open" aria-label={t("Настройки")} title={t("Настройки")} onClick={() => setDialog({ type: 'settings' })}><Settings2 />{sidebarExpanded && <><span>{t("Настройки")}</span><span className="shortcut-hint">Ctrl+,</span></>}</button>
         <button className="sidebar-action" aria-label={t("Горячие клавиши")} title={t("Горячие клавиши")} onClick={() => setDialog({ type: 'shortcuts' })}><Keyboard />{sidebarExpanded && <span>{t("Горячие клавиши")}</span>}</button>
       </div>
@@ -437,7 +450,7 @@ export default function App() {
         {activePane && <span className="header-agent"><AgentStatus pane={activePane} showName /></span>}
         <div className="topbar-tools" role="group" aria-label={t('Инструменты проекта')}>
           {workspace && <><button className={`icon-button ${toolTab === 'files' ? 'active-tool' : ''}`} aria-label={t("Файлы проекта")} aria-pressed={toolTab === 'files'} title={t("Файлы проекта")} data-testid="files-toggle" onClick={() => setToolTab(value => value === 'files' ? null : 'files')}><FolderOpen /></button><button className={`icon-button ${toolTab === 'git' ? 'active-tool' : ''}`} aria-label={t("Git проекта")} aria-pressed={toolTab === 'git'} title={t("Git: изменения проекта")} data-testid="git-toggle" onClick={() => setToolTab(value => value === 'git' ? null : 'git')}><GitBranch /></button><button className={`icon-button ${toolTab === 'browser' ? 'active-tool' : ''}`} aria-label={t("Встроенный браузер")} aria-pressed={toolTab === 'browser'} title={t("Встроенный браузер")} data-testid="browser-toggle" onClick={() => setToolTab(value => value === 'browser' ? null : 'browser')}><Globe /></button></>}
-          {!sidebarOpen && <button className={`icon-button ${unread ? 'has-unread' : ''}`} aria-label={t("Уведомления")} onClick={() => setNotificationsOpen(value => !value)}><Bell /></button>}
+          {!sidebarOpen && <><button className="icon-button" aria-label={t('Проекты и задачи')} aria-expanded={projectsOpen} disabled={!environment?.capabilities?.projectTasks} onClick={() => { setNotificationsOpen(false); setAttentionOpen(false); setProjectsOpen(value => !value); }}><GitBranch /></button><button className={`icon-button ${attentionCount ? 'has-unread' : ''}`} aria-label={t('Внимание')} aria-expanded={attentionOpen} onClick={() => { setProjectsOpen(false); setNotificationsOpen(false); setAttentionOpen(value => !value); }}><CircleAlert /></button><button className={`icon-button ${unread ? 'has-unread' : ''}`} aria-label={t("Уведомления")} onClick={() => { setProjectsOpen(false); setAttentionOpen(false); setNotificationsOpen(value => !value); }}><Bell /></button></>}
         </div>
       </header>
       {environment && !tabsAvailable && <div className="upgrade-notice" role="status" data-testid="daemon-upgrade-notice"><CircleAlert /><p><strong>{t('Для новых вкладок и запуска агентов требуется обновление сессии.')}</strong> {t('Текущие терминалы продолжают работать. Когда будете готовы, завершите все сессии и откройте Winmux снова. Закрытие окна или перезагрузка интерфейса не обновляет фоновый процесс.')}</p></div>}
@@ -445,6 +458,8 @@ export default function App() {
       <div className="workbench">
       <div className="workspace-stage" aria-busy={loading || working}>
         {state?.workspaces.map(item => <WorkspaceView key={item.id} workspace={item} settings={settings} visible={workspace?.id === item.id} activePane={selectedPane(item, activePanes)?.id} zoomed={zoomed[item.id]} unreadPaneIds={state.notifications.filter(notice => !notice.read && notice.workspaceId === item.id).map(notice => notice.paneId)} register={register} onFocus={focusPane} onSplit={(id, direction) => void split(id, direction)} onClose={closePane} onZoom={toggleZoom} onRatio={saveRatio} onOpenBrowser={url => openBrowser(item.id, url)} paneMoveAvailable={paneMoveAvailable} draggingPaneId={paneDrag?.workspaceId === item.id ? paneDrag.paneId : undefined} onPaneDragStart={(paneId,event) => startPaneDrag(item.id,paneId,event)} onPaneDragEnd={endPaneDrag} onMovePane={(paneId,targetPaneId,side) => void movePane(item.id,paneId,targetPaneId,side)} onError={reportError} />)}
+        {attentionOpen && <AttentionInbox state={state} onClose={() => setAttentionOpen(false)} onOpenTask={taskId => void openTask(taskId)} onSelect={(workspaceId, paneId) => { setAttentionOpen(false); selectWorkspace(workspaceId, paneId); }} />}
+        {projectsOpen && <section className="notification-panel" aria-label={t('Проекты и задачи')}><div className="notification-heading"><h2>{t('Проекты и задачи')}</h2><button className="icon-button" aria-label={t('Новая задача')} onClick={() => setDialog({type:'create-task'})}><Plus /></button><button className="icon-button" aria-label={t('Закрыть')} onClick={() => setProjectsOpen(false)}><X /></button></div><div className="notification-list"><ProjectTasks projects={(state?.projects ?? []).map(project => ({ ...project, tasks:(state?.tasks ?? []).filter(task => task.projectId === project.id).map(task => ({ ...task, path:task.cwd, workspace:state?.workspaces.find(workspace => workspace.id === task.workspaceId) })) }))} onOpen={task => void openTask(task.id)} onRefresh={task => void bridge().call('task.delivery.refresh', {taskId:task.id}).catch(error => setError(errorMessage(error)))} onArchive={task => setDialog({type:'archive-task',taskId:task.id,name:task.name,workspaceId:task.workspace?.id})} /></div></section>}
         {!state?.workspaces.length && <div className="empty-state" data-testid="empty-state"><div className="empty-symbol"><BrandMark /></div><h1>{loading ? t("Подключение к Winmux") : t("Место для вашей работы")}</h1><p>{loading ? t("Получаем сессии и доступные среды…") : t("Откройте проект, запустите терминал. Разделяйте панели и держите нужные задачи рядом.")}</p>{!loading && <><button className="button primary create-first" data-testid="create-first-workspace" disabled={!environment} onClick={() => setDialog({ type: 'create' })}><Plus />{t("Новое рабочее пространство")}</button><span className="empty-shortcut">Ctrl+Shift+N</span></>}</div>}
         {notificationsOpen && <section className="notification-panel" aria-label={t("Уведомления")} data-testid="notification-panel"><div className="notification-heading"><h2>{t("Уведомления")}</h2><button className="icon-button" title={t("Прочитать все")} aria-label={t("Прочитать все уведомления")} disabled={!unread} onClick={() => void bridge().call('notifications.read').catch(error => setError(errorMessage(error)))}><Check /></button><button className="icon-button" aria-label={t("Закрыть уведомления")} onClick={() => setNotificationsOpen(false)}><X /></button></div><div className="notification-list">{state?.notifications.length ? [...state.notifications].sort((a, b) => b.createdAt - a.createdAt).map(notice => {
           const owner = state.workspaces.find(item => item.id === notice.workspaceId); const exists = owner?.panes.some(pane => pane.id === notice.paneId);
@@ -457,6 +472,8 @@ export default function App() {
     </main>
 
     {dialog?.type === 'create' && environment && <CreateWorkspace environment={environment} defaultAgentHooks={agentHooks} onClose={() => setDialog(null)} onCreate={async values => { const created = await bridge().call<Workspace>('workspace.create', values); await refresh(); selectWorkspace(created.id, created.panes[0]?.id); }} />}
+    {dialog?.type === 'create-task' && environment && <TaskDialog environment={environment} onClose={() => setDialog(null)} onInspect={values => bridge().call('project.inspect', {...values})} onCreate={async values => { const created = await bridge().call<Workspace>('task.create', {...values}); await refresh(); setProjectsOpen(false); selectWorkspace(created.id, created.panes[0]?.id); }} />}
+    {dialog?.type === 'archive-task' && <ConfirmClose title={t('Архивировать задачу {0}?',dialog.name)} description={t('Терминалы задачи будут остановлены. Несохранённые изменения файлов будут потеряны. Чистое рабочее дерево, созданное Winmux, будет удалено; ветка сохранится.')} onClose={() => setDialog(null)} onConfirm={async () => { if (dialog.workspaceId) { const owner = stateRef.current?.workspaces.find(item => item.id === dialog.workspaceId); if (owner) { assertFilesNotSaving(owner.panes.map(pane => pane.id)); await bridge().call('workspace.close', {workspaceId:owner.id}); } } const result = await bridge().call<{reason?:string}>('task.archive', {taskId:dialog.taskId}); await refresh(); if (result.reason) setError(result.reason); }} />}
     {dialog?.type === 'rename' && <RenameWorkspace name={dialog.workspace.name} onClose={() => setDialog(null)} onSave={async name => { await bridge().call('workspace.rename', { workspaceId: dialog.workspace.id, name }); }} />}
     {dialog?.type === 'close-pane' && <ConfirmClose title={t("Закрыть терминал?")} description={t('Несохранённые изменения файлов будут потеряны.') + ' ' + t("Панель «{0}» будет закрыта. {1}", dialog.pane.title, dialog.pane.status === 'running' ? t("Запущенный процесс и его дочерние процессы будут завершены. Несохранённая работа может быть потеряна.") : t("Процесс уже завершён."))} onClose={() => setDialog(null)} onConfirm={async () => { assertFilesNotSaving([dialog.pane.id]); await bridge().call('pane.close', { paneId: dialog.pane.id }); }} />}
     {dialog?.type === 'close-tab' && <ConfirmClose title={t('Закрыть вкладку терминала?')} description={t('Несохранённые изменения файлов будут потеряны.') + ' ' + t('Все терминалы вкладки «{0}» будут закрыты, их процессы — завершены. Остальные вкладки сохранятся.', (owner => owner ? tabLabel(owner, dialog.tab) : dialog.tab.title)(state?.workspaces.find(item => item.id === dialog.workspaceId)))} onClose={() => setDialog(null)} onConfirm={async () => { assertFilesNotSaving(paneIds(dialog.tab.root)); await bridge().call('tab.close', { workspaceId: dialog.workspaceId, tabId: dialog.tab.id }); await refresh(); }} />}

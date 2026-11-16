@@ -15,7 +15,7 @@
     "test:skills":"node --test tests/skills-install-smoke.cjs",
     "test:integrations":"node --test tests/stdio.cjs tests/terminal-input.cjs tests/client-pressure.cjs tests/environment-discovery.cjs tests/codex-daemon-smoke.cjs tests/codex-mapping.cjs tests/terminal-tab-label.cjs tests/terminal-theme-smoke.cjs tests/agent-hooks-install-smoke.cjs tests/omp-extension-smoke.cjs tests/omp-hooks-install-smoke.cjs tests/agent-activity.cjs tests/agent-integration.cjs tests/agent-processes.cjs tests/codex-activity.cjs tests/agent-adapters.cjs tests/agent-events-ipc.cjs tests/agent-adapter-install.cjs && node scripts/run-electron-node.cjs tests/codex-controller-smoke.cjs && node scripts/run-electron-node.cjs tests/agent-controller-smoke.cjs && node scripts/run-electron-node.cjs tests/title-mode-smoke.cjs",
     "test:cookies":"node tests/cookie-import-smoke.cjs",
-    "test:workspace":"node --test tests/file-drafts.cjs && node tests/workspace-smoke.cjs",
+    "test:workspace":"node --test tests/file-drafts.cjs tests/task-git.cjs tests/task-state.cjs tests/task-delivery.cjs tests/task-instructions.cjs tests/agent-state-since.cjs tests/attention-inbox.cjs && node tests/workspace-smoke.cjs",
     "test:file-preview":"node --test tests/local-file-links.cjs && node tests/file-preview-smoke.cjs && node tests/local-file-preview-electron.cjs",
     "browser":"node scripts/browser.cjs",
     "cli":"node scripts/run-electron-node.cjs cli.cjs",

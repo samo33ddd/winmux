@@ -203,6 +203,13 @@ test('installed Windows wrapper uses a plain runtime and authenticated IPC from 
   const state = JSON.parse(listed.stdout);
   assert.ok(Array.isArray(state.workspaces));
 
+  const taskContext = spawnSync(process.execPath, [wrapper, 'rpc', 'task.delivery.context'], {
+    cwd: unrelated, encoding: 'utf8', timeout: 20000, windowsHide: true,
+    env: { ...process.env, WINMUX_TASK_ID: 'missing-task-fixture' },
+  });
+  assert.equal(taskContext.status, 1);
+  assert.match(taskContext.stderr, /Task not found/);
+
   const started = spawnSync(process.execPath, [wrapper, 'start'], {
     cwd: unrelated,
     encoding: 'utf8',
@@ -444,6 +451,12 @@ if (distribution) {
     assert.equal(listed.status, 0, listed.stderr);
     const state = JSON.parse(listed.stdout);
     assert.ok(Array.isArray(state.workspaces));
+
+    const taskContext = wsl(distribution, ['node', wrapper, 'rpc', 'task.delivery.context'], {
+      env: { ...wslEnv, WINMUX_TASK_ID: 'missing-task-fixture', WSLENV: `${wslEnv.WSLENV}:WINMUX_TASK_ID` },
+    });
+    assert.equal(taskContext.status, 1);
+    assert.match(taskContext.stderr, /Task not found/);
 
     const metadata = wsl(distribution, ['cat', `${project}/.agents/skills/winmux-terminal/scripts/connection.json`]);
     assert.equal(metadata.status, 0, metadata.stderr);
