@@ -18,6 +18,15 @@ fs.writeFileSync(path.join(project, 'hello.md'), '# Packaged preview\n');
 const env = { ...process.env, WINMUX_DATA_DIR: dataDir, WINMUX_NO_PROFILE: '1', WINMUX_TEST_MODE: '1' };
 delete env.ELECTRON_RUN_AS_NODE;
 let desktop, wrapper;
+// Desktop close and daemon shutdown are bounded below; this outer watchdog
+// bounds any other hang (e.g. the packaged app keeping the event loop alive)
+// so a stuck smoke run cannot consume the whole job timeout in CI.
+const watchdog = setTimeout(() => {
+  console.error('packaged smoke timed out');
+  try { desktop?.close(); } catch {}
+  process.exit(124);
+}, 120000);
+watchdog.unref();
 (async () => {
   assert(fs.existsSync(exe), `packaged executable missing: ${exe} (run npm run release:build first)`);
   desktop = await _electron.launch({ executablePath: exe, cwd: dataDir, env });
@@ -34,6 +43,10 @@ let desktop, wrapper;
   assert(JSON.parse(result.stdout).workspaces.some(item => item.id === workspace.id), 'installed client cannot reach the packaged daemon');
   console.log('PASS packaged smoke: exe launches, IPC state round trips, workspace + installed client work.');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
-  if (desktop) await desktop.close().catch(() => {});
+  clearTimeout(watchdog);
+  if (desktop) await Promise.race([desktop.close(), new Promise(resolve => setTimeout(resolve, 15000))]).catch(() => {});
   if (wrapper) await execFile(process.execPath, [wrapper, 'shutdown'], { cwd: dataDir, env, windowsHide: true, timeout: 20000 }).catch(() => {});
+  // shortcut: the packaged daemon may keep this process's event loop alive
+  // after PASS; exit explicitly so CI reports the smoke result instead of hanging.
+  process.exit(process.exitCode ?? 0);
 });

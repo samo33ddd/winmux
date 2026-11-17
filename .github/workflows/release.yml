@@ -57,6 +57,7 @@ jobs:
       - name: Build installer and portable executable without publishing
         run: npm run release:build
       - name: Smoke the packaged executable
+        timeout-minutes: 5
         run: npm run test:packaged
       - name: Prepare exact executables, checksums, and release notes
         env:
