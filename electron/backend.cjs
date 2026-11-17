@@ -7,7 +7,7 @@ const { LIMITS, locations, createToken, authenticated, fail, string, integer } =
 const { discover, validateLaunch } = require('./backend/environment.cjs');
 const { cwdFromOsc } = require('./backend/shell-integration.cjs');
 const { terminalEnvironment } = require('./backend/terminal-env.cjs');
-const { createController: createCodexController } = require('./codex-integration.cjs');
+const { createController: createCodexController, windowsProcessTable } = require('./codex-integration.cjs');
 const { createController: createAgentController } = require('./agent-integration.cjs');
 const { ACTIVITY_KINDS, createActivityTracker } = require('./agent-activity.cjs');
 const { createTaskGitService, createGitExecutor } = require('./backend/task-git.cjs');
@@ -158,20 +158,58 @@ function loadState(file) {
   return state;
 }
 
+// Windows process identity for the daemon lock: the creation timestamp from the
+// bounded CIM process table distinguishes a live daemon from a reused PID.
+// Unavailable outside Windows or on probe failure — the lock then falls back to
+// liveness-only protection, never weaker than before.
+async function ownProcessIdentity() {
+  if (process.platform !== 'win32') return {};
+  try {
+    const row = (await windowsProcessTable()).find(item => item.pid === process.pid);
+    return row?.createdAt ? { processCreatedAt: row.createdAt } : {};
+  } catch { return {}; }
+}
+
+// True only when the live PID provably belongs to a different process: the lock
+// recorded a valid creation time and the fresh table reports a different one.
+async function lockOwnerIsReusedPid(existing) {
+  const recorded = typeof existing.processCreatedAt === 'string' ? existing.processCreatedAt : '';
+  if (!recorded || !Number.isFinite(Date.parse(recorded))) return false;
+  let table;
+  try { table = await windowsProcessTable(); } catch { return false; }
+  const row = table.find(item => item.pid === Number(existing.pid));
+  if (!row?.createdAt) return false;
+  return row.createdAt !== new Date(recorded).toISOString();
+}
+
 async function startServer(options = {}) {
   const loc = locations(options);
   fs.mkdirSync(loc.dataDir, { recursive: true, mode: 0o700 });
   const token = createToken(loc.tokenFile);
   // A data-directory lock prevents two daemon instances from owning the same saved sessions.
-  const lockValue = JSON.stringify({ pid: process.pid, nonce: randomUUID() });
+  const lockValue = JSON.stringify({ pid: process.pid, nonce: randomUUID(), ...(await ownProcessIdentity()) });
   for (let attempt = 0; ; attempt++) {
     try { fs.writeFileSync(loc.lockFile, lockValue, { flag: 'wx', mode: 0o600 }); break; }
     catch (error) {
       if (error.code !== 'EEXIST' || attempt > 0) throw error;
+      const lockBytes = fs.readFileSync(loc.lockFile, 'utf8');
       let existing;
-      try { existing = JSON.parse(fs.readFileSync(loc.lockFile, 'utf8')); } catch { fail('DAEMON_LOCKED', `Invalid daemon lock; inspect ${loc.lockFile}`); }
-      try { process.kill(existing.pid, 0); fail('DAEMON_RUNNING', `Winmux daemon is already running (PID ${existing.pid})`); }
-      catch (probe) { if (probe.code !== 'ESRCH') throw probe; }
+      try { existing = JSON.parse(lockBytes); } catch { fail('DAEMON_LOCKED', `Invalid daemon lock; inspect ${loc.lockFile}`); }
+      const existingPid = Number(existing.pid);
+      if (!Number.isSafeInteger(existingPid) || existingPid <= 0) fail('DAEMON_LOCKED', `Invalid daemon lock; inspect ${loc.lockFile}`);
+      let alive = true;
+      try { process.kill(existingPid, 0); } catch (probe) { if (probe.code === 'ESRCH') alive = false; }
+      if (alive && await lockOwnerIsReusedPid(existing)) {
+        // PID reuse: the recorded owner is gone and a different process holds its
+        // PID. Only a positively observed different creation time proves reuse;
+        // every ambiguous case keeps the lock. Never signal the process.
+        let current;
+        try { current = fs.readFileSync(loc.lockFile, 'utf8'); } catch { fail('DAEMON_LOCKED', `Daemon lock changed; inspect ${loc.lockFile}`); }
+        if (current !== lockBytes) fail('DAEMON_LOCKED', 'Daemon lock changed while checking; inspect it before retrying');
+        fs.unlinkSync(loc.lockFile);
+        continue;
+      }
+      if (alive) fail('DAEMON_RUNNING', `Winmux daemon is already running (PID ${existingPid})`);
       fs.unlinkSync(loc.lockFile);
     }
   }

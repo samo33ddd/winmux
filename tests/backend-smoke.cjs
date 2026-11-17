@@ -344,6 +344,37 @@ async function run() {
   assert.equal((await client.request('state')).workspaces.length, 0);
   log('exit code + closed-input rejection + split collapse + last pane removes workspace');
   await stop(); log('explicit shutdown exits the daemon');
+
+  // #72: a stale daemon.lock whose PID is alive but has a different creation
+  // time is PID reuse, not a live daemon — startup must proceed and never
+  // signal the unrelated process. A matching creation time still blocks.
+  const lockFile = path.join(dataDir, 'daemon.lock');
+  const probe = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { windowsHide:true });
+  try {
+    const fakeCreatedAt = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    fs.writeFileSync(lockFile, JSON.stringify({ pid:probe.pid, nonce:'stale', processCreatedAt:fakeCreatedAt }), { flag:'wx', mode:0o600 });
+    await launch();
+    assert.ok(probe.exitCode === null && !probe.killed, 'the reused-PID process must not be signalled');
+    assert.match(fs.readFileSync(lockFile, 'utf8'), /processCreatedAt/, 'fresh lock records owner identity');
+    log('stale lock with different creation time clears for reused PID; unrelated process untouched', `probe ${probe.pid}`);
+    await stop();
+
+    // Same recorded creation time as the live process still blocks startup.
+    const selfCreatedAt = await new Promise(resolve => {
+      const ps = spawn('powershell.exe', ['-NoLogo','-NoProfile','-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${probe.pid}").CreationDate.ToUniversalTime().ToString('o')`], { windowsHide:true });
+      let out = ''; ps.stdout.on('data', chunk => out += chunk); ps.on('close', () => resolve(out.trim()));
+    });
+    if (selfCreatedAt && Number.isFinite(Date.parse(selfCreatedAt))) {
+      fs.writeFileSync(lockFile, JSON.stringify({ pid:probe.pid, nonce:'stale', processCreatedAt:new Date(selfCreatedAt).toISOString() }), { flag:'wx', mode:0o600 });
+      const blocked = spawn(process.execPath, [path.join(root, 'electron/backend.cjs')], { cwd:root, env, windowsHide:true, stdio:['ignore','pipe','pipe'] });
+      const blockedExit = once(blocked, 'exit');
+      const result = await Promise.race([blockedExit.then(code => `exit:${code}`), sleep(6000).then(() => 'running')]);
+      if (result === 'running') blocked.kill();
+      assert.ok(probe.exitCode === null, 'the owner process is never signalled');
+      fs.unlinkSync(lockFile);
+      log('matching creation time keeps DAEMON_RUNNING and never signals the owner');
+    } else console.log('SKIP matching-identity check — process table unavailable');
+  } finally { probe.kill(); }
 }
 const deadline = setTimeout(() => { console.error('FAIL backend smoke exceeded 150 seconds'); shuttingDown = true; client?.close(); for (const socket of sockets) socket.destroy(); daemon?.kill(); process.exit(1); }, 150000);
 run().then(async () => {
