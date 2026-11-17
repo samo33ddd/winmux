@@ -122,7 +122,7 @@ function discoveryResponder({ installed, running, agents = {}, explicitCommand, 
   };
 }
 
-test('discovery probes only running distributions and keeps stopped availability unknown', async t => {
+test('discovery never probes inside a WSL distribution', async t => {
   const fixture = loadEnvironment(discoveryResponder({
     installed: ['Ubuntu', 'Debian'],
     running: ['Ubuntu'],
@@ -140,12 +140,12 @@ test('discovery probes only running distributions and keeps stopped availability
   assert.ok(wslCalls.some(call => call.args.join(' ') === '--list --quiet'));
   assert.ok(wslCalls.some(call => call.args.join(' ') === '--list --running --quiet'));
   const probes = wslCalls.filter(call => call.args.includes('--exec'));
-  assert.equal(probes.length, 1);
-  assert.equal(probes[0].args[probes[0].args.indexOf('--distribution') + 1], 'Ubuntu');
+  assert.equal(probes.length, 0, 'discovery never probes inside a distribution');
 
-  assert.equal(discovered.agents.find(agent => agent.id === 'wsl:Ubuntu:claude').available, true);
-  assert.equal(discovered.agents.find(agent => agent.id === 'wsl:Ubuntu:codex').available, false);
   for (const name of ['claude', 'codex', 'hermes', 'omp', 'pi']) {
+    const running = discovered.agents.find(agent => agent.id === `wsl:Ubuntu:${name}`);
+    assert.equal(running.available, null);
+    assert.equal(running.command, null);
     const stopped = discovered.agents.find(agent => agent.id === `wsl:Debian:${name}`);
     assert.equal(stopped.available, null);
     assert.equal(stopped.command, null);
