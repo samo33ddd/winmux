@@ -14,6 +14,7 @@ export interface TaskCreateValues {
   primaryBranch: string;
   profileId: string;
   agentId?: string;
+  agentHooks?: boolean;
   mode: TaskMode;
   worktreePath?: string;
 }
@@ -27,6 +28,7 @@ export interface TaskRepoInspection {
 
 export interface TaskDialogProps {
   environment: Environment;
+  defaultAgentHooks?: boolean;
   onClose(): void;
   onCreate(values: TaskCreateValues): Promise<void>;
   onInspect(request: { cwd: string; profileId: string }): Promise<TaskRepoInspection>;
@@ -34,7 +36,7 @@ export interface TaskDialogProps {
 
 const emptyInspection: TaskRepoInspection = { root: '', branches: [], primary: '', worktrees: [] };
 
-export function TaskDialog({ environment, onClose, onCreate, onInspect }: TaskDialogProps) {
+export function TaskDialog({ environment, defaultAgentHooks = true, onClose, onCreate, onInspect }: TaskDialogProps) {
   const initial = environment.profiles.find(profile => profile.available !== false);
   const [profileId, setProfileId] = useState(initial?.id ?? '');
   const [agentId, setAgentId] = useState('');
@@ -49,6 +51,8 @@ export function TaskDialog({ environment, onClose, onCreate, onInspect }: TaskDi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const profile = environment.profiles.find(item => item.id === profileId);
+  const agent = environment.agents?.find(item => item.id === agentId);
+  const hooksSupported = Boolean(agent) && (agent?.hookAdapter ? environment.capabilities?.sessionAgentHooks === true : agent?.environment === 'windows' && environment.capabilities?.projectAgentHooks === true);
   const wsl = profile?.environment === 'wsl';
 
   useEffect(() => { setInspected(false); setInspection(emptyInspection); setBaseBranch(''); setPrimaryBranch(''); setWorktreePath(''); }, [directory, profileId]);
@@ -81,7 +85,7 @@ export function TaskDialog({ environment, onClose, onCreate, onInspect }: TaskDi
       event.preventDefault(); if (!ready || !profile) return;
       setBusy(true); setError('');
       try {
-        await onCreate({ projectDirectory: directory.trim(), name: name.trim(), baseBranch, primaryBranch, profileId, ...(agentId ? { agentId } : {}), mode, ...(mode === 'attach' ? { worktreePath } : {}) });
+        await onCreate({ projectDirectory: directory.trim(), name: name.trim(), baseBranch, primaryBranch, profileId, ...(agentId ? { agentId } : {}), agentHooks: Boolean(defaultAgentHooks && hooksSupported), mode, ...(mode === 'attach' ? { worktreePath } : {}) });
         onClose();
       } catch (caught) { setError(errorMessage(caught)); }
       finally { setBusy(false); }

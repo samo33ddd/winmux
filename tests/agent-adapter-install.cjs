@@ -8,6 +8,7 @@ const { test } = require('node:test');
 const { spawnSync } = require('node:child_process');
 const {
   installAgentHooks,
+  installProjectAgentHooks,
   CLAUDE_EVENTS,
   CLAUDE_OWNED_STATUS,
   HERMES_HOOKS,
@@ -42,6 +43,29 @@ function decodeCommand(command) {
 function removeAll(directories) {
   for (const directory of directories) fs.rmSync(directory, { recursive: true, force: true });
 }
+
+test('installs a project adapter without a live workspace and repeats cleanly', async t => {
+  const root = temp('winmux-project-adapter-');
+  const dataDir = temp('winmux-project-adapter-data-');
+  t.after(() => removeAll([root, dataDir]));
+  const first = await installProjectAgentHooks({
+    projectRoot: root,
+    dataDir,
+    agent: 'pi',
+    nodePath: process.execPath,
+  });
+  assert.equal(first.status, 'installed');
+  assert.equal(first.workspaceId, undefined);
+  assert.ok(fs.existsSync(path.join(root, '.pi', 'extensions', 'winmux-status.ts')));
+  assert.ok(fs.existsSync(path.join(dataDir, 'hooks', 'winmux-agent-event.cjs')));
+  const second = await installProjectAgentHooks({
+    projectRoot: root,
+    dataDir,
+    agent: 'pi',
+    nodePath: process.execPath,
+  });
+  assert.equal(second.status, 'unchanged');
+});
 
 test('installed adapters actually load their embedded configuration at runtime', async t => {
   const root = temp('winmux-adapter-runtime-');

@@ -8,6 +8,7 @@ const { randomUUID } = require('node:crypto');
 const { fail, string } = require('./shared.cjs');
 const { selectedAgent, shellArgs } = require('./shell-integration.cjs');
 const { withSessionHooks } = require('./agent-hooks.cjs');
+const { installProjectAgentHooks } = require('../agent-hooks-install.cjs');
 const { taskInstructionArgs } = require('./task-instructions.cjs');
 const execFileAsync = promisify(execFile); // Argument arrays only; no shell interpolation.
 const agentNames = ['claude', 'codex', 'hermes', 'omp', 'pi'];
@@ -96,7 +97,7 @@ async function discover() {
       agents.push(wslAgent(profile, name, Boolean(command), command));
     }
   }
-  return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { paneMove: true, terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, nativeCodex: true, ompHooks: true, agentActivity: true, projectTasks: true, protocolVersion: 3 } };
+  return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { paneMove: true, terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, projectAgentHooks: true, nativeCodex: true, ompHooks: true, agentActivity: true, projectTasks: true, protocolVersion: 3 } };
 }
 async function validateLaunch(environment, profileId, requestedCwd, agentId, agentHooks, hookContext, taskId) {
   const profile = environment.profiles.find(p => p.id === profileId);
@@ -112,7 +113,20 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
     pipeName: hookContext?.pipeName,
     ...(taskId === undefined ? {} : { taskId }),
   };
-  const prepare = () => selected && withSessionHooks(selected, profile, agentHooks === true, context);
+  const prepare = () => selected && withSessionHooks(selected, profile, agentHooks === true && Boolean(selected.hookAdapter), context);
+  const ensureProjectHooks = async agent => {
+    if (agentHooks !== true || !agent || agent.hookAdapter || profile.environment !== 'windows') return;
+    try {
+      await installProjectAgentHooks({
+        projectRoot: cwd,
+        dataDir: hookContext?.dataDir,
+        agent: agent.id.split(':').pop(),
+        helperRoot: path.join(__dirname, '..', 'hooks'),
+      });
+    } catch (error) {
+      console.warn(`Winmux ${agent.id} status hooks were not installed: ${error.message}`);
+    }
+  };
   const fields = agent => agent ? {
     agentId: agent.id, agentLabel: agent.label || agent.id, agentLaunchId,
     agentSessionHooks: agent.sessionHooks === true, hookArtifacts: agent.hookArtifacts, cleanupHooks: agent.cleanupHooks,
@@ -147,6 +161,7 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
   try { if (!fs.statSync(cwd).isDirectory()) throw new Error('not directory'); fs.accessSync(cwd, fs.constants.R_OK); }
   catch { fail('INVALID_CWD', `Directory does not exist or is inaccessible: ${cwd}`); }
   const agent = prepare();
+  await ensureProjectHooks(agent);
   return { paneId, profile, cwd: path.resolve(cwd), ...fields(agent), spawnCwd: path.resolve(cwd), args: argsFor(agent) };
 }
 module.exports = { discover, validateLaunch, executable, taskInstructionArgs };

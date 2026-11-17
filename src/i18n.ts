@@ -69,7 +69,7 @@ const english: Record<string, string> = {
   'Для новых вкладок и запуска агентов требуется обновление сессии.': 'New tabs and agent launch require a session upgrade.',
   'Текущие терминалы продолжают работать. Когда будете готовы, завершите все сессии и откройте Winmux снова. Закрытие окна или перезагрузка интерфейса не обновляет фоновый процесс.': 'Existing terminals remain usable. When ready, end all sessions and reopen Winmux. Closing the window or reloading the interface does not update the background process.',
   'Хуки статуса агента': 'Agent status hooks',
-  'Хуки только для этого запуска поддерживаемого агента. Глобальные настройки не изменяются.': 'Per-session hooks for supported agents only. Global settings are not overwritten.',
+  'Codex и Claude используют хуки только для этого запуска. OMP, Pi и Hermes получают локальный адаптер проекта. Глобальные настройки не изменяются.': 'Codex and Claude use per-session hooks. OMP, Pi and Hermes get a project-local adapter. Global settings are not changed.',
   'Агент': 'Agent',
   'Только терминал': 'Terminal only',
   ' — не установлен': ' — not installed',

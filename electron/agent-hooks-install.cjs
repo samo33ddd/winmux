@@ -447,6 +447,93 @@ function requireWindowsWorkspace(clientState, environment, params) {
   return workspace;
 }
 
+async function installProjectAgentHooks(params) {
+  const allowed = ['projectRoot', 'dataDir', 'agent', 'nodePath', 'helperRoot', 'hermesHome'];
+  if (!params || typeof params !== 'object' || Array.isArray(params)
+    || Object.keys(params).some(key => !allowed.includes(key))
+    || typeof params.projectRoot !== 'string' || typeof params.dataDir !== 'string'
+    || !SUPPORTED_AGENTS.has(params.agent)) {
+    fail('INVALID_ARGUMENT', 'Expected projectRoot, dataDir and a supported agent.');
+  }
+  const project = assertContained(params.projectRoot, params.projectRoot, 'Project');
+  const data = assertContained(params.dataDir, params.dataDir, 'Winmux data directory');
+  const nodePath = stableNode(params.nodePath);
+  const helperRoot = path.resolve(params.helperRoot || path.join(__dirname, 'hooks'));
+  const agent = params.agent;
+
+  if (agent === 'omp' || agent === 'pi') {
+    const helperName = agent === 'omp' ? 'winmux-omp-hook.cjs' : 'winmux-agent-event.cjs';
+    const helperPathTarget = path.join(data.root, 'hooks', helperName);
+    const prepared = agent === 'omp'
+      ? prepareOmpExtension(project.root, helperRoot, helperPathTarget, nodePath, data.root)
+      : preparePiExtension(project.root, helperRoot, helperPathTarget, nodePath, data.root);
+    const helperPath = agent === 'omp'
+      ? installOmpHelper(data.root, helperRoot)
+      : installGenericHelper(data.root, helperRoot);
+    const installed = agent === 'omp'
+      ? installPreparedOmpExtension(prepared)
+      : installPreparedExtension(prepared, 'winmux-pi', 'The Pi Winmux extension is not a regular file.');
+    return {
+      status: installed.status,
+      agent,
+      configPath: installed.configPath,
+      extensionPath: installed.configPath,
+      helperPath,
+      requiresTrustReview: false,
+      requiresRestart: true,
+    };
+  }
+
+  if (agent === 'hermes') {
+    const home = resolveHermesHome({ hermesHome: params.hermesHome });
+    const homeStat = fs.lstatSync(home, { throwIfNoEntry: false });
+    if (!homeStat) fail('NOT_FOUND', 'Hermes profile directory was not found.');
+    if (!homeStat.isDirectory() || homeStat.isSymbolicLink()) fail('UNSAFE_PATH', 'Hermes profile is not a real directory.');
+    const pluginDir = assertContained(home, path.join(home, 'plugins', 'winmux-status'), 'Hermes plugin directory');
+    assertHermesPluginSafe(home, pluginDir.target);
+    const helperPath = installGenericHelper(data.root, helperRoot);
+    const installed = installHermesPlugin(home, helperRoot, {
+      dataDir: data.root,
+      helperPath,
+      nodePath,
+    });
+    return {
+      status: installed.status,
+      agent: 'hermes',
+      configPath: installed.configPath,
+      pluginPath: path.dirname(installed.configPath),
+      helperPath,
+      requiresTrustReview: false,
+      requiresEnable: true,
+      enableCommand: 'hermes plugins enable winmux-status',
+      requiresRestart: true,
+      ...(installed.backupPaths ? { backupPaths: installed.backupPaths } : {}),
+    };
+  }
+
+  const generic = agent === 'claude';
+  const projectDirName = generic ? '.claude' : '.codex';
+  const configName = generic ? 'settings.local.json' : 'hooks.json';
+  const marker = generic ? 'winmux-claude-hook' : MARKER;
+  const projectDir = assertContained(project.root, path.join(project.root, projectDirName), `${generic ? 'Claude' : 'Codex'} project directory`);
+  const configPath = path.join(projectDir.target, configName);
+  const helperPath = generic ? installGenericHelper(data.root, helperRoot) : installHelper(data.root, helperRoot);
+  const command = commandFor(nodePath, helperPath, data.root, generic ? 'claude' : undefined);
+  const current = readConfig(configPath, generic ? 'Claude settings.local.json' : 'Codex hooks.json');
+  const merged = generic
+    ? mergeCommandHooks(current.value, command, CLAUDE_EVENTS, CLAUDE_OWNED_STATUS, 'Claude')
+    : mergeHooks(current.value, command);
+  const written = installMergedJson(projectDir.target, configName, current, merged, marker);
+  return {
+    status: written.status,
+    agent,
+    configPath,
+    helperPath,
+    ...(written.backupPath ? { backupPath: written.backupPath } : {}),
+    requiresTrustReview: true,
+  };
+}
+
 async function installAgentHooks(client, params, options = {}) {
   const allowed = ['workspaceId', 'agent', 'paneId', 'hermesHome'];
   if (!params || typeof params !== 'object' || Array.isArray(params)
@@ -463,93 +550,21 @@ async function installAgentHooks(client, params, options = {}) {
   const state = await client.request('state');
   const environment = await client.request('environment');
   const workspace = requireWindowsWorkspace(state, environment, params);
-  const project = assertContained(workspace.cwd, workspace.cwd, 'Workspace');
-  const data = assertContained(options.dataDir, options.dataDir, 'Winmux data directory');
-  const nodePath = stableNode(options.nodePath);
-  const helperRoot = path.resolve(options.helperRoot || path.join(__dirname, 'hooks'));
   const pane = params.paneId ? { paneId: params.paneId } : {};
-
-  if (params.agent === 'omp' || params.agent === 'pi') {
-    const helperName = params.agent === 'omp' ? 'winmux-omp-hook.cjs' : 'winmux-agent-event.cjs';
-    const helperPathTarget = path.join(data.root, 'hooks', helperName);
-    const prepared = params.agent === 'omp'
-      ? prepareOmpExtension(project.root, helperRoot, helperPathTarget, nodePath, data.root)
-      : preparePiExtension(project.root, helperRoot, helperPathTarget, nodePath, data.root);
-    const helperPath = params.agent === 'omp'
-      ? installOmpHelper(data.root, helperRoot)
-      : installGenericHelper(data.root, helperRoot);
-    const installed = params.agent === 'omp'
-      ? installPreparedOmpExtension(prepared)
-      : installPreparedExtension(prepared, 'winmux-pi', 'The Pi Winmux extension is not a regular file.');
-    return {
-      status: installed.status,
-      agent: params.agent,
-      workspaceId: workspace.id,
-      ...pane,
-      configPath: installed.configPath,
-      extensionPath: installed.configPath,
-      helperPath,
-      requiresTrustReview: false,
-      requiresRestart: true,
-    };
-  }
-
-  if (params.agent === 'hermes') {
-    const home = resolveHermesHome(options);
-    const homeStat = fs.lstatSync(home, { throwIfNoEntry: false });
-    if (!homeStat) fail('NOT_FOUND', 'Hermes profile directory was not found.');
-    if (!homeStat.isDirectory() || homeStat.isSymbolicLink()) fail('UNSAFE_PATH', 'Hermes profile is not a real directory.');
-    const pluginDir = assertContained(home, path.join(home, 'plugins', 'winmux-status'), 'Hermes plugin directory');
-    assertHermesPluginSafe(home, pluginDir.target);
-    const helperPath = installGenericHelper(data.root, helperRoot);
-    const installed = installHermesPlugin(home, helperRoot, {
-      dataDir: data.root,
-      helperPath,
-      nodePath,
-    });
-    return {
-      status: installed.status,
-      agent: 'hermes',
-      workspaceId: workspace.id,
-      ...pane,
-      configPath: installed.configPath,
-      pluginPath: path.dirname(installed.configPath),
-      helperPath,
-      requiresTrustReview: false,
-      requiresEnable: true,
-      enableCommand: 'hermes plugins enable winmux-status',
-      requiresRestart: true,
-      ...(installed.backupPaths ? { backupPaths: installed.backupPaths } : {}),
-    };
-  }
-
-  const generic = params.agent === 'claude';
-  const projectDirName = generic ? '.claude' : '.codex';
-  const configName = generic ? 'settings.local.json' : 'hooks.json';
-  const marker = generic ? 'winmux-claude-hook' : MARKER;
-  const projectDir = assertContained(project.root, path.join(project.root, projectDirName), `${generic ? 'Claude' : 'Codex'} project directory`);
-  const configPath = path.join(projectDir.target, configName);
-  const helperPath = generic ? installGenericHelper(data.root, helperRoot) : installHelper(data.root, helperRoot);
-  const command = commandFor(nodePath, helperPath, data.root, generic ? 'claude' : undefined);
-  const current = readConfig(configPath, generic ? 'Claude settings.local.json' : 'Codex hooks.json');
-  const merged = generic
-    ? mergeCommandHooks(current.value, command, CLAUDE_EVENTS, CLAUDE_OWNED_STATUS, 'Claude')
-    : mergeHooks(current.value, command);
-  const written = installMergedJson(projectDir.target, configName, current, merged, marker);
-  return {
-    status: written.status,
+  const installed = await installProjectAgentHooks({
+    projectRoot: workspace.cwd,
+    dataDir: options.dataDir,
     agent: params.agent,
-    workspaceId: workspace.id,
-    ...pane,
-    configPath,
-    helperPath,
-    ...(written.backupPath ? { backupPath: written.backupPath } : {}),
-    requiresTrustReview: true,
-  };
+    nodePath: options.nodePath,
+    helperRoot: options.helperRoot,
+    ...(options.hermesHome ? { hermesHome: options.hermesHome } : {}),
+  });
+  return { ...installed, workspaceId: workspace.id, ...pane };
 }
 
 module.exports = {
   installAgentHooks,
+  installProjectAgentHooks,
   MARKER,
   OMP_EXTENSION_MARKER,
   OMP_HELPER_MARKER,
