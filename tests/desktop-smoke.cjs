@@ -6,6 +6,7 @@ const { spawnSync, execFile } = require('node:child_process');
 const execFileAsync = require('node:util').promisify(execFile);
 const http = require('node:http');
 const {request:browserRequest} = require('../scripts/browser.cjs');
+const { connect } = require('../electron/client.cjs');
 
 const root = path.resolve(__dirname, '..');
 const artifacts = path.join(root, '.artifacts');
@@ -16,6 +17,8 @@ const dataDir = fs.mkdtempSync(path.join(artifacts, 'desktop-test-'));
 const filesDir = fs.mkdtempSync(path.join(artifacts, 'desktop-files-'));
 const env = { ...process.env, WINMUX_DATA_DIR: dataDir, WINMUX_NO_PROFILE: '1', WINMUX_TEST_MODE: '1' };
 for (const key of ['ELECTRON_RUN_AS_NODE', 'WINMUX_PIPE_NAME', 'WINMUX_PANE_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_TASK_ID', 'WINMUX_DEV_URL']) delete env[key];
+// The test process itself connects to the isolated daemon; pane-inherited
+// WINMUX_* variables must not redirect that connection to a live instance.
 for (const key of ['WINMUX_PIPE_NAME', 'WINMUX_PANE_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_TASK_ID']) delete process.env[key];
 // Agent launch is exercised with a local fixture, never a signed-in AI account.
 const fixtureBin=path.join(dataDir,'agent-fixture'); fs.mkdirSync(fixtureBin);
@@ -193,10 +196,18 @@ process.stdout.write('\\x1b[?2004hPASTE_READER_READY\\r\\n');
     await waitScreen(wslPane.id,'WSL_DESKTOP_OK');
     findings.push(`Real WSL pane verified: ${wsl.id}.`);
   } else findings.push('WSL not available; WSL verification skipped.');
-  await rpc('notify',{paneId:first.id,title:'Проверка завершена',body:'Настоящее событие через локальный API'});
+  // agent.status/agent.hook/notify are hook/CLI-only; the renderer bridge rejects them.
+  const noticesBefore = (await rpc('state')).notifications.length;
+  for (const method of ['agent.status', 'agent.hook', 'notify']) {
+    const rejection = await page.evaluate(candidate => window.winmux.call(candidate, {}).then(() => '').catch(error => String(error)), method);
+    assert.match(rejection, /Unsupported operation/, `${method} must not cross the renderer bridge`);
+  }
+  assert.equal((await rpc('state')).notifications.length, noticesBefore, 'Rejected notify must not create a notification');
+  const client = await connect({ dataDir });
+  try { await client.request('notify', { paneId:first.id, title:'Проверка завершена', body:'Настоящее событие через локальный API' }); }
+  finally { client.close(); }
   const state = await rpc('state');
-  assert(state.notifications.some(item => item.title === 'Проверка завершена'));
-  await page.waitForTimeout(350);
+  assert(state.notifications.some(item => item.title === 'Проверка завершена'), 'Daemon-pipe notify still works');
   await page.screenshot({path:path.join(artifacts,'desktop-dark.png')});
   await desktop.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(960,640));
   await page.waitForTimeout(350);
