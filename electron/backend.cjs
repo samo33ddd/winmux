@@ -138,6 +138,14 @@ function loadState(file) {
     if (!state.projects.some(project => project.id === task.projectId) || typeof task.managed !== 'boolean' || typeof task.archived !== 'boolean') fail('STATE_INVALID', 'Invalid task ownership');
     if (task.ownership && (task.ownership.taskId !== task.id || task.ownership.path !== task.cwd || task.ownership.branch !== task.branch || typeof task.ownership.marker !== 'string' || typeof task.ownership.adminDir !== 'string')) fail('STATE_INVALID', 'Invalid worktree ownership record');
     if (task.workspaceId !== undefined && !state.workspaces.some(workspace => workspace.id === task.workspaceId)) delete task.workspaceId;
+    // A persisted 'creating' phase means the daemon died between the tasks.push
+    // in task.create and workspace.create completing. Normalize it so task.open
+    // reports an actionable failure and task.archive can clean up the worktree.
+    if (task.phase === 'creating') {
+      task.phase = 'failed'; recovered = true;
+      task.error = task.error || 'Task creation was interrupted by a daemon restart; archive this task to clean up its worktree.';
+    }
+
     if (task.review !== undefined) {
       try {
         const review = normalizeTaskReview(task.review);
