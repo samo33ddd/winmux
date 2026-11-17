@@ -20,7 +20,6 @@
     "test:file-preview":"node --test tests/local-file-links.cjs && node tests/file-preview-smoke.cjs && node tests/local-file-preview-electron.cjs",
     "browser":"node scripts/browser.cjs",
     "cli":"node scripts/run-electron-node.cjs cli.cjs",
-    "rebuild":"electron-rebuild -f -w node-pty",
     "package":"npm run build && electron-builder --dir",
     "release:build":"npm run build && electron-builder --win nsis portable --x64 --publish never"
   },
@@ -40,7 +39,6 @@
     "highlight.js":"^11.11.1"
   },
   "devDependencies":{
-    "@electron/rebuild":"^4.0.0",
     "@types/node":"^24.0.0",
     "@types/react":"^19.2.0",
     "@types/react-dom":"^19.2.0",

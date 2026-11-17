@@ -5,7 +5,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 async function request(method, params = {}, options = {}) {
-  const dataDir = options.dataDir || process.env.WINMUX_DATA_DIR || path.join(process.env.LOCALAPPDATA || os.homedir(), 'Winmux');
+  const dataDir = path.resolve(options.dataDir || process.env.WINMUX_DATA_DIR || path.join(process.env.LOCALAPPDATA || os.homedir(), 'Winmux'));
   let endpoint;
   try { endpoint = JSON.parse(await fs.readFile(path.join(dataDir, 'ui-control.json'), 'utf8')); }
   catch { throw new Error('Open the Winmux desktop first; its authenticated UI service is unavailable.'); }
