@@ -232,16 +232,14 @@ function openDaemon(options = {}) {
 }
 function connectReadonly(options = {}) {
   const daemon = options.daemon || openDaemon(options);
-  let page = null;
-  const ready = () => page || daemon.refresh({ limit: 1 }).then(result => { page = result; return result; });
   return {
     listThreads: async params => {
-      page = await daemon.refresh({ cwd: params?.cwd, limit: params?.limit, cursor: params?.cursor });
+      const page = await daemon.refresh({ cwd: params?.cwd, limit: params?.limit, cursor: params?.cursor });
       return { data: page.threads, nextCursor: page.nextCursor };
     },
     listLoaded: async () => {
-      const current = await ready();
-      return { data: current.loadedThreadIds, nextCursor: null };
+      await daemon.refresh({ limit: 100, maxPages: 5 });
+      return { data: daemon.readState().loadedThreadIds, nextCursor: null };
     },
     onNotification(listener) {
       const status = payload => listener({ method: 'thread/status/changed', params: payload });
@@ -256,11 +254,11 @@ function connectReadonly(options = {}) {
   };
 }
 
-async function collectPages(read, params, limit) {
+async function collectPages(read, params, limit, maxPages = 1000) {
   const data = [];
   let cursor = null;
   const seen = new Set();
-  for (let page = 0; page < 5; page += 1) {
+  for (let page = 0; page < maxPages; page += 1) {
     const result = await read({ ...params, cursor, limit });
     if (!Array.isArray(result?.data) || (result.nextCursor != null && typeof result.nextCursor !== 'string')) {
       throw Object.assign(new Error('Codex enumeration returned an invalid page'), { code: 'INCOMPLETE_ENUMERATION' });
@@ -511,7 +509,7 @@ function createController(options = {}) {
         try {
           if (daemon && daemon.readState && daemon.readState().available === false) throw Object.assign(new Error('Codex daemon is disconnected'), { code: 'unavailable' });
           if (daemon) {
-            const page = cwds.length ? await daemon.refresh({ cwd: cwds, limit: 100, maxPages: 5 }) : { threads: [], loadedThreadIds: daemon.readState().loadedThreadIds, complete: true };
+            const page = cwds.length ? await daemon.refresh({ cwd: cwds, limit: 100, maxPages: 50 }) : { threads: [], loadedThreadIds: daemon.readState().loadedThreadIds, complete: true };
             if (page.complete === false || page.nextCursor) throw Object.assign(new Error('Codex enumeration is incomplete'), { code: 'INCOMPLETE_ENUMERATION' });
             threads = page.threads || []; loadedIds = page.loadedThreadIds || [];
           } else {

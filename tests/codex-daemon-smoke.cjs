@@ -84,11 +84,12 @@ function fixtureDaemon(respond) {
   const daemon = createCodexDaemon({
     command: 'codex',
     version: async () => ({ status: 'running', managedCodexPath: 'C:\\codex\\codex.exe', socketPath: 'C:\\codex\\control.sock' }),
-    WebSocket: class {
+    WebSocket: class extends FakeSocket {
       constructor(_url, options) {
-        socket = new FakeSocket();
+        super();
+        socket = this;
         if (respond) {
-          socket.respond = message => {
+          this.respond = message => {
             const result = respond(message);
             if (result === undefined) FakeSocket.prototype.respond.call(socket, message);
             else socket.emit('message', JSON.stringify({ id: message.id, result }));
@@ -96,7 +97,6 @@ function fixtureDaemon(respond) {
         }
         options.createConnection();
         queueMicrotask(() => socket.emit('open'));
-        return socket;
       }
     },
     createTransport: () => ({ stream: {}, close() {}, onClose() {} }),
@@ -249,12 +249,11 @@ test('a batch shim resolves the managed executable without spawning the proxy di
   const client = await connectReadonly({
     command: 'C:\\npm\\codex.cmd',
     version: async () => version,
-    WebSocket: class {
+    WebSocket: class extends FakeSocket {
       constructor(_url, options) {
-        const socket = new FakeSocket();
+        super();
         options.createConnection();
-        queueMicrotask(() => socket.emit('open'));
-        return socket;
+        queueMicrotask(() => this.emit('open'));
       }
     },
     createTransport(target) {
@@ -264,7 +263,7 @@ test('a batch shim resolves the managed executable without spawning the proxy di
   });
   assert.equal(calls[0].command, version.managedCodexPath);
   assert.equal(calls[0].socketPath, version.socketPath);
-  assert.deepEqual(parseDaemonVersion('noise\n' + JSON.stringify(version) + '\n'), version);
+  assert.deepEqual(parseDaemonVersion(`noise\n${JSON.stringify(version)}\n`), version);
   assert.throws(() => parseDaemonVersion({ status: 'stopped', managedCodexPath: version.managedCodexPath }), error => error.code === 'unavailable');
   client.close();
 });
@@ -319,14 +318,14 @@ for (const method of ['thread/list', 'thread/loaded/list']) {
           pages += 1;
           const data = method === 'thread/list' ? [rootThread('root-a')] : ['root-a'];
           if (failure === 'invalid-data') return { data: null, nextCursor: null };
-          const nextCursor = failure === 'incomplete' ? `page-${pages}` : failure === 'cyclic' ? 'repeated-page' : { page: 2 };
+          const nextCursor = { incomplete: `page-${pages}`, cyclic: 'repeated-page' }[failure] ?? { page: 2 };
           return { data, nextCursor };
         }
         if (message.method === 'thread/list') return { data: [rootThread('root-a')], nextCursor: null };
         if (message.method === 'thread/loaded/list') return { data: ['root-a'], nextCursor: null };
       });
       await controller.refresh();
-      assert.equal(pages, failure === 'incomplete' ? 5 : failure === 'cyclic' ? 2 : 1);
+      assert.equal(pages, { incomplete: 50, cyclic: 2 }[failure] ?? 1);
       assert.equal(controller.status().connection, 'disconnected');
       assert.deepEqual(controller.status().threads, []);
       assert.equal(panes[0].agentThreadId, undefined);

@@ -407,7 +407,7 @@ function createCodexDaemon(options = {}) {
     const cwd = query.cwd == null ? undefined : Array.isArray(query.cwd) ? query.cwd : [query.cwd];
     if (cwd && cwd.some(value => typeof value !== 'string' || !value)) throw unavailable('Codex thread cwd filter is invalid');
     const pageLimit = Number.isInteger(query.maxPages) ? query.maxPages : 5;
-    if (pageLimit < 1 || pageLimit > 5) throw unavailable('Codex thread enumeration exceeds its page limit');
+    if (pageLimit < 1 || pageLimit > 50) throw unavailable('Codex thread enumeration exceeds its page limit');
     async function enumerate(method, params) {
       const seenCursors = new Set();
       const data = [];
@@ -454,9 +454,13 @@ function createCodexDaemon(options = {}) {
       ...(params.useStateDbOnly == null ? {} : { useStateDbOnly: params.useStateDbOnly === true }),
     }, currentGeneration);
     rejectStale(currentGeneration);
+    if (!Array.isArray(result?.data)
+      || (result.nextCursor != null && typeof result.nextCursor !== 'string')) {
+      throw unavailable('Codex enumeration returned an invalid page');
+    }
     const data = method === 'thread/list'
-      ? (result?.data || []).map(thread => publicThread(thread, loadedIds, completedThreadIds)).filter(Boolean)
-      : (result?.data || []).filter(id => typeof id === 'string');
+      ? result.data.map(thread => publicThread(thread, loadedIds, completedThreadIds)).filter(Boolean)
+      : result.data.filter(id => typeof id === 'string');
     if (method === 'thread/loaded/list') {
       loadedIds.clear();
       for (const id of data) loadedIds.add(id);

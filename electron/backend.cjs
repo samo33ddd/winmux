@@ -626,7 +626,7 @@ async function startServer(options = {}) {
         const profileId = params.profileId ?? source.profileId;
         const task = state.tasks.find(item => item.workspaceId === workspace.id && !item.archived);
         const launch = await validateLaunch(environment, profileId, params.cwd ?? (profileId === source.profileId ? source.cwd : undefined), params.agentId, params.agentHooks, { dataDir: loc.dataDir, pipeName: loc.pipeName }, task && task.agentId === params.agentId ? task.id : undefined);
-        if (task) launch.taskId = task.id;
+        if (task && task.agentId === params.agentId) launch.taskId = task.id;
         const pane = makePane(launch);
         const tab = { id: randomUUID(), title: requestedTitle || tabTitle(workspace, launch.agentLabel || launch.profile.label), titleMode, root: { type: 'leaf', paneId: pane.id } }; pane.tabId = tab.id;
         spawnPane(pane, launch); workspace.panes.push(pane); workspace.tabs.push(tab); workspace.activeTabId = tab.id;
@@ -649,7 +649,7 @@ async function startServer(options = {}) {
         const profileId = params.profileId ?? source.profileId;
         const task = state.tasks.find(item => item.workspaceId === workspace.id && !item.archived);
         const launch = await validateLaunch(environment, profileId, params.cwd ?? (profileId === source.profileId ? source.cwd : undefined), params.agentId, params.agentHooks, { dataDir: loc.dataDir, pipeName: loc.pipeName }, task && task.agentId === params.agentId ? task.id : undefined);
-        if (task) launch.taskId = task.id;
+        if (task && task.agentId === params.agentId) launch.taskId = task.id;
         const pane = makePane(launch); pane.tabId = tab.id; spawnPane(pane, launch);
         tab.root = replaceLeaf(tab.root, source.id, { type: 'split', id: randomUUID(), direction: params.direction, ratio: 0.5, first: { type: 'leaf', paneId: source.id }, second: { type: 'leaf', paneId: pane.id } });
         workspace.panes.push(pane); syncTabs(workspace); changed(); return structuredClone(pane);
