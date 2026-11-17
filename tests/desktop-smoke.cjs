@@ -429,10 +429,13 @@ process.stdout.write('\\x1b[?2004hPASTE_READER_READY\\r\\n');
   await page.locator('.local-file-link-tooltip').waitFor();
   assert.match(await page.locator('.local-file-link-tooltip').innerText(),/terminal preview\.png/);
   const windowCount = await desktop.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().length);
-  await page.mouse.click(
-    screenBox.x + (imageColumn + 2) * (screenBox.width / previewPane.cols),
-    screenBox.y + (imageRow + 0.5) * (screenBox.height / previewPane.rows),
-  );
+  await page.keyboard.down('Control');
+  try {
+    await page.mouse.click(
+      screenBox.x + (imageColumn + 2) * (screenBox.width / previewPane.cols),
+      screenBox.y + (imageRow + 0.5) * (screenBox.height / previewPane.rows),
+    );
+  } finally { await page.keyboard.up('Control'); }
   await page.getByTestId('local-file-image').waitFor();
   assert((await page.getByTestId('local-file-image').evaluate(image => image.naturalWidth)) > 0);
   await page.keyboard.press('Escape');

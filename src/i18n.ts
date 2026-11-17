@@ -275,6 +275,7 @@ const english: Record<string, string> = {
   '{0} Б': '{0} B',
   'Размер панелей': 'Pane size',
   'Открыть в Winmux: {0}': 'Open in Winmux: {0}',
+  'Ctrl+Click — открыть в Winmux: {0}': 'Ctrl+Click to open in Winmux: {0}',
   'Вписать изображение': 'Fit image to window',
   'Показать изображение в масштабе 100%': 'Show image at 100%',
   'Двоичный файл ({0}). Предпросмотр в приложении недоступен.': 'Binary file ({0}). In-app preview is unavailable.',
