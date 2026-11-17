@@ -79,7 +79,7 @@ export function TaskDialog({ environment, defaultAgentHooks = true, onClose, onC
     finally { setBusy(false); }
   }
 
-  const ready = Boolean(profile && profile.available !== false && agentId && primaryBranch && directory.trim() && name.trim() && (mode === 'new' ? baseBranch : worktreePath));
+  const ready = Boolean(profile && profile.available !== false && primaryBranch && directory.trim() && name.trim() && (mode === 'new' ? baseBranch : worktreePath));
   return <Modal title={t('Новая задача')} onClose={onClose} busy={busy} className="task-dialog">
     <form data-testid="task-dialog-form" onSubmit={async event => {
       event.preventDefault(); if (!ready || !profile) return;

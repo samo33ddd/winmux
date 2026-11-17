@@ -441,6 +441,20 @@ app.whenReady().then(() => {
     await client.request('task.archive', {taskId:recoveredTask.id});
     await assert.rejects(client.request('task.create', attachParams), {code:'ALREADY_EXISTS'});
     console.log('PASS interrupted attach: archive preserves worktree and allows a new task attachment');
+    // #58: a task with no agent is a plain terminal workspace — no agent identity, no hooks.
+    const terminalOnly = await client.request('task.create', { projectDirectory:taskRepo, profileId:'powershell', name:'Terminal only', baseBranch:'main', primaryBranch:'main', mode:'new' });
+    assert(terminalOnly.panes.length, 'terminal-only task creates a workspace');
+    const terminalOnlyTask = (await client.request('state')).tasks.find(task => task.workspaceId === terminalOnly.id);
+    assert(terminalOnlyTask && terminalOnlyTask.agentId === undefined, 'no agentId is stored on a terminal-only task');
+    assert.equal(terminalOnlyTask.deliverySupport, 'unsupported');
+    assert.equal(terminalOnly.panes[0].agentId, undefined);
+    assert.equal(terminalOnly.panes[0].agentState, 'unknown');
+    await client.request('workspace.close', { workspaceId:terminalOnly.id });
+    const reopenedTerminalOnly = await client.request('task.open', { taskId:terminalOnlyTask.id });
+    assert.equal(reopenedTerminalOnly.panes[0].agentId, undefined);
+    await client.request('workspace.close', { workspaceId:reopenedTerminalOnly.id });
+    console.log('PASS terminal-only task.create and task.open produce a plain terminal workspace');
+
     // #65: an incompatible hook shell is a pre-flight rejection, before any
     // project/task mutation or worktree creation.
     const tasksBefore = (await client.request('state')).tasks.length;
