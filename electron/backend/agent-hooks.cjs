@@ -3,13 +3,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { fail } = require('./shared.cjs');
 const { validTaskId } = require('./task-instructions.cjs');
+const { AGENTS } = require('./agent-registry.cjs');
 
 const psQuote = value => `'${value.replace(/'/g, "''")}'`;
 const shQuote = value => `'${value.replace(/'/g, "'\\''")}'`;
 const wslPath = value => /^[A-Za-z]:[\\/]/.test(value) ? '/mnt/' + value[0].toLowerCase() + value.slice(2).replace(/\\/g, '/') : value;
 // Forward Node mode through WSL interop only for this helper invocation.
 const wslNodeEnv = 'ELECTRON_RUN_AS_NODE=1 WSLENV="${WSLENV:+$WSLENV:}ELECTRON_RUN_AS_NODE"';
-const CODEX_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Stop', 'Interrupt'];
+const CODEX_EVENTS = AGENTS.codex.sessionHookEvents;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 function completeHookContext(context) {

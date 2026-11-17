@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const { locations } = require('./backend/shared.cjs');
+const { AGENTS, AGENT_IDS } = require('./backend/agent-registry.cjs');
 
 const MARKER = 'winmux-codex-hook';
 const OMP_EXTENSION_MARKER = 'winmux-omp-extension';
@@ -13,22 +14,13 @@ const OMP_HELPER_MARKER = 'winmux-omp-hook';
 const GENERIC_HELPER_MARKER = 'winmux-agent-event';
 const PI_EXTENSION_MARKER = 'winmux-pi-extension';
 const HERMES_PLUGIN_MARKER = 'winmux-hermes-plugin';
-const OWNED_STATUS = 'Winmux Codex activity [winmux-owned]';
-const CLAUDE_OWNED_STATUS = 'Winmux Claude activity [winmux-owned]';
-const EVENTS = Object.freeze([
-  'SessionStart', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'UserPromptSubmit',
-  'PreModelRequest', 'PostModelRequest', 'Stop', 'Interrupt', 'SessionEnd',
-]);
-const CLAUDE_EVENTS = Object.freeze([
-  'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest',
-  'PostToolUse', 'PostToolUseFailure', 'Stop', 'StopFailure', 'SessionEnd',
-]);
-const HERMES_HOOKS = Object.freeze([
-  'on_session_open', 'on_session_reset', 'on_session_finalize', 'pre_llm_call',
-  'pre_tool_call', 'post_tool_call', 'on_session_end', 'subagent_start',
-  'subagent_stop', 'on_human_input_request', 'on_human_input_resolved',
-]);
-const SUPPORTED_AGENTS = new Set(['codex', 'omp', 'claude', 'pi', 'hermes']);
+const OWNED_STATUS = AGENTS.codex.install.ownedStatus;
+const CLAUDE_OWNED_STATUS = AGENTS.claude.install.ownedStatus;
+const EVENTS = AGENTS.codex.hookEvents;
+const CLAUDE_EVENTS = AGENTS.claude.hookEvents;
+const HERMES_HOOKS = AGENTS.hermes.hookEvents;
+const SUPPORTED_AGENTS = new Set(AGENT_IDS);
+const SUPPORTED_AGENT_LABELS = `${AGENT_IDS.map(id => AGENTS[id].label).join(', ')}`.replace(/, ([^,]*)$/, ', or $1');
 
 function fail(code, message) {
   throw Object.assign(new Error(message), { code });
@@ -187,42 +179,16 @@ function installMarkedFile(directory, fileName, source, marker, unsafeCode, unsa
   return target;
 }
 
-function installHelper(dataDir, helperRoot) {
+function installHelper(dataDir, helperRoot, spec) {
   const root = assertContained(dataDir, path.join(dataDir, 'hooks'), 'Winmux hook directory').target;
   return installMarkedFile(
     root,
-    'winmux-agent-hook.cjs',
-    path.join(helperRoot, 'winmux-agent-hook.cjs'),
-    MARKER,
+    spec.helper,
+    path.join(helperRoot, spec.helper),
+    spec.helperMarker,
     'HELPER_UNSAFE',
     'The installed Winmux hook helper is not a regular file.',
     'An unrelated file already occupies the Winmux hook helper path.',
-  );
-}
-
-function installOmpHelper(dataDir, helperRoot) {
-  const root = assertContained(dataDir, path.join(dataDir, 'hooks'), 'Winmux OMP hook directory').target;
-  return installMarkedFile(
-    root,
-    'winmux-omp-hook.cjs',
-    path.join(helperRoot, 'winmux-omp-hook.cjs'),
-    OMP_HELPER_MARKER,
-    'HELPER_UNSAFE',
-    'The installed Winmux OMP hook helper is not a regular file.',
-    'An unrelated file already occupies the Winmux OMP hook helper path.',
-  );
-}
-
-function installGenericHelper(dataDir, helperRoot) {
-  const root = assertContained(dataDir, path.join(dataDir, 'hooks'), 'Winmux generic hook directory').target;
-  return installMarkedFile(
-    root,
-    'winmux-agent-event.cjs',
-    path.join(helperRoot, 'winmux-agent-event.cjs'),
-    GENERIC_HELPER_MARKER,
-    'HELPER_UNSAFE',
-    'The installed Winmux agent event helper is not a regular file.',
-    'An unrelated file already occupies the Winmux agent event helper path.',
   );
 }
 
@@ -242,42 +208,24 @@ function prepareConfiguredExtension(projectRoot, relativeDir, fileName, helperRo
   return { extensionDir, target, content: template.replace('__WINMUX_CONFIG_B64__', encoded) };
 }
 
-function prepareOmpExtension(projectRoot, helperRoot, helperPath, nodePath, dataDir, pipeName) {
+function prepareAgentExtension(projectRoot, helperRoot, helperPath, nodePath, dataDir, pipeName, agent) {
+  const spec = AGENTS[agent].install;
+  const label = AGENTS[agent].label;
   return prepareConfiguredExtension(
     projectRoot,
-    ['.omp', 'extensions'],
-    'winmux-status.ts',
+    spec.extensionDir,
+    spec.extensionFile,
     helperRoot,
-    'winmux-omp-extension.mjs',
-    OMP_EXTENSION_MARKER,
+    spec.template,
+    spec.marker,
     { dataDir, helperPath, nodePath, pipeName },
     {
-      directory: 'OMP extension directory',
+      directory: `${label} extension directory`,
       unsafeCode: 'EXTENSION_UNSAFE',
-      unsafeMessage: 'The OMP Winmux extension is not a regular file.',
-      tooLarge: 'The OMP Winmux extension exceeds 1 MiB.',
-      conflict: 'An unrelated extension already occupies the Winmux OMP extension path.',
-      invalidTemplate: 'The bundled OMP extension template is invalid.',
-    },
-  );
-}
-
-function preparePiExtension(projectRoot, helperRoot, helperPath, nodePath, dataDir, pipeName) {
-  return prepareConfiguredExtension(
-    projectRoot,
-    ['.pi', 'extensions'],
-    'winmux-status.ts',
-    helperRoot,
-    'winmux-pi-extension.mjs',
-    PI_EXTENSION_MARKER,
-    { dataDir, helperPath, nodePath, pipeName },
-    {
-      directory: 'Pi extension directory',
-      unsafeCode: 'EXTENSION_UNSAFE',
-      unsafeMessage: 'The Pi Winmux extension is not a regular file.',
-      tooLarge: 'The Pi Winmux extension exceeds 1 MiB.',
-      conflict: 'An unrelated extension already occupies the Winmux Pi extension path.',
-      invalidTemplate: 'The bundled Pi extension template is invalid.',
+      unsafeMessage: `The ${label} Winmux extension is not a regular file.`,
+      tooLarge: `The ${label} Winmux extension exceeds 1 MiB.`,
+      conflict: `An unrelated extension already occupies the Winmux ${label} extension path.`,
+      invalidTemplate: `The bundled ${label} extension template is invalid.`,
     },
   );
 }
@@ -294,10 +242,6 @@ function installPreparedExtension(prepared, stagePrefix, unsafeMessage) {
   fs.writeFileSync(stage, prepared.content, { mode: 0o644 });
   fs.renameSync(stage, prepared.target);
   return { status: existing ? 'updated' : 'installed', configPath: prepared.target };
-}
-
-function installPreparedOmpExtension(prepared) {
-  return installPreparedExtension(prepared, 'winmux-status', 'The OMP Winmux extension is not a regular file.');
 }
 
 function platformHermesHome() {
@@ -472,17 +416,12 @@ async function installProjectAgentHooks(params) {
   const pipeName = locations({ dataDir: params.dataDir, pipeName: params.pipeName }).pipeName;
 
   if (agent === 'omp' || agent === 'pi') {
-    const helperName = agent === 'omp' ? 'winmux-omp-hook.cjs' : 'winmux-agent-event.cjs';
-    const helperPathTarget = path.join(data.root, 'hooks', helperName);
-    const prepared = agent === 'omp'
-      ? prepareOmpExtension(project.root, helperRoot, helperPathTarget, nodePath, data.root, pipeName)
-      : preparePiExtension(project.root, helperRoot, helperPathTarget, nodePath, data.root, pipeName);
-    const helperPath = agent === 'omp'
-      ? installOmpHelper(data.root, helperRoot)
-      : installGenericHelper(data.root, helperRoot);
-    const installed = agent === 'omp'
-      ? installPreparedOmpExtension(prepared)
-      : installPreparedExtension(prepared, 'winmux-pi', 'The Pi Winmux extension is not a regular file.');
+    const spec = AGENTS[agent].install;
+    const label = AGENTS[agent].label;
+    const helperPathTarget = path.join(data.root, 'hooks', spec.helper);
+    const prepared = prepareAgentExtension(project.root, helperRoot, helperPathTarget, nodePath, data.root, pipeName, agent);
+    const helperPath = installHelper(data.root, helperRoot, spec);
+    const installed = installPreparedExtension(prepared, spec.stagePrefix, `The ${label} Winmux extension is not a regular file.`);
     return {
       status: installed.status,
       agent,
@@ -501,7 +440,7 @@ async function installProjectAgentHooks(params) {
     if (!homeStat.isDirectory() || homeStat.isSymbolicLink()) fail('UNSAFE_PATH', 'Hermes profile is not a real directory.');
     const pluginDir = assertContained(home, path.join(home, 'plugins', 'winmux-status'), 'Hermes plugin directory');
     assertHermesPluginSafe(home, pluginDir.target);
-    const helperPath = installGenericHelper(data.root, helperRoot);
+    const helperPath = installHelper(data.root, helperRoot, AGENTS.hermes.install);
     const installed = installHermesPlugin(home, helperRoot, {
       dataDir: data.root,
       helperPath,
@@ -523,18 +462,17 @@ async function installProjectAgentHooks(params) {
   }
 
   const generic = agent === 'claude';
-  const projectDirName = generic ? '.claude' : '.codex';
-  const configName = generic ? 'settings.local.json' : 'hooks.json';
-  const marker = generic ? 'winmux-claude-hook' : MARKER;
-  const projectDir = assertContained(project.root, path.join(project.root, projectDirName), `${generic ? 'Claude' : 'Codex'} project directory`);
-  const configPath = path.join(projectDir.target, configName);
-  const helperPath = generic ? installGenericHelper(data.root, helperRoot) : installHelper(data.root, helperRoot);
+  const spec = AGENTS[agent].install;
+  const label = AGENTS[agent].label;
+  const projectDir = assertContained(project.root, path.join(project.root, spec.projectDir), `${label} project directory`);
+  const configPath = path.join(projectDir.target, spec.configFile);
+  const helperPath = installHelper(data.root, helperRoot, spec);
   const command = commandFor(nodePath, helperPath, data.root, pipeName, generic ? 'claude' : undefined);
-  const current = readConfig(configPath, generic ? 'Claude settings.local.json' : 'Codex hooks.json');
+  const current = readConfig(configPath, `${label} ${spec.configFile}`);
   const merged = generic
-    ? mergeCommandHooks(current.value, command, CLAUDE_EVENTS, CLAUDE_OWNED_STATUS, 'Claude')
+    ? mergeCommandHooks(current.value, command, CLAUDE_EVENTS, CLAUDE_OWNED_STATUS, label)
     : mergeHooks(current.value, command);
-  const written = installMergedJson(projectDir.target, configName, current, merged, marker);
+  const written = installMergedJson(projectDir.target, spec.configFile, current, merged, spec.marker);
   return {
     status: written.status,
     agent,
@@ -553,7 +491,7 @@ async function installAgentHooks(client, params, options = {}) {
     fail('INVALID_ARGUMENT', 'Expected workspaceId and agent.');
   }
   if (!validToken(params.workspaceId, /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/)) fail('INVALID_ARGUMENT', 'Invalid workspaceId.');
-  if (!SUPPORTED_AGENTS.has(params.agent)) fail('UNSUPPORTED_AGENT', 'This Winmux release installs Codex, OMP, Claude, Pi, or Hermes hooks only.');
+  if (!SUPPORTED_AGENTS.has(params.agent)) fail('UNSUPPORTED_AGENT', `This Winmux release installs ${SUPPORTED_AGENT_LABELS} hooks only.`);
   if (params.paneId !== undefined && !validToken(params.paneId, /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/)) fail('INVALID_ARGUMENT', 'Invalid paneId.');
   if (!options.dataDir || typeof options.dataDir !== 'string') fail('INVALID_ARGUMENT', 'options.dataDir is required.');
   if (params.hermesHome !== undefined) options = { ...options, hermesHome: hermesProfilePath(params.hermesHome) };

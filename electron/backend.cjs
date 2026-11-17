@@ -13,6 +13,7 @@ const { ACTIVITY_KINDS, createActivityTracker } = require('./agent-activity.cjs'
 const { createTaskGitService, createGitExecutor } = require('./backend/task-git.cjs');
 const { createTaskDelivery, normalizeTaskReview } = require('./backend/task-delivery.cjs');
 const { deliverySupportFor } = require('./backend/task-instructions.cjs');
+const { HOOK_AGENT_IDS } = require('./backend/agent-registry.cjs');
 
 function replaceLeaf(node, paneId, replacement) {
   if (node.type === 'leaf') return node.paneId === paneId ? replacement : node;
@@ -786,7 +787,7 @@ async function startServer(options = {}) {
         const phase = params.phase;
         if (phase !== undefined && !['start', 'end'].includes(phase)) fail('INVALID_ARGUMENT', 'Invalid activity phase');
         if (agentId === 'codex') return codexController.hook({ agentId, event, sessionId, cwd, paneId, toolName, toolId, phase });
-        if (!['omp', 'claude', 'hermes', 'pi'].includes(agentId)) return { applied: false, reason: 'agent' };
+        if (!HOOK_AGENT_IDS.has(agentId)) return { applied: false, reason: 'agent' };
         const pid = params.pid === undefined ? undefined : integer(params.pid, 'pid', 1, Number.MAX_SAFE_INTEGER);
         const stamp = params.stamp === undefined ? undefined : string(params.stamp, 'stamp', 32);
         const emittedAt = params.emittedAt === undefined ? undefined : integer(params.emittedAt, 'emittedAt', 1, Number.MAX_SAFE_INTEGER);

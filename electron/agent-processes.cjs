@@ -1,5 +1,6 @@
 'use strict';
 const path = require('node:path');
+const { AGENTS } = require('./backend/agent-registry.cjs');
 
 const MAX_NODES = 64;
 const MAX_DEPTH = 8;
@@ -7,7 +8,6 @@ const SHELLS = new Set([
   'cmd.exe', 'powershell.exe', 'pwsh.exe', 'bash.exe', 'sh.exe', 'wsl.exe',
   'node.exe', 'python.exe', 'pythonw.exe', 'bun.exe', 'conhost.exe',
 ]);
-const LABELS = { codex: 'Codex', claude: 'Claude', omp: 'OMP', hermes: 'Hermes', pi: 'Pi' };
 
 function windowsPath(value) {
   return String(value || '').replace(/\//g, '\\').replace(/"/g, '').trim();
@@ -82,7 +82,7 @@ function isWrapper(proc, env) {
   return !classify(proc, env) && SHELLS.has(processName(proc));
 }
 function identity(proc, agentId) {
-  const row = { agentId, label: LABELS[agentId], pid: Number(proc.pid) };
+  const row = { agentId, label: AGENTS[agentId].label, pid: Number(proc.pid) };
   if (proc?.createdAt) row.generation = proc.createdAt;
   return row;
 }

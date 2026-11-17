@@ -1,5 +1,6 @@
 'use strict';
 
+const { agentEntry } = require('./agent-registry.cjs');
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 function validTaskId(taskId) {
@@ -18,16 +19,13 @@ function taskInstruction(taskId) {
 function taskInstructionArgs(agent, taskId) {
   if (taskId === undefined) return [];
   requireTaskId(taskId);
-  return ['claude', 'omp'].includes(agent?.id?.split(':').pop())
+  return agentEntry(agent?.id)?.deliverySupport === 'instructions'
     ? ['--append-system-prompt', taskInstruction(taskId)]
     : [];
 }
 
 function deliverySupportFor(agentId) {
-  const name = agentId === undefined ? undefined : agentId.split(':').pop();
-  if (name === 'codex') return 'hooks';
-  if (['claude', 'omp'].includes(name)) return 'instructions';
-  return 'unsupported';
+  return agentEntry(agentId)?.deliverySupport || 'unsupported';
 }
 
 function codexUserPromptSubmitOutput(taskId) {

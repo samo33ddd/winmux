@@ -2,11 +2,12 @@
 const path = require('node:path');
 const { findPrimaryAgents } = require('./agent-processes.cjs');
 const { createActivityTracker } = require('./agent-activity.cjs');
+const { AGENTS, HOOK_AGENT_IDS, HOOK_STATES, EXTENSION_EVENTS } = require('./backend/agent-registry.cjs');
 
-const STATES = new Set(['running', 'waiting', 'idle', 'completed', 'failed']);
+const STATES = new Set(HOOK_STATES);
 const SESSION_EVENTS = new Set(['session_start', 'session_switch', 'SessionStart']);
-const EXTENSION_EVENTS = new Set(['session_start', 'session_switch', 'session_shutdown', 'agent_start', 'agent_end', 'tool_execution_start', 'tool_execution_end', 'tool_approval_requested', 'tool_approval_resolved']);
-const CLAUDE_STATES = { SessionStart: 'idle', UserPromptSubmit: 'running', PreToolUse: 'running', PostToolUse: 'running', PostToolUseFailure: 'running', PermissionRequest: 'waiting', Stop: 'completed', StopFailure: 'failed', SessionEnd: 'idle' };
+const EXTENSION_EVENT_SET = new Set(EXTENSION_EVENTS);
+const CLAUDE_STATES = AGENTS.claude.eventStates;
 const cwdKey = value => typeof value === 'string' && value ? path.win32.normalize(value).replace(/[\\/]+$/, '').toLowerCase() : '';
 
 function createController(options = {}) {
@@ -74,11 +75,11 @@ function createController(options = {}) {
   }
   function hook(input) {
     const panes = options.panes?.() || [];
-    if (!input || !['omp', 'pi', 'claude', 'hermes'].includes(input.agentId)
+    if (!input || !HOOK_AGENT_IDS.has(input.agentId)
       || typeof input.sessionId !== 'string' || !input.sessionId || input.sessionId.length > 128
       || typeof input.cwd !== 'string' || !input.cwd || input.cwd.length > 4096) return { applied: false, reason: 'event' };
     const state = input.agentId === 'claude' ? CLAUDE_STATES[input.event] : input.state;
-    if (!STATES.has(state) || (input.agentId !== 'claude' && !EXTENSION_EVENTS.has(input.event))) return { applied: false, reason: 'event' };
+    if (!STATES.has(state) || (input.agentId !== 'claude' && !EXTENSION_EVENT_SET.has(input.event))) return { applied: false, reason: 'event' };
     const matches = [...records].filter(([paneId, record]) => {
       const pane = panes.find(item => item.id === paneId);
       const boundObserver = record.observer && record.observer.pid === input.pid && record.sessionId === input.sessionId;

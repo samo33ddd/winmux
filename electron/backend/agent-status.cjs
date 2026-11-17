@@ -5,21 +5,16 @@ const path = require('node:path');
 const { connect } = require('../client.cjs');
 const { LIMITS } = require('./shared.cjs');
 const { codexUserPromptSubmitOutput, validTaskId } = require('./task-instructions.cjs');
+const { AGENTS } = require('./agent-registry.cjs');
 
 function claudeState(event) {
-  if (['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(event?.hook_event_name)) return 'running';
-  if (event?.hook_event_name === 'PermissionRequest') return 'waiting';
+  const state = AGENTS.claude.eventStates[event?.hook_event_name];
+  if (state) return state;
   if (event?.hook_event_name === 'Notification' && ['permission_prompt', 'idle_prompt'].includes(event.notification_type)) return 'waiting';
-  if (event?.hook_event_name === 'Stop') return 'completed';
-  if (event?.hook_event_name === 'StopFailure') return 'failed';
   return null;
 }
 function codexState(event) {
-  if (['UserPromptSubmit', 'PreToolUse', 'PostToolUse'].includes(event?.hook_event_name)) return 'running';
-  if (['PermissionRequest', 'Interrupt'].includes(event?.hook_event_name)) return 'waiting';
-  if (event?.hook_event_name === 'Stop') return 'completed';
-  if (event?.hook_event_name === 'SessionStart') return 'idle';
-  return null;
+  return AGENTS.codex.eventStates[event?.hook_event_name] || null;
 }
 function hookActivity(event) {
   const phase = event?.hook_event_name === 'PreToolUse' ? 'start' : ['PostToolUse', 'PostToolUseFailure'].includes(event?.hook_event_name) ? 'end' : undefined;
