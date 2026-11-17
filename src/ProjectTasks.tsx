@@ -49,8 +49,9 @@ export interface ProjectTasksProps {
 
 export function ProjectTasks({ projects, onOpen, onArchive, onRefresh }: ProjectTasksProps) {
   const [showArchived, setShowArchived] = useState(false);
+  const hasArchived = projects.some(project => project.tasks.some(task => task.archived));
   return <section className="task-projects" aria-label={t('Проекты и задачи')} data-testid="project-tasks">
-    <label className="task-archive-filter"><input type="checkbox" checked={showArchived} onChange={event => setShowArchived(event.target.checked)} /> {t('Показать архив')}</label>
+    {hasArchived && <label className="task-archive-filter"><input type="checkbox" checked={showArchived} onChange={event => setShowArchived(event.target.checked)} /> {t('Показать архив')}</label>}
     {projects.map(project => {
       const tasks = project.tasks.filter(task => showArchived || !task.archived);
       return <section className="task-project" key={project.id} aria-labelledby={`project-${project.id}`}>
