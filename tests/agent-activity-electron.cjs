@@ -290,6 +290,7 @@ async function run() {
     assert.equal(taskRequests[0].agentId, 'codex');
     await page.getByTestId('projects-toggle').click();
     assert.match(await page.getByTestId('project-tasks').innerText(), /Fixture task/);
+    assert.equal(await page.locator('.task-archive-filter').count(), 0, 'An active-only task list does not show the archive filter');
     assert.match(await page.getByTestId('project-tasks').innerText(), /PR создан — проверьте статус/);
     assert.match(await page.getByTestId('project-tasks').innerText(), /Winmux UserPromptSubmit.*Codex \/hooks/);
     assert.doesNotMatch(await page.getByTestId('project-tasks').innerText(), /PR готов к слиянию/);
