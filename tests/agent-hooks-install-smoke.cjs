@@ -15,6 +15,7 @@ const { withSessionHooks, codexHookArgs } = require('../electron/backend/agent-h
 const { readContextFile } = require('../electron/backend/agent-status.cjs');
 const { shellArgs, windowsCommandLineLength } = require('../electron/backend/shell-integration.cjs');
 const { codexUserPromptSubmitOutput } = require('../electron/backend/task-instructions.cjs');
+const { validateLaunch } = require('../electron/backend/environment.cjs');
 
 function temp(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -33,6 +34,26 @@ function fixture(cwd) {
 function readHooks(root) {
   return JSON.parse(fs.readFileSync(path.join(root, '.codex', 'hooks.json'), 'utf8'));
 }
+
+test('launch-time installation prepares a non-adapter agent without session hooks', { skip: process.platform !== 'win32' }, async t => {
+  const root = temp('winmux-launch-hooks-');
+  const dataDir = temp('winmux-launch-hooks-data-');
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+  const environment = {
+    profiles: [{ id: 'powershell', label: 'PowerShell', environment: 'windows', command: process.execPath, args: [] }],
+    agents: [{ id: 'pi', label: 'pi', environment: 'windows', profileId: 'powershell', available: true, command: process.execPath }],
+    defaultCwd: root,
+  };
+  const launch = await validateLaunch(environment, 'powershell', root, 'pi', true, {
+    dataDir,
+    pipeName: '\\\\.\\pipe\\winmux-launch-hooks-test',
+  });
+  assert.equal(launch.agentSessionHooks, false);
+  assert.ok(fs.existsSync(path.join(root, '.pi', 'extensions', 'winmux-status.ts')));
+});
 
 test('merges, backups, and repeats without losing foreign hooks', async t => {
   const root = temp('winmux-hooks-project-');

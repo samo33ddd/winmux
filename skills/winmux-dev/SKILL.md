@@ -122,6 +122,16 @@ owner window or the shared Codex daemon.
 
 ### Agent lifecycle and notifications
 
+When a Windows launch has `agentHooks: true`, `validateLaunch` ensures the
+project-local adapter for OMP, Pi and Hermes before the process starts. The
+installer is the same idempotent project installer used by
+`agent.hooks.install`; it preserves foreign files and rejects symlinks and
+conflicts. An automatic installation failure is logged and must not block the
+terminal. Codex and Claude remain session-only and must not receive an automatic
+project hook. Task-created workspaces forward the same preference. WSL launches
+skip Windows project installation. Hermes installation still requires the
+explicit `hermes plugins enable winmux-status` step; never enable it silently.
+
 For Windows Codex session hooks, allocate pane/launch IDs before constructing the
 PowerShell arguments. `validateLaunch` receives the selected daemon data directory
 and pipe; per-launch `hooks/session/codex-<launchId>.json` and `.ps1` artifacts pass

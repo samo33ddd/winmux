@@ -440,12 +440,15 @@ async function startServer(options = {}) {
         const name = string(params.name, 'name', 120).trim();
         const agentId = string(params.agentId, 'agentId', 256);
         const base = string(params.baseBranch, 'baseBranch', 256);
+        if (params.agentHooks !== undefined && typeof params.agentHooks !== 'boolean') fail('INVALID_ARGUMENT', 'agentHooks must be a boolean');
         if (!['new', 'attach'].includes(params.mode)) fail('INVALID_ARGUMENT', 'Invalid task mode');
         const inspected = await dispatch('project.inspect', { cwd:params.projectDirectory, profileId });
         const primary = inspected.primary || string(params.primaryBranch, 'primaryBranch', 256);
         if (!inspected.branches.includes(primary)) fail('PRIMARY_UNAVAILABLE', 'Select an existing primary branch');
         if (!inspected.branches.includes(base)) fail('INVALID_ARGUMENT', 'Base branch must be local');
-        const agentHooks = Boolean(environment.agents?.find(agent => agent.id === agentId)?.hookAdapter);
+        const agentHooks = params.agentHooks === undefined
+          ? Boolean(environment.agents?.find(agent => agent.id === agentId)?.hookAdapter)
+          : params.agentHooks;
         await validateLaunch(environment, profileId, inspected.root, agentId, false);
         const profile = environment.profiles.find(item => item.id === profileId);
         const identity = value => {

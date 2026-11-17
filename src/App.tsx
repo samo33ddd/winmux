@@ -75,7 +75,7 @@ export default function App() {
       setPaneDrag(null);
     }
   }, [state, paneDrag, paneMoveAvailable]);
-  const hooksAvailable = environment?.capabilities?.sessionAgentHooks === true && environment.agents?.some(agent => agent.available && Boolean(agent.hookAdapter));
+  const hooksAvailable = environment?.capabilities?.sessionAgentHooks === true && environment.agents?.some(agent => agent.available);
   const nativeCodex = environment?.capabilities?.nativeCodex === true;
   const preferences = useSyncExternalStore(subscribePreferences, getPreferences, getPreferences);
   const settings: Settings = { ...defaults, ...state?.settings, ...preferences, fontSize:state?.settings.fontSize ?? 14, theme:preferences.theme ?? state?.settings.theme ?? 'dark' };
@@ -284,7 +284,7 @@ export default function App() {
       const cwd = source?.profileId === profileId ? source.cwd : profile?.cwd ?? (profile?.environment === 'wsl' ? '~' : environment?.defaultCwd);
       const created = await bridge().call<TerminalTab>('tab.create', {
         workspaceId: owner.id, sourcePaneId: source?.id, profileId, cwd,
-        ...(agent ? { agentId: agent.id, title: agent.label, titleMode: 'auto' as const, agentHooks: Boolean(agentHooks && hooksAvailable && agent.hookAdapter) } : {}),
+        ...(agent ? { agentId: agent.id, title: agent.label, titleMode: 'auto' as const, agentHooks: Boolean(agentHooks && hooksAvailable) } : {}),
       });
       const next = await refresh();
       const updated = next.workspaces.find(item => item.id === owner.id);
@@ -472,7 +472,7 @@ export default function App() {
     </main>
 
     {dialog?.type === 'create' && environment && <CreateWorkspace environment={environment} defaultAgentHooks={agentHooks} onClose={() => setDialog(null)} onCreate={async values => { const created = await bridge().call<Workspace>('workspace.create', values); await refresh(); selectWorkspace(created.id, created.panes[0]?.id); }} />}
-    {dialog?.type === 'create-task' && environment && <TaskDialog environment={environment} onClose={() => setDialog(null)} onInspect={values => bridge().call('project.inspect', {...values})} onCreate={async values => { const created = await bridge().call<Workspace>('task.create', {...values}); await refresh(); setProjectsOpen(false); selectWorkspace(created.id, created.panes[0]?.id); }} />}
+    {dialog?.type === 'create-task' && environment && <TaskDialog environment={environment} defaultAgentHooks={agentHooks} onClose={() => setDialog(null)} onInspect={values => bridge().call('project.inspect', {...values})} onCreate={async values => { const created = await bridge().call<Workspace>('task.create', {...values}); await refresh(); setProjectsOpen(false); selectWorkspace(created.id, created.panes[0]?.id); }} />}
     {dialog?.type === 'archive-task' && <ConfirmClose title={t('Архивировать задачу {0}?',dialog.name)} description={t('Терминалы задачи будут остановлены. Несохранённые изменения файлов будут потеряны. Чистое рабочее дерево, созданное Winmux, будет удалено; ветка сохранится.')} onClose={() => setDialog(null)} onConfirm={async () => { if (dialog.workspaceId) { const owner = stateRef.current?.workspaces.find(item => item.id === dialog.workspaceId); if (owner) { assertFilesNotSaving(owner.panes.map(pane => pane.id)); await bridge().call('workspace.close', {workspaceId:owner.id}); } } const result = await bridge().call<{reason?:string}>('task.archive', {taskId:dialog.taskId}); await refresh(); if (result.reason) setError(result.reason); }} />}
     {dialog?.type === 'rename' && <RenameWorkspace name={dialog.workspace.name} onClose={() => setDialog(null)} onSave={async name => { await bridge().call('workspace.rename', { workspaceId: dialog.workspace.id, name }); }} />}
     {dialog?.type === 'close-pane' && <ConfirmClose title={t("Закрыть терминал?")} description={t('Несохранённые изменения файлов будут потеряны.') + ' ' + t("Панель «{0}» будет закрыта. {1}", dialog.pane.title, dialog.pane.status === 'running' ? t("Запущенный процесс и его дочерние процессы будут завершены. Несохранённая работа может быть потеряна.") : t("Процесс уже завершён."))} onClose={() => setDialog(null)} onConfirm={async () => { assertFilesNotSaving([dialog.pane.id]); await bridge().call('pane.close', { paneId: dialog.pane.id }); }} />}
