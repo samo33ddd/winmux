@@ -13,6 +13,7 @@ const { ACTIVITY_KINDS, createActivityTracker } = require('./agent-activity.cjs'
 const { createTaskGitService, createGitExecutor } = require('./backend/task-git.cjs');
 const { createTaskDelivery, normalizeTaskReview } = require('./backend/task-delivery.cjs');
 const { deliverySupportFor } = require('./backend/task-instructions.cjs');
+const { HOOK_AGENT_IDS } = require('./backend/agent-registry.cjs');
 
 function replaceLeaf(node, paneId, replacement) {
   if (node.type === 'leaf') return node.paneId === paneId ? replacement : node;
@@ -463,7 +464,7 @@ async function startServer(options = {}) {
       if (state.settings.activeWorkspaceId === workspace.id) state.settings.activeWorkspaceId = state.workspaces[0]?.id;
     }
   }
-  async function dispatch(method, params) {
+  async function dispatch(method, params, version) {
     if (stopping) fail('SHUTTING_DOWN', 'Daemon is shutting down');
     switch (method) {
       case 'state': return publicState();
@@ -634,7 +635,7 @@ async function startServer(options = {}) {
         const profileId = params.profileId ?? source.profileId;
         const task = state.tasks.find(item => item.workspaceId === workspace.id && !item.archived);
         const launch = await validateLaunch(environment, profileId, params.cwd ?? (profileId === source.profileId ? source.cwd : undefined), params.agentId, params.agentHooks, { dataDir: loc.dataDir, pipeName: loc.pipeName }, task && task.agentId === params.agentId ? task.id : undefined);
-        if (task) launch.taskId = task.id;
+        if (task && task.agentId === params.agentId) launch.taskId = task.id;
         const pane = makePane(launch);
         const tab = { id: randomUUID(), title: requestedTitle || tabTitle(workspace, launch.agentLabel || launch.profile.label), titleMode, root: { type: 'leaf', paneId: pane.id } }; pane.tabId = tab.id;
         spawnPane(pane, launch); workspace.panes.push(pane); workspace.tabs.push(tab); workspace.activeTabId = tab.id;
@@ -657,7 +658,7 @@ async function startServer(options = {}) {
         const profileId = params.profileId ?? source.profileId;
         const task = state.tasks.find(item => item.workspaceId === workspace.id && !item.archived);
         const launch = await validateLaunch(environment, profileId, params.cwd ?? (profileId === source.profileId ? source.cwd : undefined), params.agentId, params.agentHooks, { dataDir: loc.dataDir, pipeName: loc.pipeName }, task && task.agentId === params.agentId ? task.id : undefined);
-        if (task) launch.taskId = task.id;
+        if (task && task.agentId === params.agentId) launch.taskId = task.id;
         const pane = makePane(launch); pane.tabId = tab.id; spawnPane(pane, launch);
         tab.root = replaceLeaf(tab.root, source.id, { type: 'split', id: randomUUID(), direction: params.direction, ratio: 0.5, first: { type: 'leaf', paneId: source.id }, second: { type: 'leaf', paneId: pane.id } });
         workspace.panes.push(pane); syncTabs(workspace); changed(); return structuredClone(pane);
@@ -780,6 +781,9 @@ async function startServer(options = {}) {
         return result;
       }
       case 'agent.hook': {
+        if (version !== undefined && version !== 1) {
+          fail('UNSUPPORTED_VERSION', `agent.hook protocol version is not supported: ${String(version).slice(0, 64)}`);
+        }
         const agentId = string(params.agentId, 'agentId', 64);
         const event = string(params.event, 'event', 64);
         const sessionId = string(params.sessionId, 'sessionId', 128);
@@ -791,7 +795,7 @@ async function startServer(options = {}) {
         const phase = params.phase;
         if (phase !== undefined && !['start', 'end'].includes(phase)) fail('INVALID_ARGUMENT', 'Invalid activity phase');
         if (agentId === 'codex') return codexController.hook({ agentId, event, sessionId, cwd, paneId, toolName, toolId, phase });
-        if (!['omp', 'claude', 'hermes', 'pi'].includes(agentId)) return { applied: false, reason: 'agent' };
+        if (!HOOK_AGENT_IDS.has(agentId)) return { applied: false, reason: 'agent' };
         const pid = params.pid === undefined ? undefined : integer(params.pid, 'pid', 1, Number.MAX_SAFE_INTEGER);
         const stamp = params.stamp === undefined ? undefined : string(params.stamp, 'stamp', 32);
         const emittedAt = params.emittedAt === undefined ? undefined : integer(params.emittedAt, 'emittedAt', 1, Number.MAX_SAFE_INTEGER);
@@ -904,7 +908,7 @@ async function startServer(options = {}) {
         if (typeof method !== 'string' || method.length > 128 || !params || typeof params !== 'object' || Array.isArray(params)) {
           send(client, { id: request.id, error: { code: 'INVALID_ARGUMENT', message: 'Expected a method and a params object' } }); client.inflight--; continue;
         }
-        const invoke = () => dispatch(method, params);
+        const invoke = () => dispatch(method, params, request.v);
         const result = reads.has(method) ? Promise.resolve().then(invoke) : mutationTail.then(invoke);
         if (!reads.has(method)) mutationTail = result.catch(() => {});
         if (method.startsWith('task.delivery.') && method !== 'task.delivery.context') {

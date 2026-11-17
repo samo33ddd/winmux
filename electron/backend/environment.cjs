@@ -10,8 +10,9 @@ const { selectedAgent, shellArgs } = require('./shell-integration.cjs');
 const { withSessionHooks } = require('./agent-hooks.cjs');
 const { installProjectAgentHooks } = require('../agent-hooks-install.cjs');
 const { taskInstructionArgs } = require('./task-instructions.cjs');
+const { AGENTS, AGENT_IDS } = require('./agent-registry.cjs');
 const execFileAsync = promisify(execFile); // Argument arrays only; no shell interpolation.
-const agentNames = ['claude', 'codex', 'hermes', 'omp', 'pi'];
+const agentNames = AGENT_IDS;
 const wslAgentScript = 'PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; command -v "$1" 2>/dev/null || true';
 async function run(command, args, timeout = 8000) {
   const { stdout } = await execFileAsync(command, args, { windowsHide: true, timeout, maxBuffer: 256 * 1024, encoding: 'buffer' });
@@ -29,7 +30,8 @@ async function executable(name, candidates = []) {
 }
 const lines = value => value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
 function wslAgent(profile, name, available, command) {
-  return { id: `${profile.id}:${name}`, label: name, environment: 'wsl', profileId: profile.id, distro: profile.distro, available, command, ...(['claude', 'codex'].includes(name) ? { hookAdapter: name } : {}) };
+  const entry = AGENTS[name];
+  return { id: `${profile.id}:${name}`, label: entry.label, environment: 'wsl', profileId: profile.id, distro: profile.distro, available, command, ...(entry.hookAdapter ? { hookAdapter: entry.hookAdapter } : {}) };
 }
 async function probeWslAgent(profile, name) {
   return run(profile.command, [...profile.args, '--exec', 'sh', '-c', wslAgentScript, 'winmux-agent-probe', name]);
@@ -85,7 +87,8 @@ async function discover() {
   // persisted launch profile, so a daemon restart cannot resume arbitrary work.
   const agents = await Promise.all(agentNames.map(async name => {
     const command = await executable(name);
-    return { id: name, label: name, environment: 'windows', profileId: 'powershell', available: Boolean(command), command, ...(['claude', 'codex'].includes(name) ? { hookAdapter: name } : {}) };
+    const entry = AGENTS[name];
+    return { id: name, label: entry.label, environment: 'windows', profileId: 'powershell', available: Boolean(command), command, ...(entry.hookAdapter ? { hookAdapter: entry.hookAdapter } : {}) };
   }));
   for (const profile of profiles.filter(p => p.environment === 'wsl')) {
     // Never probe inside a distribution during discovery: `wsl --exec` boots
@@ -117,6 +120,7 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
       await installProjectAgentHooks({
         projectRoot: cwd,
         dataDir: hookContext?.dataDir,
+        pipeName: hookContext?.pipeName,
         agent: agent.id.split(':').pop(),
         helperRoot: path.join(__dirname, '..', 'hooks'),
       });

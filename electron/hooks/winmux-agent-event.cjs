@@ -36,22 +36,26 @@ function claudePayload(raw, env = process.env) {
   if (!state || !bounded(input.session_id, 128) || !bounded(input.cwd, 4096)) return null;
   const paneId = bounded(env.WINMUX_PANE_ID, 128);
   const output = { agentId: 'claude', event: input.hook_event_name, sessionId: input.session_id, cwd: input.cwd, stamp: process.hrtime.bigint().toString(), state, ...(paneId ? { paneId } : {}) };
-  const phase = input.hook_event_name === 'PreToolUse' ? 'start' : ['PostToolUse', 'PostToolUseFailure'].includes(input.hook_event_name) ? 'end' : undefined;
+  let phase;
+  if (input.hook_event_name === 'PreToolUse') phase = 'start';
+  else if (['PostToolUse', 'PostToolUseFailure'].includes(input.hook_event_name)) phase = 'end';
   if (phase && bounded(input.tool_name, 256) && bounded(input.tool_use_id, 256)) Object.assign(output, { phase, toolName: input.tool_name, toolId: input.tool_use_id });
   return output;
 }
 function pipeName(dataDir) {
   const identity = `${os.userInfo().username}:${os.homedir()}:${dataDir.toLowerCase()}`;
   const suffix = crypto.createHash('sha256').update(identity).digest('hex').slice(0, 24);
-  return process.platform === 'win32' ? `\\\\.\\pipe\\winmux-${suffix}` : path.join(os.tmpdir(), `winmux-${suffix}.sock`);
+  // The Unix fallback socket lives in the user-private data directory:
+  // a predictable name under os.tmpdir() can be pre-bound to steal the token.
+  return process.platform === 'win32' ? `\\\\.\\pipe\\winmux-${suffix}` : path.join(dataDir, `winmux-${suffix}.sock`);
 }
 function deliver(pipe, token, params) {
   const id = crypto.randomUUID();
-  const frame = JSON.stringify({ id, token, method: 'agent.hook', params }) + '\n';
+  const frame = `${JSON.stringify({ id, token, method: 'agent.hook', v: 1, params })}\n`;
   if (Buffer.byteLength(frame) > 16 * 1024) return Promise.reject(new Error('Winmux agent event is too large'));
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(pipe); socket.setEncoding('utf8'); let buffer = '', done = false;
-    const finish = error => { if (done) return; done = true; clearTimeout(timer); socket.destroy(); error ? reject(error) : resolve(); };
+    const finish = error => { if (done) return; done = true; clearTimeout(timer); socket.destroy(); if (error) reject(error); else resolve(); };
     const timer = setTimeout(() => finish(new Error('Winmux agent event timed out')), 2500);
     socket.on('error', finish);
     socket.on('close', () => { if (!done) finish(new Error('Winmux agent connection closed')); });
@@ -59,7 +63,9 @@ function deliver(pipe, token, params) {
       buffer += chunk;
       if (Buffer.byteLength(buffer) > 8 * 1024 * 1024) return finish(new Error('Winmux event response is too large'));
       let index;
-      while ((index = buffer.indexOf('\n')) !== -1) {
+      for (;;) {
+        index = buffer.indexOf('\n');
+        if (index === -1) break;
         const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);
         let message;
         try { message = JSON.parse(line); } catch { return finish(new Error('Invalid Winmux event response')); }

@@ -57,7 +57,7 @@ export function TerminalPane(props: Props) {
       const target = classifyTerminalLink(value);
       if (target?.kind !== 'file') return;
       const request = ++fileRequest;
-      const intent = beginPreviewIntent(pane.id, visibilityEpoch.current);
+      const intent = beginPreviewIntent(pane.id, visibilityEpoch.current, target.value);
       void bridge().call('file.open', { paneId:pane.id, path:target.value }).catch(error => {
         if (!disposed
           && current.current.visible

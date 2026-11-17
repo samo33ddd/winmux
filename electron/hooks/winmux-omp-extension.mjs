@@ -52,6 +52,7 @@ function sendViaHelper(config, payload) {
       config.helperPath,
       '--data-dir',
       config.dataDir,
+      ...(bounded(config.pipeName, 4096) ? ['--pipe', config.pipeName] : []),
     ], {
       windowsHide: true,
       stdio: ['pipe', 'ignore', 'ignore'],

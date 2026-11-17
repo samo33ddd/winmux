@@ -7,7 +7,7 @@ import { assertFilesNotSaving, getOrphanedFileDrafts, pruneFileDrafts, setFileDr
 import { activeTab, paneIds, paneTab, selectedPane, terminalTabLabel, terminalTabs } from './workspaceTabs';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent } from 'react';
 import { ResizeHandle, usePanelWidth } from './ResizeHandle';
-import { Bell, Check, ChevronDown, CircleAlert, Folder, FolderOpen, GitBranch, Globe, Keyboard, Minus, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Search, Settings2, SplitSquareHorizontal, SplitSquareVertical, Sun, TerminalSquare, X } from 'lucide-react';
+import { Bell, Check, ChevronDown, CircleAlert, FolderOpen, GitBranch, Globe, Keyboard, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Search, Settings2, SplitSquareHorizontal, SplitSquareVertical, TerminalSquare, X } from 'lucide-react';
 import { ConfirmClose, CreateWorkspace, Modal, RenameWorkspace, profileLabel } from './Dialogs';
 import { WorkspaceView } from './WorkspaceView';
 import { WorkspaceTools, type ToolTab } from './WorkspaceTools';
@@ -48,7 +48,7 @@ export default function App() {
   const [browserRequests, setBrowserRequests] = useState<Record<string, { url: string; serial: number }>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true); const [working, setWorking] = useState(false);
   const [agentHooks, setAgentHooks] = useState(readAgentHooksPreference);
-  const [sidebarWidth,setSidebarWidth] = usePanelWidth('winmux.sidebar-width',60,56,360);
+  const [sidebarWidth,setSidebarWidth] = usePanelWidth('winmux.sidebar-width',60,56,420);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [headerMenu, setHeaderMenu] = useState(false);
   const switcherRef = useRef<HTMLDivElement>(null);
@@ -363,7 +363,7 @@ export default function App() {
       }
       if (!pane || !['d', 'e', 'w', 'f', 'enter', 'c', 'v'].includes(key)) return;
       const target = event.target as HTMLElement;
-      if (['c', 'v'].includes(key) && target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return;
+      if (['c', 'v'].includes(key) && target.closest('input, textarea:not(.xterm-helper-textarea), select, [contenteditable="true"], [role="dialog"]')) return;
       event.preventDefault();
       if (key === 'd' || key === 'e') void actions.current.split(pane.id, key === 'd' ? 'horizontal' : 'vertical');
       else if (key === 'w') actions.current.closePane(pane.id);
@@ -473,7 +473,7 @@ export default function App() {
         {!state?.workspaces.length && <div className="empty-state" data-testid="empty-state"><div className="empty-symbol"><BrandMark /></div><h1>{loading ? t("Подключение к Winmux") : t("Место для вашей работы")}</h1><p>{loading ? t("Получаем сессии и доступные среды…") : t("Откройте проект, запустите терминал. Разделяйте панели и держите нужные задачи рядом.")}</p>{!loading && <><button className="button primary create-first" data-testid="create-first-workspace" disabled={!environment} onClick={() => setDialog({ type: 'create' })}><Plus />{t("Новое рабочее пространство")}</button><span className="empty-shortcut">Ctrl+Shift+N</span></>}</div>}
         {notificationsOpen && <section className="notification-panel" aria-label={t("Уведомления")} data-testid="notification-panel"><div className="notification-heading"><h2>{t("Уведомления")}</h2><button className="icon-button" title={t("Прочитать все")} aria-label={t("Прочитать все уведомления")} disabled={!unread} onClick={() => void bridge().call('notifications.read').catch(error => setError(errorMessage(error)))}><Check /></button><button className="icon-button" aria-label={t("Закрыть уведомления")} onClick={() => setNotificationsOpen(false)}><X /></button></div><div className="notification-list">{state?.notifications.length ? [...state.notifications].sort((a, b) => b.createdAt - a.createdAt).map(notice => {
           const owner = state.workspaces.find(item => item.id === notice.workspaceId); const exists = owner?.panes.some(pane => pane.id === notice.paneId);
-          return <button key={notice.id} className={`notification-item ${notice.read ? '' : 'unread'}`} data-testid="notification-item" onClick={() => { if (exists) selectWorkspace(notice.workspaceId, notice.paneId); void bridge().call('notifications.read', { id: notice.id }).catch(error => setError(errorMessage(error))); }}><span className="notification-title">{!notice.read && <span className="unread-dot" />}<strong>{notice.title === 'Agent completed' ? t('Агент завершил работу') : notice.title === 'Agent failed' ? t('Агент завершился с ошибкой') : notice.title}</strong><time dateTime={new Date(notice.createdAt).toISOString()}>{new Date(notice.createdAt).toLocaleTimeString(dateLocale(), { hour: '2-digit', minute: '2-digit' })}</time></span>{notice.body && <span className="notification-body">{notice.body}</span>}<span className="notification-source">{owner?.name ?? t("Закрытое пространство")}{!exists ? t(" · панель закрыта") : ''}</span></button>;
+          return <button key={notice.id} className={`notification-item ${notice.read ? '' : 'unread'}`} data-testid="notification-item" onClick={() => { if (exists) selectWorkspace(notice.workspaceId, notice.paneId); void bridge().call('notifications.read', { id: notice.id }).catch(error => setError(errorMessage(error))); }}><span className="notification-title">{!notice.read && <span className="unread-dot" />}<strong>{notice.title === 'Agent completed' ? t('Агент завершил работу') : notice.title === 'Agent failed' ? t('Агент завершился с ошибкой') : notice.title}</strong>{Number.isFinite(notice.createdAt) && <time dateTime={new Date(notice.createdAt).toISOString()}>{new Date(notice.createdAt).toLocaleTimeString(dateLocale(), { hour: '2-digit', minute: '2-digit' })}</time>}</span>{notice.body && <span className="notification-body">{notice.body}</span>}<span className="notification-source">{owner?.name ?? t("Закрытое пространство")}{!exists ? t(" · панель закрыта") : ''}</span></button>;
         }) : <div className="notification-empty"><Bell /><p>{t("Пока тихо")}</p><span>{t("Здесь появятся уведомления ваших терминалов.")}</span></div>}</div></section>}
       </div>
       {workspace && toolTab && <ResizeHandle value={effectiveToolsWidth} min={280} max={maxToolsWidth} reverse label={t('Ширина панели инструментов')} testId="tools-resize" onChange={width=>{setToolsExpanded(false);setToolsWidth(width);}} />}

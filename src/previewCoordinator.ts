@@ -2,6 +2,7 @@ export interface PreviewIntent {
   owner: string;
   generation: number;
   visibilityEpoch: number;
+  path?: string;
 }
 
 export type PreviewErrorEvent =
@@ -25,9 +26,9 @@ function clearPreviewError() {
   notify(event);
 }
 
-export function beginPreviewIntent(owner: string, visibilityEpoch: number): PreviewIntent {
+export function beginPreviewIntent(owner: string, visibilityEpoch: number, path?: string): PreviewIntent {
   clearPreviewError();
-  currentIntent = { owner, generation:++nextGeneration, visibilityEpoch };
+  currentIntent = { owner, generation:++nextGeneration, visibilityEpoch, path };
   return currentIntent;
 }
 
@@ -45,8 +46,14 @@ export function reportPreviewError(intent: PreviewIntent, message: string) {
   return true;
 }
 
-export function previewPresented(intent?: PreviewIntent) {
-  if (intent && currentIntent?.generation !== intent.generation) return false;
+export function previewPresented(match?: PreviewIntent | string) {
+  if (typeof match === 'string') {
+    // A file-preview event for a different file must not clear a newer intent
+    // or swallow its pending error — but once that intent has already failed,
+    // any successful preview supersedes the stale error.
+    if (!currentIntent) { clearPreviewError(); return true; }
+    if (currentIntent.path !== match && !activeError) return false;
+  } else if (match && currentIntent?.generation !== match.generation) return false;
   currentIntent = null;
   clearPreviewError();
   return true;

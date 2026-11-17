@@ -4,6 +4,27 @@ User-visible changes are recorded here. Release availability and downloadable as
 
 ## Unreleased
 
+### Fixed
+
+- Codex binding works for accounts with more than 5 and more than 500 threads, and `listLoaded` no longer returns a permanently stale snapshot (Issues #81, #82, #84).
+- Codex agent status hooks run under the default Windows PowerShell execution policy (Issue #83).
+- Queued daemon requests resume when the IPC socket drains instead of timing out (Issue #85).
+- `daemon.list()` rejects malformed pages with a typed error like `refresh()` (Issue #87).
+- An unknown persisted theme or a Windows shortcut failure no longer prevents startup (Issues #88, #89).
+- Ctrl+Shift+C copies when the terminal is focused; notifications with a bad timestamp no longer crash the UI; sidebar width persists up to 420 px (Issues #90, #99, #100).
+- CRLF files no longer stay permanently dirty; terminal links to paths ending in `) ] }` open correctly; a stale file preview can no longer clobber the newest preview (Issues #91, #92, #93).
+- Panes launched with a different agent no longer receive `WINMUX_TASK_ID` (Issue #94).
+
+### Security
+
+- Hook helper Unix sockets now live in the user-private data directory instead of a predictable tmpdir path; hook commands pin absolute `powershell.exe`/`where.exe` paths and `agent.hook` carries a protocol version (Issues #96, #97, #98).
+
+### Changed
+
+- Agent roster, labels, event maps and install destinations now come from a single registry (Issue #95).
+- The release pipeline launches the packaged executable and runs a smoke test; the unused `@electron/rebuild` path was removed (Issues #101, #102).
+
+
 - Install OMP, Pi and Hermes status adapters automatically before a Windows agent launch when **Agent status hooks** is enabled; Codex and Claude keep their session-only hooks. Task-created workspaces use the same preference. A UI attached to an older running daemon keeps session hooks but leaves project adapters manual until the daemon is upgraded (Issue #57).
 - Hide the **Show archive** filter in **Projects and tasks** when no archived task exists (Issue #56).
 

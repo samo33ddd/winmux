@@ -15,6 +15,7 @@ const {
   OMP_HELPER_MARKER,
 } = require('../electron/agent-hooks-install.cjs');
 const { eventPayload } = require('../electron/hooks/winmux-omp-hook.cjs');
+const { locations } = require('../electron/backend/shared.cjs');
 
 function temp(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -91,6 +92,7 @@ test('installs atomically, preserves foreign project files, and is idempotent', 
     dataDir: fs.realpathSync(dataDir),
     helperPath,
     nodePath: process.execPath,
+    pipeName: locations({ dataDir }).pipeName,
   });
 
   const extensionMtime = fs.statSync(extensionPath).mtimeMs;

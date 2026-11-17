@@ -38,6 +38,7 @@ async function connect(options = {}) {
       socket.write(entry.frame);
     }
   }
+  socket.on('drain', pump);
   socket.on('error', error => { failAll(error); client.emit('error', error); });
   socket.on('close', () => {
     closed = true;

@@ -6,6 +6,7 @@ import { getFileDraft, hasUnsavedFiles, saveFileDraft, setFileDraft, subscribeFi
 import { fileLanguage, HighlightedCode } from './HighlightedCode';
 
 window.addEventListener('beforeunload', event => { if (hasUnsavedFiles()) { event.preventDefault(); event.returnValue = ''; } });
+const lineEndings = (text: string) => text.replace(/\r\n/g, '\n');
 const label = (ru: string, en: string) => getLanguage() === 'ru' ? ru : en;
 
 export function FileEditor({ content, workspaceId, paneId, cwd, onReload }: { content: { path: string; text?: string; truncated?: boolean }; workspaceId: string; paneId?: string; cwd: string; onReload(): void }) {
@@ -17,7 +18,7 @@ export function FileEditor({ content, workspaceId, paneId, cwd, onReload }: { co
   const saving = Boolean(draft?.saving), error = draft?.error;
   const language = fileLanguage(content.path);
   const overlay = useRef<HTMLPreElement>(null);
-  const dirty = value !== original;
+  const dirty = lineEndings(value) !== lineEndings(original);
   async function save() {
     if (!dirty || saving || content.truncated) return;
     const text = original.includes('\r\n') ? value.replace(/\r?\n/g, '\r\n') : value;

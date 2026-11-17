@@ -201,6 +201,7 @@ const english: Record<string, string> = {
   'Например, мой проект': 'For example, my project',
   'необязательно': 'optional',
   'Закрыть диалог': 'Close dialog',
+  'Закрыть': 'Close',
   'Подключение к терминалу…': 'Connecting to terminal…',
   'Повторить подключение': 'Retry connection',
   'Копировать': 'Copy',

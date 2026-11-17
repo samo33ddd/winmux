@@ -169,7 +169,7 @@ for (const method of ['listThreads', 'listLoaded']) {
       });
       t.after(() => controller.stop());
       await controller.refresh();
-      assert.equal(pages, failure === 'incomplete' ? 5 : 2);
+      assert.equal(pages, failure === 'incomplete' ? 1000 : 2);
       assert.equal(controller.status().connection, 'disconnected');
       assert.deepEqual(controller.status().threads, []);
       assert.equal(selected.agentThreadId, '');

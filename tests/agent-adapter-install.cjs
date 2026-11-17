@@ -15,6 +15,7 @@ const {
   HERMES_PLUGIN_MARKER,
   PI_EXTENSION_MARKER,
 } = require('../electron/agent-hooks-install.cjs');
+const { locations } = require('../electron/backend/shared.cjs');
 
 function temp(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -91,7 +92,7 @@ test('installed adapters actually load their embedded configuration at runtime',
   assert.ok(python, 'Python 3 is required to load the installed Hermes adapter');
   const loaded = spawnSync(python, ['-c', 'import json,runpy,sys; print(json.dumps(runpy.run_path(sys.argv[1])["_load_config"]()))', path.join(hermes.pluginPath, '__init__.py')], { encoding: 'utf8', windowsHide: true });
   assert.equal(loaded.status, 0, loaded.stderr);
-  assert.deepEqual(JSON.parse(loaded.stdout), { dataDir, helperPath: hermes.helperPath, nodePath: process.execPath });
+  assert.deepEqual(JSON.parse(loaded.stdout), { dataDir, helperPath: hermes.helperPath, nodePath: process.execPath, pipeName: locations({ dataDir }).pipeName });
 });
 
 test('merges Claude settings.local.json without global config edits and repeats cleanly', async t => {

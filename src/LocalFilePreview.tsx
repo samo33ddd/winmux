@@ -18,7 +18,7 @@ export function LocalFilePreview() {
   useEffect(() => {
     const unsubscribe = bridge().onEvent(event => {
       if (event.type !== 'file-preview') return;
-      previewPresented();
+      previewPresented(event.requestedPath);
       setActualSize(false);
       setPreview(event);
     });

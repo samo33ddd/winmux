@@ -9,6 +9,7 @@ never embeds the capability token.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import queue
@@ -16,8 +17,9 @@ import subprocess
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+from typing import Any
 
 MARKER = "winmux-hermes-plugin"
 CONFIG_ENCODED = "__WINMUX_CONFIG_B64__"
@@ -69,7 +71,8 @@ def _truthy(value: Any) -> bool:
 def _delegated_context() -> bool | None:
     """Return Hermes' context marker, or None when root provenance is unprovable."""
     try:
-        from agent.delegation_context import is_delegated_child_context
+        # Optional Hermes runtime import; the plugin also loads outside it.
+        from agent.delegation_context import is_delegated_child_context  # type: ignore[import-not-found]
     except Exception:
         return None
     try:
@@ -84,8 +87,12 @@ def send_via_helper(config: Mapping[str, str], payload: Mapping[str, Any]) -> No
     data_dir = _bounded(config.get("dataDir"), 4096)
     if not node_path or not helper_path or not data_dir:
         raise RuntimeError("Winmux Hermes hook configuration is incomplete")
+    pipe_name = _bounded(config.get("pipeName"), 4096)
+    command = [node_path, helper_path, "--data-dir", data_dir]
+    if pipe_name:
+        command += ["--pipe", pipe_name]
     completed = subprocess.run(
-        [node_path, helper_path, "--data-dir", data_dir],
+        command,
         input=(json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8"),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -146,7 +153,7 @@ class WinmuxHermesPlugin:
     @staticmethod
     def _default_cwd(platform: str) -> str | None:
         try:
-            from agent.runtime_cwd import resolve_agent_cwd
+            from agent.runtime_cwd import resolve_agent_cwd  # type: ignore[import-not-found]
         except Exception:
             # A direct CLI's launch directory is the documented fallback. Shared
             # gateway surfaces have no pane-local cwd, so they fail closed.
@@ -164,7 +171,7 @@ class WinmuxHermesPlugin:
         while len(values) > self._max_identities:
             values.popitem(last=False)
 
-    def _remember_root(self, session: "_RootSession") -> None:
+    def _remember_root(self, session: _RootSession) -> None:
         self._remember(self._root_sessions, session.session_id, session)
         if session.conversation_id:
             self._remember(
@@ -238,7 +245,7 @@ class WinmuxHermesPlugin:
         conversation_id: str | None = None,
         *,
         reporting_id: str | None = None,
-    ) -> "_RootSession | None":
+    ) -> _RootSession | None:
         if (platform not in ROOT_PLATFORMS or not cwd
                 or session_id in self._retired_roots or session_id in self._nested_sessions):
             return None
@@ -258,7 +265,7 @@ class WinmuxHermesPlugin:
         meta: Mapping[str, Any],
         *,
         allow_conversation: bool = False,
-    ) -> tuple["_RootSession | None", bool]:
+    ) -> tuple[_RootSession | None, bool]:
         delegated = self._is_delegated()
         if delegated is not False:
             return None, False
@@ -297,7 +304,7 @@ class WinmuxHermesPlugin:
                     return root, previous.session_id != session_id
         return None, False
 
-    def _prove_llm_root(self, meta: Mapping[str, Any]) -> "_RootSession | None":
+    def _prove_llm_root(self, meta: Mapping[str, Any]) -> _RootSession | None:
         self._mark_nested(meta)
         if self._is_delegated() is not False:
             return None
@@ -321,7 +328,7 @@ class WinmuxHermesPlugin:
 
     def _payload(
         self,
-        root: "_RootSession",
+        root: _RootSession,
         event: str,
         state: str,
         tool: Mapping[str, str] | None = None,
@@ -363,16 +370,14 @@ class WinmuxHermesPlugin:
             try:
                 if payload is None:
                     return
-                try:
+                with contextlib.suppress(Exception):
                     self._send(payload)
-                except Exception:
-                    pass
             finally:
                 self._queue.task_done()
 
     def _emit(
         self,
-        root: "_RootSession",
+        root: _RootSession,
         event: str,
         state: str,
         tool: Mapping[str, str] | None = None,
@@ -617,10 +622,8 @@ class WinmuxHermesPlugin:
 
     def close(self) -> None:
         if self._queue is not None:
-            try:
+            with contextlib.suppress(queue.Full):
                 self._queue.put_nowait(None)
-            except queue.Full:
-                pass
 
 
 def register(ctx: Any) -> None:
