@@ -97,7 +97,7 @@ async function discover() {
       agents.push(wslAgent(profile, name, Boolean(command), command));
     }
   }
-  return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { paneMove: true, terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, nativeCodex: true, ompHooks: true, agentActivity: true, projectTasks: true, protocolVersion: 3 } };
+  return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { paneMove: true, terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, projectAgentHooks: true, nativeCodex: true, ompHooks: true, agentActivity: true, projectTasks: true, protocolVersion: 3 } };
 }
 async function validateLaunch(environment, profileId, requestedCwd, agentId, agentHooks, hookContext, taskId) {
   const profile = environment.profiles.find(p => p.id === profileId);

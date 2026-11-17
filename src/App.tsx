@@ -17,7 +17,7 @@ import { AttentionInbox } from './AttentionInbox';
 import { attentionSections } from './attentionGrouping';
 import { TaskDialog } from './TaskDialog';
 import { ProjectTasks } from './ProjectTasks';
-import { bridge, errorMessage, type Direction, type Environment, type Pane, type Settings, type State, type TerminalTab, type Workspace } from './types';
+import { bridge, errorMessage, type Agent, type Direction, type Environment, type Pane, type Settings, type State, type TerminalTab, type Workspace } from './types';
 
 type Dialog = { type: 'create' } | { type: 'create-task' } | { type: 'archive-task'; taskId: string; name: string; workspaceId?: string } | { type: 'rename'; workspace: Workspace } | { type: 'settings' } | { type: 'shortcuts' } | { type: 'close-pane'; pane: Pane } | { type: 'close-tab'; workspaceId: string; tab: TerminalTab } | { type: 'close-workspace'; workspace: Workspace } | null;
 type BannerError = { message: string; previewToken?: number };
@@ -75,7 +75,11 @@ export default function App() {
       setPaneDrag(null);
     }
   }, [state, paneDrag, paneMoveAvailable]);
-  const hooksAvailable = environment?.capabilities?.sessionAgentHooks === true && environment.agents?.some(agent => agent.available);
+  const hooksAvailable = (environment?.capabilities?.sessionAgentHooks === true || environment?.capabilities?.projectAgentHooks === true) && environment.agents?.some(agent => agent.available);
+  function supportsAgentHooks(agent?: Agent) {
+    if (!agent) return false;
+    return agent.hookAdapter ? environment?.capabilities?.sessionAgentHooks === true : agent.environment === 'windows' && environment?.capabilities?.projectAgentHooks === true;
+  }
   const nativeCodex = environment?.capabilities?.nativeCodex === true;
   const preferences = useSyncExternalStore(subscribePreferences, getPreferences, getPreferences);
   const settings: Settings = { ...defaults, ...state?.settings, ...preferences, fontSize:state?.settings.fontSize ?? 14, theme:preferences.theme ?? state?.settings.theme ?? 'dark' };
@@ -284,7 +288,7 @@ export default function App() {
       const cwd = source?.profileId === profileId ? source.cwd : profile?.cwd ?? (profile?.environment === 'wsl' ? '~' : environment?.defaultCwd);
       const created = await bridge().call<TerminalTab>('tab.create', {
         workspaceId: owner.id, sourcePaneId: source?.id, profileId, cwd,
-        ...(agent ? { agentId: agent.id, title: agent.label, titleMode: 'auto' as const, agentHooks: Boolean(agentHooks && hooksAvailable) } : {}),
+        ...(agent ? { agentId: agent.id, title: agent.label, titleMode: 'auto' as const, agentHooks: Boolean(agentHooks && supportsAgentHooks(agent)) } : {}),
       });
       const next = await refresh();
       const updated = next.workspaces.find(item => item.id === owner.id);

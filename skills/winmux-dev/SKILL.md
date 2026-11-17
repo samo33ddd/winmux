@@ -131,6 +131,11 @@ terminal. Codex and Claude remain session-only and must not receive an automatic
 project hook. Task-created workspaces forward the same preference. WSL launches
 skip Windows project installation. Hermes installation still requires the
 explicit `hermes plugins enable winmux-status` step; never enable it silently.
+The renderer must gate this flag on `capabilities.projectAgentHooks` for
+non-`hookAdapter` agents and on `capabilities.sessionAgentHooks` for
+Codex/Claude. An older daemon lacks `projectAgentHooks` and rejects
+`agentHooks:true` for OMP/Pi/Hermes with `AGENT_HOOKS_UNSUPPORTED`; sending
+`false` keeps those launches working until the daemon is upgraded.
 
 For Windows Codex session hooks, allocate pane/launch IDs before constructing the
 PowerShell arguments. `validateLaunch` receives the selected daemon data directory

@@ -244,6 +244,7 @@ app.whenReady().then(() => {
     assert.equal(environment.capabilities.liveCwd, true); assert.equal(environment.capabilities.agentLaunch, true);
     assert.equal(environment.capabilities.terminalTabs, true); assert.equal(environment.capabilities.agentStatus, true);
     assert.equal(environment.capabilities.sessionAgentHooks, true);
+    assert.equal(environment.capabilities.projectAgentHooks, true);
     // Protocol 3 is additive. nativeCodex is the gate; a protocol 2 daemon must not pass this handshake.
     assert.equal(environment.capabilities.protocolVersion, 3);
     assert.equal(environment.capabilities.nativeCodex, true);

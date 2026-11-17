@@ -51,6 +51,8 @@ export function TaskDialog({ environment, defaultAgentHooks = true, onClose, onC
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const profile = environment.profiles.find(item => item.id === profileId);
+  const agent = environment.agents?.find(item => item.id === agentId);
+  const hooksSupported = Boolean(agent) && (agent?.hookAdapter ? environment.capabilities?.sessionAgentHooks === true : agent?.environment === 'windows' && environment.capabilities?.projectAgentHooks === true);
   const wsl = profile?.environment === 'wsl';
 
   useEffect(() => { setInspected(false); setInspection(emptyInspection); setBaseBranch(''); setPrimaryBranch(''); setWorktreePath(''); }, [directory, profileId]);
@@ -83,7 +85,7 @@ export function TaskDialog({ environment, defaultAgentHooks = true, onClose, onC
       event.preventDefault(); if (!ready || !profile) return;
       setBusy(true); setError('');
       try {
-        await onCreate({ projectDirectory: directory.trim(), name: name.trim(), baseBranch, primaryBranch, profileId, ...(agentId ? { agentId } : {}), agentHooks: Boolean(defaultAgentHooks), mode, ...(mode === 'attach' ? { worktreePath } : {}) });
+        await onCreate({ projectDirectory: directory.trim(), name: name.trim(), baseBranch, primaryBranch, profileId, ...(agentId ? { agentId } : {}), agentHooks: Boolean(defaultAgentHooks && hooksSupported), mode, ...(mode === 'attach' ? { worktreePath } : {}) });
         onClose();
       } catch (caught) { setError(errorMessage(caught)); }
       finally { setBusy(false); }

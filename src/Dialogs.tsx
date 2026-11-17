@@ -39,7 +39,7 @@ export function CreateWorkspace({ environment, defaultAgentHooks = true, onCreat
   const [name, setName] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   const profile = environment.profiles.find(item => item.id === profileId);
   const agent = environment.agents?.find(item => item.id === agentId);
-  const hooksAvailable = environment.capabilities?.sessionAgentHooks && Boolean(agent) && Boolean(agent?.hookAdapter || agent?.environment === 'windows');
+  const hooksAvailable = Boolean(agent) && (agent?.hookAdapter ? environment.capabilities?.sessionAgentHooks === true : agent?.environment === 'windows' && environment.capabilities?.projectAgentHooks === true);
   function selectProfile(id: string) {
     const next = environment.profiles.find(item => item.id === id); setProfile(id); setAgentId('');
     setCwd(next?.cwd ?? (next?.environment === 'wsl' ? '~' : environment.defaultCwd));

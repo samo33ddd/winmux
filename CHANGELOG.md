@@ -4,7 +4,7 @@ User-visible changes are recorded here. Release availability and downloadable as
 
 ## Unreleased
 
-- Install OMP, Pi and Hermes status adapters automatically before a Windows agent launch when **Agent status hooks** is enabled; Codex and Claude keep their session-only hooks. Task-created workspaces use the same preference (Issue #57).
+- Install OMP, Pi and Hermes status adapters automatically before a Windows agent launch when **Agent status hooks** is enabled; Codex and Claude keep their session-only hooks. Task-created workspaces use the same preference. A UI attached to an older running daemon keeps session hooks but leaves project adapters manual until the daemon is upgraded (Issue #57).
 - Hide the **Show archive** filter in **Projects and tasks** when no archived task exists (Issue #56).
 
 ## 0.2.3 — Project tasks and clearer agent activity
