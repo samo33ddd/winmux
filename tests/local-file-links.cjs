@@ -72,7 +72,12 @@ test('provider ranges span wrapped rows and activation passes the full path', as
   assert.equal(links.length, 1);
   assert.deepEqual(links[0].range.start, { x:12, y:3 });
   assert.equal(links[0].range.end.y, 4);
-  links[0].activate(new Event('click'), links[0].text);
+  // Plain click must not open; only Ctrl+left-click activates the link.
+  links[0].activate(Object.assign(new Event('click'), { ctrlKey:false, button:0 }), links[0].text);
+  assert.equal(opened, '');
+  links[0].activate(Object.assign(new Event('click'), { ctrlKey:true, button:2 }), links[0].text);
+  assert.equal(opened, '');
+  links[0].activate(Object.assign(new Event('click'), { ctrlKey:true, button:0 }), links[0].text);
   assert.equal(opened, 'C:\\shots\\photo.png');
   terminal.dispose();
 });
@@ -86,7 +91,8 @@ test('provider maps surrogate and combining characters before and inside a path'
   const links = await new Promise(resolve => provider.provideLinks(1, resolve));
   assert.equal(links.length, 1);
   assert.deepEqual(links[0].range.start, { x:4, y:1 });
-  links[0].activate(new Event('click'), links[0].text);
-  assert.equal(opened, expected);
+  links[0].activate(Object.assign(new Event('click'), { ctrlKey:false, button:0 }), links[0].text);
+  assert.equal(opened, '');
+  links[0].activate(Object.assign(new Event('click'), { ctrlKey:true, button:0 }), links[0].text);
   terminal.dispose();
 });

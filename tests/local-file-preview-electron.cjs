@@ -87,6 +87,10 @@ async function waitScreen(paneId, text) {
   throw new Error(`Terminal did not show ${text}`);
 }
 
+async function ctrlClick(x, y) {
+  await page.keyboard.down('Control');
+  try { await page.mouse.click(x, y); } finally { await page.keyboard.up('Control'); }
+}
 async function screenPoint(paneId, needle) {
   let box;
   let previousBox;
@@ -314,7 +318,7 @@ async function main() {
 
   await armPreviewGate();
   let point = await hoverRegisteredLink(pane.id, missingPath);
-  await page.mouse.click(point.x, point.y);
+  await ctrlClick(point.x, point.y);
   await waitPreviewGatePending();
   await rpc('tab.select', { workspaceId:workspace.id, tabId:secondTab.id });
   await waitPaneVisibility(pane.id, false);
@@ -326,7 +330,7 @@ async function main() {
   await waitPaneVisibility(pane.id, true);
   await armPreviewGate();
   point = await hoverRegisteredLink(pane.id, missingPath);
-  await page.mouse.click(point.x, point.y);
+  await ctrlClick(point.x, point.y);
   await waitPreviewGatePending();
   await rpc('tab.select', { workspaceId:workspace.id, tabId:secondTab.id });
   await waitPaneVisibility(pane.id, false);
@@ -345,7 +349,7 @@ async function main() {
   await waitScreen(secondPane.id, 'CLOSE_PENDING_READY');
   await armPreviewGate();
   point = await hoverRegisteredLink(secondPane.id, missingPath);
-  await page.mouse.click(point.x, point.y);
+  await ctrlClick(point.x, point.y);
   await waitPreviewGatePending();
   await rpc('tab.close', { workspaceId:workspace.id, tabId:secondTab.id });
   await waitPaneVisibility(pane.id, true);
@@ -368,10 +372,10 @@ async function main() {
 
   await armPreviewGate();
   point = await hoverRegisteredLink(pane.id, missingPath);
-  await page.mouse.click(point.x, point.y);
+  await ctrlClick(point.x, point.y);
   await waitPreviewGatePending();
   const successPoint = await hoverRegisteredLink(splitPane.id, 'valid-preview.txt');
-  await page.mouse.click(successPoint.x, successPoint.y);
+  await ctrlClick(successPoint.x, successPoint.y);
   await page.locator('.local-file-preview-modal').waitFor();
   await releasePreviewGate();
   await page.waitForTimeout(300);
@@ -381,7 +385,7 @@ async function main() {
 
   await armPreviewGate();
   point = await hoverRegisteredLink(pane.id, missingPath);
-  await page.mouse.click(point.x, point.y);
+  await ctrlClick(point.x, point.y);
   await waitPreviewGatePending();
   await page.getByTestId('files-toggle').click();
   await page.locator('[data-testid="file-entry"][data-path="valid-preview.txt"]').click();
@@ -394,7 +398,7 @@ async function main() {
 
   await armPreviewGate();
   point = await hoverRegisteredLink(pane.id, missingPath);
-  await page.mouse.click(point.x, point.y);
+  await ctrlClick(point.x, point.y);
   await waitPreviewGatePending();
   await releasePreviewGate();
   await page.waitForFunction(() => document.querySelector('.error-banner')?.textContent?.includes('File not found'));
@@ -450,7 +454,7 @@ async function main() {
   await waitScreen(pane.id, 'SPLIT_FAILURE_READY');
 
   point = await screenPoint(pane.id, missingPath);
-  await page.mouse.click(point.x, point.y);
+  await ctrlClick(point.x, point.y);
   await page.waitForFunction(() => document.querySelector('.error-banner')?.textContent?.includes('Файл не найден'));
   const russianError = await page.locator('.error-banner').innerText();
   assert.match(russianError, /Файл не найден: C:\\root\\collision_verdict3/);
@@ -459,7 +463,7 @@ async function main() {
   await page.mouse.move(5, 5);
   await page.locator('.local-file-link-tooltip').waitFor({ state:'detached' });
   point = await hoverRegisteredLink(pane.id, 'valid-preview.txt');
-  await page.mouse.click(point.x, point.y);
+  await ctrlClick(point.x, point.y);
   await page.waitForFunction(() => (
     document.querySelector('[data-testid="local-file-text"]')
     || document.querySelector('.error-banner')
@@ -500,8 +504,7 @@ async function main() {
     await page.mouse.click(point.x, point.y);
     await page.waitForTimeout(150);
     assert.deepEqual(await browserURLs(), beforeURLs, 'Ordinary clicks must not navigate');
-    await page.keyboard.down('Control');
-    try { await page.mouse.click(point.x, point.y); } finally { await page.keyboard.up('Control'); }
+    await ctrlClick(point.x, point.y);
     await page.waitForFunction(({ workspaceId, url }) => {
       const panel = document.querySelector(`[data-workspace-id="${workspaceId}"][data-testid="workspace-tools"]`);
       return [...(panel?.querySelectorAll('webview') || [])].some(view => {

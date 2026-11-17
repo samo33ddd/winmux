@@ -75,8 +75,11 @@ export function TerminalPane(props: Props) {
     };
     const activateTerminalLink = (event: MouseEvent, value: string) => {
       const target = classifyTerminalLink(value);
-      if (target?.kind === 'file') openLocalFile(target.value);
-      else if (target?.kind === 'external') activateWebLink(event, target.value);
+      if (target?.kind === 'file') {
+        if (!event.ctrlKey || event.button !== 0) return;
+        event.preventDefault();
+        openLocalFile(target.value);
+      } else if (target?.kind === 'external') activateWebLink(event, target.value);
     };
     const showBrowserLinkTooltip = (event: MouseEvent, value: string) => {
       if (term.element) showFileLinkTooltip(term.element, event, getLanguage() === 'ru'
@@ -95,7 +98,7 @@ export function TerminalPane(props: Props) {
         activate:(event, value) => activateTerminalLink(event, value),
         hover:(event, value) => {
           const filePath = normalizeLocalFileLink(value);
-          if (filePath && term.element) showFileLinkTooltip(term.element, event, t('Открыть в Winmux: {0}', filePath));
+          if (filePath && term.element) showFileLinkTooltip(term.element, event, t('Ctrl+Click — открыть в Winmux: {0}', filePath));
           else if (/^https?:\/\//i.test(value)) showBrowserLinkTooltip(event, value);
         },
         leave:() => { if (term.element) hideFileLinkTooltip(term.element); },
@@ -116,7 +119,7 @@ export function TerminalPane(props: Props) {
       { hover:(event, url) => showBrowserLinkTooltip(event, url), leave:() => { if (term.element) hideFileLinkTooltip(term.element); } },
     ));
     term.open(mount.current); terminal.current = term; fit.current = fitAddon; search.current = searchAddon;
-    const localLinks = term.registerLinkProvider(createLocalFileLinkProvider(term, openLocalFile, filePath => t('Открыть в Winmux: {0}', filePath)));
+    const localLinks = term.registerLinkProvider(createLocalFileLinkProvider(term, openLocalFile, filePath => t('Ctrl+Click — открыть в Winmux: {0}', filePath)));
     const resize = () => {
       if (disposed || !hydrated || !mount.current || !current.current.visible || mount.current.clientWidth < 2 || mount.current.clientHeight < 2) return;
       try {

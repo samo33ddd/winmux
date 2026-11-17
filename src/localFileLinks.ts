@@ -153,7 +153,7 @@ export function createLocalFileLinkProvider(terminal: Pick<Terminal, 'buffer' | 
       const links = findLocalFileLinks(text).map(match => ({
         range:range(match, units),
         text:match.text,
-        activate:() => open(match.path),
+        activate:(event: MouseEvent) => { if (event.ctrlKey && event.button === 0) { event.preventDefault(); open(match.path); } },
         hover:(event: MouseEvent) => terminal.element && showFileLinkTooltip(terminal.element, event, tooltip(match.path)),
         leave:() => terminal.element && hideFileLinkTooltip(terminal.element),
       }));
