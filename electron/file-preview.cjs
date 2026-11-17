@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const { pathToFileURL } = require('node:url');
 
 const run = promisify(execFile);
 const TEXT_LIMIT = 512 * 1024;
@@ -23,6 +24,28 @@ function invalid(message) {
   const error = new Error(message);
   error.code = 'INVALID_FILE_PATH';
   throw error;
+}
+
+// The selected instance's data directory holds ipc-token, ui-control.json,
+// state, logs, hook artifacts and the browser profile. Preview is arbitrary by
+// design, but these must never leave the process as preview content.
+function isUnder(root, target) {
+  const relative = path.relative(root, target);
+  return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+// Canonicalizes a Windows path for comparison: 8.3 short names, casing and
+// separators vary between callers. Falls back to absolute normalization so a
+// missing data directory still protects its configured location.
+async function canonicalWindowsPath(value) {
+  const resolved = path.resolve(value);
+  try { return await fs.realpath(resolved); }
+  catch { return resolved; }
+}
+
+async function assertWindowsOutsideDataDir(fullPath, dataDir) {
+  const realDataDir = await canonicalWindowsPath(dataDir);
+  if (isUnder(realDataDir.toLowerCase(), fullPath.toLowerCase())) invalid('Winmux private data cannot be previewed');
 }
 
 function validateInput(value) {
@@ -114,7 +137,7 @@ function describePreview(fullPath, size, data) {
   };
 }
 
-async function readWindowsFile(input) {
+async function readWindowsFile(input, dataDir) {
   const requested = path.resolve(input.absolute ? input.input : path.resolve(input.cwd, input.input));
   let fullPath;
   try { fullPath = await fs.realpath(requested); }
@@ -122,6 +145,7 @@ async function readWindowsFile(input) {
     if (error.code === 'ENOENT') throw new Error(`File not found: ${requested}`);
     throw error;
   }
+  await assertWindowsOutsideDataDir(fullPath, dataDir);
   const stat = await fs.stat(fullPath);
   if (!stat.isFile()) throw new Error('Select a file to preview, not a directory');
   const mime = IMAGE_TYPES.get(path.extname(fullPath).toLowerCase());
@@ -130,10 +154,11 @@ async function readWindowsFile(input) {
 }
 
 const WSL_READER = String.raw`import base64,json,os,sys
-root,value=sys.argv[1],os.path.expanduser(sys.argv[2])
+root,value,datadirs=sys.argv[1],os.path.expanduser(sys.argv[2]),[item for item in base64.b64decode(sys.argv[3]).decode('utf-8').split('\n') if item]
 target=os.path.realpath(value if os.path.isabs(value) else os.path.join(root,value))
-if not os.path.isfile(target):
- raise ValueError('Select a file to preview, not a directory')
+for private in datadirs:
+ private=os.path.realpath(private)
+ if target==private or target.startswith(private+'/'): raise ValueError('Winmux private data cannot be previewed')` + '\n' + String.raw`if not os.path.isfile(target):` + '\n' + String.raw` raise ValueError('Select a file to preview, not a directory')
 size=os.path.getsize(target)
 images={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.bmp':'image/bmp','.ico':'image/x-icon','.avif':'image/avif','.svg':'image/svg+xml'}
 mime=images.get(os.path.splitext(target)[1].lower())
@@ -148,9 +173,20 @@ else:
 result.update(name=os.path.basename(target),path=target,size=size)
 print(json.dumps(result,separators=(',',':')))`;
 
-async function readWslFile(input, profile, cwd) {
+async function readWslFile(input, profile, cwd, dataDir) {
+  // Map the Windows data directory into the distribution so both /mnt/<drive>
+  // input and Windows-drive input resolve against the same private subtree.
+  const dataDirs = [pathToFileURL(dataDir.replace(/\\/g, '/')).pathname];
   try {
-    const { stdout } = await run('wsl.exe', ['-d', profile.distro, '--', 'python3', '-c', WSL_READER, cwd, input.input], {
+    const { stdout } = await run('wsl.exe', ['-d', profile.distro, '--exec', 'wslpath', '-a', '-u', dataDir], { windowsHide:true, timeout:10000, maxBuffer:65536, encoding:'utf8' });
+    const mapped = stdout.trim().split(/\r?\n/).map(line => line.trim()).find(Boolean);
+    if (mapped) dataDirs.push(mapped);
+  } catch (error) {
+    const detail = (error.stderr || error.message || '').trim().slice(0, 300);
+    throw new Error(`Cannot map the Winmux data directory inside ${profile.distro}; private-data preview guard unavailable. ${detail}`);
+  }
+  try {
+    const { stdout } = await run('wsl.exe', ['-d', profile.distro, '--', 'python3', '-c', WSL_READER, cwd, input.input, Buffer.from(dataDirs.join('\n'), 'utf8').toString('base64')], {
       windowsHide:true,
       timeout:20000,
       maxBuffer:20 * 1024 * 1024,
@@ -163,8 +199,9 @@ async function readWslFile(input, profile, cwd) {
   }
 }
 
-async function readFilePreview({ client, path:value, paneId, workspaceId }) {
+async function readFilePreview({ client, path:value, paneId, workspaceId, dataDir }) {
   const input = validateInput(value);
+  if (typeof dataDir !== 'string' || !dataDir) throw new Error('readFilePreview requires the selected data directory');
   const state = await client.request('state', {});
   const context = workspaceContext(state, paneId, workspaceId);
   const environment = await client.request('environment', {});
@@ -173,8 +210,8 @@ async function readFilePreview({ client, path:value, paneId, workspaceId }) {
 
   const windowsPath = /^[A-Za-z]:[\\/]/.test(input.input);
   const result = windowsPath || profile.environment !== 'wsl'
-    ? await readWindowsFile({ ...input, cwd:context.cwd })
-    : await readWslFile(input, profile, context.cwd);
+    ? await readWindowsFile({ ...input, cwd:context.cwd }, dataDir)
+    : await readWslFile(input, profile, context.cwd, dataDir);
   return { ...result, workspaceId:context.workspaceId, paneId:context.paneId };
 }
 

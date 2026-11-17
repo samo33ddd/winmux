@@ -10,8 +10,8 @@ const root = path.resolve(__dirname, '..');
 const artifacts = path.join(root, '.artifacts');
 fs.mkdirSync(artifacts, { recursive: true });
 const dataDir = fs.mkdtempSync(path.join(artifacts, 'local-file-preview-'));
-const projectDir = path.join(dataDir, 'project');
-fs.mkdirSync(projectDir);
+const projectDir = fs.mkdtempSync(path.join(artifacts, 'preview-project-'));
+
 const validPath = path.join(projectDir, 'valid-preview.txt');
 fs.writeFileSync(validPath, 'Local preview recovered\n');
 
@@ -19,7 +19,7 @@ const missingPath = 'C:\\root\\collision_verdict3';
 assert.equal(fs.existsSync(missingPath), false, 'The collision_verdict3 repro path must remain absent, not remapped or created.');
 
 const env = { ...process.env, WINMUX_DATA_DIR:dataDir, WINMUX_NO_PROFILE:'1', WINMUX_TEST_MODE:'1' };
-delete env.ELECTRON_RUN_AS_NODE;
+for (const key of ['ELECTRON_RUN_AS_NODE', 'WINMUX_PIPE_NAME', 'WINMUX_PANE_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_TASK_ID', 'WINMUX_DEV_URL']) delete env[key];
 let desktop;
 let page;
 let rendererServer;
@@ -408,6 +408,40 @@ async function main() {
   assert.equal(await page.locator('.local-file-preview-modal').count(), 1, 'A successful CLI preview must open the real modal');
   assert.equal(await page.locator('.error-banner').count(), 0, 'A Files/CLI preview success must clear the stale terminal preview error');
   await page.keyboard.press('Escape');
+
+  // #61: the selected instance's own data directory can never be previewed.
+  const privateFiles = [
+    path.join(dataDir, 'hooks', 'session', 'synthetic-hook.json'),
+    path.join(dataDir, 'private', 'sentinel.txt'),
+    path.join(dataDir, 'ui', 'sentinel-state.json'),
+  ];
+  for (const target of privateFiles) fs.mkdirSync(path.dirname(target), { recursive:true });
+  for (const target of privateFiles) fs.writeFileSync(target, 'WINMUX_SENTINEL');
+  for (const target of privateFiles) {
+    const rejection = await page.evaluate(value => window.winmux.call('file.open', { path:value }).then(() => '').catch(error => String(error?.message || error)), target);
+    assert.match(rejection, /private data/i, `private preview must be rejected: ${target}`);
+    assert(!rejection.includes('SENTINEL'), 'rejection must not include contents');
+  }
+  const cliRejection = cliOpen(privateFiles[0], pane.id);
+  assert.notEqual(cliRejection.status, 0, 'CLI open of a private file must fail');
+  if (!/private data/i.test(cliRejection.stderr || '')) console.log('CLI-REJECT-DEBUG', JSON.stringify({status:cliRejection.status, stdout:cliRejection.stdout, stderr:cliRejection.stderr, error:String(cliRejection.error)}));
+  assert.match(cliRejection.stderr || cliRejection.stdout || '', /private data/i);
+  await assertNoPreviewOrError('private-data rejection');
+  // The browser-control file.open path gets the same rejection, never contents.
+  const { request:browserRequest } = require('../scripts/browser.cjs');
+  const browserResult = await new Promise(resolve => {
+    browserRequest('file.open', { path:privateFiles[1] }, { dataDir }).then(
+      () => resolve('resolved'),
+      error => resolve(String(error?.message || error)),
+    );
+  });
+  assert.match(browserResult, /private data/i, 'browser file.open must reject private data');
+  assert(!browserResult.includes('SENTINEL'), 'browser reply must not include contents');
+  // Ordinary browser file.open stays metadata-only for an allowed file.
+  const ordinaryBrowser = await browserRequest('file.open', { path:validPath }, { dataDir });
+  assert.equal(ordinaryBrowser.text, undefined, 'metadata reply must not include contents');
+  assert.equal(ordinaryBrowser.name, 'valid-preview.txt');
+  console.log('PASS private-data preview rejected on every caller; ordinary browser metadata intact');
 
   await page.evaluate(() => localStorage.setItem('winmux.language', 'ru'));
   await page.reload();
