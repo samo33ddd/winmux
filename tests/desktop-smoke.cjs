@@ -17,6 +17,8 @@ const dataDir = fs.mkdtempSync(path.join(artifacts, 'desktop-test-'));
 const filesDir = fs.mkdtempSync(path.join(artifacts, 'desktop-files-'));
 const env = { ...process.env, WINMUX_DATA_DIR: dataDir, WINMUX_NO_PROFILE: '1', WINMUX_TEST_MODE: '1' };
 for (const key of ['ELECTRON_RUN_AS_NODE', 'WINMUX_PIPE_NAME', 'WINMUX_PANE_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_TASK_ID', 'WINMUX_DEV_URL']) delete env[key];
+// The test process itself connects to the isolated daemon; pane-inherited
+// WINMUX_* variables must not redirect that connection to a live instance.
 for (const key of ['WINMUX_PIPE_NAME', 'WINMUX_PANE_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_TASK_ID']) delete process.env[key];
 // Agent launch is exercised with a local fixture, never a signed-in AI account.
 const fixtureBin=path.join(dataDir,'agent-fixture'); fs.mkdirSync(fixtureBin);
