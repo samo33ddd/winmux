@@ -4,6 +4,8 @@ User-visible changes are recorded here. Release availability and downloadable as
 
 ## Unreleased
 
+## 0.2.4 — Audit fixes and release hardening
+
 ### Fixed
 
 - Codex binding works for accounts with more than 5 and more than 500 threads, and `listLoaded` no longer returns a permanently stale snapshot (Issues #81, #82, #84).
