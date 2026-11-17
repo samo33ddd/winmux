@@ -24,7 +24,7 @@ function taskInstructionArgs(agent, taskId) {
 }
 
 function deliverySupportFor(agentId) {
-  const name = agentId.split(':').pop();
+  const name = agentId === undefined ? undefined : agentId.split(':').pop();
   if (name === 'codex') return 'hooks';
   if (['claude', 'omp'].includes(name)) return 'instructions';
   return 'unsupported';
