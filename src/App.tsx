@@ -3,7 +3,7 @@ import { defaults, getPreferences, subscribePreferences, savePreferences, palett
 import { SettingsDialog } from './SettingsDialog';
 import { BrandMark } from './BrandMark';
 import { AgentStatus, activityLabel, agentActionLabel, agentName } from './AgentStatus';
-import { assertFilesNotSaving, pruneFileDrafts } from './fileDrafts';
+import { assertFilesNotSaving, getOrphanedFileDrafts, pruneFileDrafts, setFileDraft, subscribeFileDrafts } from './fileDrafts';
 import { activeTab, paneIds, paneTab, selectedPane, terminalTabLabel, terminalTabs } from './workspaceTabs';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent } from 'react';
 import { ResizeHandle, usePanelWidth } from './ResizeHandle';
@@ -17,7 +17,7 @@ import { AttentionInbox } from './AttentionInbox';
 import { attentionSections } from './attentionGrouping';
 import { TaskDialog } from './TaskDialog';
 import { ProjectTasks } from './ProjectTasks';
-import { bridge, errorMessage, type Agent, type Direction, type Environment, type Pane, type Settings, type State, type TerminalTab, type Workspace } from './types';
+import { bridge, errorMessage, writeClipboard, type Agent, type Direction, type Environment, type Pane, type Settings, type State, type TerminalTab, type Workspace } from './types';
 
 type Dialog = { type: 'create' } | { type: 'create-task' } | { type: 'archive-task'; taskId: string; name: string; workspaceId?: string } | { type: 'rename'; workspace: Workspace } | { type: 'settings' } | { type: 'shortcuts' } | { type: 'close-pane'; pane: Pane } | { type: 'close-tab'; workspaceId: string; tab: TerminalTab } | { type: 'close-workspace'; workspace: Workspace } | null;
 type BannerError = { message: string; previewToken?: number };
@@ -55,6 +55,12 @@ export default function App() {
   const [toolsWidth,setToolsWidth] = usePanelWidth('winmux.tools-width',400,280,1600);
   const [windowWidth,setWindowWidth] = useState(window.innerWidth);
   useEffect(() => { const resize=()=>setWindowWidth(window.innerWidth); window.addEventListener('resize',resize); return ()=>window.removeEventListener('resize',resize); }, []);
+  const orphanedDrafts = useSyncExternalStore(subscribeFileDrafts, getOrphanedFileDrafts);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryDiscard, setRecoveryDiscard] = useState<string | null>(null);
+  const [recoveryError, setRecoveryError] = useState('');
+  const orphan = orphanedDrafts[0];
+  useEffect(() => { if (!orphan) { setRecoveryOpen(false); setRecoveryDiscard(null); } }, [orphan?.key]);
   const maxToolsWidth=Math.max(280,windowWidth-(sidebarOpen?sidebarWidth+6:0)-300);
   const effectiveToolsWidth=Math.min(toolsExpanded?maxToolsWidth:toolsWidth,maxToolsWidth);
   const sidebarExpanded = sidebarOpen && sidebarWidth >= 168;
@@ -484,5 +490,27 @@ export default function App() {
     {dialog?.type === 'close-workspace' && <ConfirmClose title={t("Закрыть рабочее пространство?")} description={t('Несохранённые изменения файлов будут потеряны.') + ' ' + t("Все терминалы пространства «{0}» будут закрыты, их процессы — завершены. Чтобы сохранить сессии, просто закройте окно приложения.", dialog.workspace.name)} onClose={() => setDialog(null)} onConfirm={async () => { assertFilesNotSaving(dialog.workspace.panes.map(pane => pane.id)); await bridge().call('workspace.close', { workspaceId: dialog.workspace.id }); }} />}
     {dialog?.type === 'shortcuts' && <Modal title={t("Горячие клавиши")} onClose={() => setDialog(null)}><div className="shortcut-list">{shortcuts.map(([label, key]) => <div key={key}><span>{label}</span><kbd>{key}</kbd></div>)}</div><p className="dialog-footnote">{t("Ctrl+C остаётся прерыванием процесса в терминале. Двойное нажатие на разделитель выравнивает панели.")}</p></Modal>}
     {dialog?.type === 'settings' && <SettingsDialog settings={settings} profiles={profiles} workspaces={state?.workspaces ?? []} activeWorkspaceId={workspace?.id} agentHooks={agentHooks} agentHooksAvailable={Boolean(hooksAvailable)} nativeCodex={nativeCodex} ompHooksAvailable={environment?.capabilities?.ompHooks === true} agentActivityAvailable={environment?.capabilities?.agentActivity === true} onAgentHooksChange={updateAgentHooks} onSkillStarted={async(workspaceId,paneId)=>{await refresh();selectWorkspace(workspaceId,paneId);setDialog(null);}} onChange={updateSettings} onClose={() => setDialog(null)} />}
+    {orphan && !recoveryOpen && <div className="orphan-recovery-banner" data-testid="orphan-banner" role="alert">
+      <span>{t('Есть несохранённые изменения в закрытых файлах.')}</span>
+      <button type="button" className="button" data-testid="orphan-open" onClick={() => setRecoveryOpen(true)}>{t('Восстановить несохранённые файлы ({0})', orphanedDrafts.length)}</button>
+    </div>}
+    {orphan && recoveryOpen && (() => {
+      const path = (() => { try { return JSON.parse(orphan.key)[3] || orphan.key; } catch { return orphan.key; } })();
+      return <Modal title={t('Восстановить несохранённый файл')} onClose={() => { setRecoveryOpen(false); setRecoveryDiscard(null); setRecoveryError(''); }} busy={orphan.draft.saving}>
+        <div className="form-fields">
+          <p className="dialog-description">{t('Вкладка или пространство файла закрылась до сохранения. Скопируйте текст или отбросьте его.')}</p>
+          <p className="orphan-path"><code>{path}</code>{orphanedDrafts.length > 1 && <span> {t('(ещё {0})', orphanedDrafts.length - 1)}</span>}</p>
+          <textarea className="orphan-text" data-testid="orphan-text" rows={14} value={orphan.draft.text} onChange={event => setFileDraft(orphan.key, { ...orphan.draft, text: event.target.value })} spellCheck={false} />
+          {orphan.draft.error && <p className="inline-error" role="alert">{orphan.draft.error}</p>}
+          {recoveryError && <p className="inline-error" role="alert">{recoveryError}</p>}
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="button" data-testid="orphan-copy" onClick={async () => { setRecoveryError(''); try { await writeClipboard(orphan.draft.text); } catch (error) { setRecoveryError(errorMessage(error)); } }}>{t('Копировать')}</button>
+          {recoveryDiscard === orphan.key
+            ? <><span>{t('Отбросить без сохранения?')}</span><button type="button" className="button danger" data-testid="orphan-discard-confirm" onClick={() => { setFileDraft(orphan.key); setRecoveryDiscard(null); setRecoveryError(''); }}>{t('Отбросить')}</button><button type="button" className="button" onClick={() => setRecoveryDiscard(null)}>{t('Отмена')}</button></>
+            : <button type="button" className="button danger" data-testid="orphan-discard" disabled={orphan.draft.saving} onClick={() => setRecoveryDiscard(orphan.key)}>{t('Отбросить')}</button>}
+        </div>
+      </Modal>;
+    })()}
   </div>;
 }
