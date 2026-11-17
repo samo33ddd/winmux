@@ -117,6 +117,7 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
       await installProjectAgentHooks({
         projectRoot: cwd,
         dataDir: hookContext?.dataDir,
+        pipeName: hookContext?.pipeName,
         agent: agent.id.split(':').pop(),
         helperRoot: path.join(__dirname, '..', 'hooks'),
       });

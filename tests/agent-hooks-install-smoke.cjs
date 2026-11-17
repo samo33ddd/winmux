@@ -428,7 +428,11 @@ test('generated command survives cmd.exe quoting, spaces, Unicode, and metachara
     nodePath: process.execPath,
   });
   const command = readHooks(project).hooks.Stop[0].hooks[0].commandWindows;
-  assert.equal(command.includes('--pipe'), false);
+  const encoded = /-EncodedCommand (\S+)/.exec(command)?.[1];
+  assert.ok(encoded, 'hook command must be an encoded PowerShell command');
+  const decoded = Buffer.from(encoded, 'base64').toString('utf16le');
+  assert.equal(decoded.includes('--pipe'), true);
+  assert.equal(decoded.includes(pipe), true);
   assert.equal(installed.helperPath.includes(dataDir), true);
   const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', command], {
     cwd: project,

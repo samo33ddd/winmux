@@ -455,7 +455,7 @@ async function startServer(options = {}) {
       if (state.settings.activeWorkspaceId === workspace.id) state.settings.activeWorkspaceId = state.workspaces[0]?.id;
     }
   }
-  async function dispatch(method, params) {
+  async function dispatch(method, params, version) {
     if (stopping) fail('SHUTTING_DOWN', 'Daemon is shutting down');
     switch (method) {
       case 'state': return publicState();
@@ -772,6 +772,9 @@ async function startServer(options = {}) {
         return result;
       }
       case 'agent.hook': {
+        if (version !== undefined && version !== 1) {
+          fail('UNSUPPORTED_VERSION', `agent.hook protocol version is not supported: ${String(version).slice(0, 64)}`);
+        }
         const agentId = string(params.agentId, 'agentId', 64);
         const event = string(params.event, 'event', 64);
         const sessionId = string(params.sessionId, 'sessionId', 128);
@@ -896,7 +899,7 @@ async function startServer(options = {}) {
         if (typeof method !== 'string' || method.length > 128 || !params || typeof params !== 'object' || Array.isArray(params)) {
           send(client, { id: request.id, error: { code: 'INVALID_ARGUMENT', message: 'Expected a method and a params object' } }); client.inflight--; continue;
         }
-        const invoke = () => dispatch(method, params);
+        const invoke = () => dispatch(method, params, request.v);
         const result = reads.has(method) ? Promise.resolve().then(invoke) : mutationTail.then(invoke);
         if (!reads.has(method)) mutationTail = result.catch(() => {});
         if (method.startsWith('task.delivery.') && method !== 'task.delivery.context') {

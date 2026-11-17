@@ -80,15 +80,18 @@ function pipeName(dataDir, explicit) {
     if (explicit.length > 260 || explicit.includes('\0')) fail('Winmux pipe name is invalid');
     return explicit;
   }
-  const identity = `${require('node:os').userInfo().username}:${require('node:os').homedir()}:${require('node:path').resolve(dataDir).toLowerCase()}`;
+  const resolved = require('node:path').resolve(dataDir);
+  const identity = `${require('node:os').userInfo().username}:${require('node:os').homedir()}:${resolved.toLowerCase()}`;
   const suffix = crypto.createHash('sha256').update(identity).digest('hex').slice(0, 24);
+  // The Unix fallback socket lives in the user-private data directory:
+  // a predictable name under os.tmpdir() can be pre-bound to steal the token.
   return process.platform === 'win32'
     ? `\\\\.\\pipe\\winmux-${suffix}`
-    : require('node:path').join(require('node:os').tmpdir(), `winmux-${suffix}.sock`);
+    : require('node:path').join(resolved, `winmux-${suffix}.sock`);
 }
 
 function deliver(pipe, token, params) {
-  const frame = JSON.stringify({ id: randomUUID(), token, method: 'agent.hook', params }) + '\n';
+  const frame = JSON.stringify({ id: randomUUID(), token, method: 'agent.hook', v: 1, params }) + '\n';
   if (Buffer.byteLength(frame) > MAX_FRAME) fail('Winmux hook frame is too large');
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(pipe);

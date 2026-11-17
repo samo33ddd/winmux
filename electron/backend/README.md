@@ -62,7 +62,7 @@ The Windows backend attaches to the already-running Codex daemon using WebSocket
 
 - `codex.status {}` returns connection readiness and loaded root-thread/pane mapping metadata. It excludes conversation content.
 - `codex.bind {paneId,threadId}` selects an available thread for that pane and its exact directory. Ambiguous candidates stay unbound until explicitly selected.
-- `agent.hook {agentId,event,sessionId,cwd,paneId?}` accepts supported Codex lifecycle events only for a current matching session/mapping. The project helper sends session and cwd instead of inheriting a possibly stale pane ID from the shared Codex daemon.
+- `agent.hook {agentId,event,sessionId,cwd,paneId?}` accepts supported Codex lifecycle events only for a current matching session/mapping. The project helper sends session and cwd instead of inheriting a possibly stale pane ID from the shared Codex daemon. A request may carry `v: 1` for the hook protocol version; a missing field means version 1 and any other value fails with `UNSUPPORTED_VERSION`.
 
 Mapped panes expose optional `agentThreadId`, `agentSessionId`, and `agentBinding`. These bindings are ephemeral. Idle does not imply a completed turn; completion requires its native turn or hook event. A known Codex process retains its identity with unknown activity when thread mapping or the native connection is unavailable.
 

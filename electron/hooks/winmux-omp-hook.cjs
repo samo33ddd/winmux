@@ -97,11 +97,14 @@ function pipeName(dataDir, explicit) {
     if (explicit.length > 260 || explicit.includes('\0')) fail('Winmux pipe name is invalid');
     return explicit;
   }
-  const identity = `${os.userInfo().username}:${os.homedir()}:${path.resolve(dataDir).toLowerCase()}`;
+  const resolved = path.resolve(dataDir);
+  const identity = `${os.userInfo().username}:${os.homedir()}:${resolved.toLowerCase()}`;
   const suffix = crypto.createHash('sha256').update(identity).digest('hex').slice(0, 24);
+  // The Unix fallback socket lives in the user-private data directory:
+  // a predictable name under os.tmpdir() can be pre-bound to steal the token.
   return process.platform === 'win32'
     ? `\\\\.\\pipe\\winmux-${suffix}`
-    : path.join(os.tmpdir(), `winmux-${suffix}.sock`);
+    : path.join(resolved, `winmux-${suffix}.sock`);
 }
 
 function deliver(pipe, token, params) {
@@ -110,6 +113,7 @@ function deliver(pipe, token, params) {
     id,
     token,
     method: 'agent.hook',
+    v: 1,
     params,
   }) + '\n';
   if (Buffer.byteLength(frame) > MAX_FRAME) fail('Winmux hook frame is too large');

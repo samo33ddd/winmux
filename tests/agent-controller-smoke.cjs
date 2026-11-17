@@ -5,8 +5,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const net = require('node:net');
 
-const root = path.resolve(__dirname, '..');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'winmux-agent-controller-'));
 const project = path.join(dataDir, 'project');
 fs.mkdirSync(project, { recursive: true });
@@ -208,6 +208,39 @@ async function main() {
     state: 'running',
   });
   assert.deepEqual(unknown, { applied: false, reason: 'event' });
+
+  // Frame-level protocol version: absent means v1; unsupported values reject.
+  const rawHook = version => new Promise((resolve, reject) => {
+    const token = fs.readFileSync(path.join(dataDir, 'ipc-token'), 'utf8').trim();
+    const socket = net.createConnection(pipeName);
+    socket.setEncoding('utf8');
+    let buffer = '';
+    socket.on('data', chunk => {
+      buffer += chunk;
+      const index = buffer.indexOf('\n');
+      if (index === -1) return;
+      socket.destroy();
+      resolve(JSON.parse(buffer.slice(0, index)));
+    });
+    socket.on('error', reject);
+    const request = {
+      id: `version-${JSON.stringify(version) ?? 'absent'}`,
+      token,
+      method: 'agent.hook',
+      ...(version === undefined ? {} : { v: version }),
+      params: { agentId: 'omp', event: 'agent_end', sessionId: 'version-probe', cwd: project, state: 'idle' },
+    };
+    socket.write(`${JSON.stringify(request)}\n`);
+  });
+  const rejected = await rawHook(2);
+  assert.equal(rejected.error?.code, 'UNSUPPORTED_VERSION');
+  const rejectedString = await rawHook('2');
+  assert.equal(rejectedString.error?.code, 'UNSUPPORTED_VERSION');
+  const explicitV1 = await rawHook(1);
+  assert.equal(explicitV1.error, undefined, `v1 must be accepted: ${JSON.stringify(explicitV1)}`);
+  const implicit = await rawHook(undefined);
+  assert.equal(implicit.error, undefined, `absent v must default to v1: ${JSON.stringify(implicit)}`);
+
   for (const pane of panes) {
     const observed = await statePane(pane.id);
     assert.equal(observed.agentState, 'unknown');
@@ -471,7 +504,7 @@ async function main() {
   observed = await statePane(selectedPane.id);
   assert.equal(observed.agentActivity, 'reading');
   await client.request('pane.close', { paneId: selectedPane.id });
-  let current = await client.request('state');
+  const current = await client.request('state');
   assert.equal(current.workspaces.some(item => item.id === selectedWorkspace.id), false);
   assert.equal(current.workspaces.find(item => item.id === workspace.id).panes.length, 4);
 

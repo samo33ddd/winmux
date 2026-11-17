@@ -68,12 +68,12 @@ function windowsClaudeHookCommand() {
   // process command-line limit. The environment values are never shell source.
   // This PowerShell process belongs only to the hook, never the pane shell.
   const script = `$env:ELECTRON_RUN_AS_NODE='1'; & $env:WINMUX_AGENT_NODE $env:WINMUX_AGENT_HELPER --claude`;
-  return `powershell.exe -NoLogo -NoProfile -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
+  return `powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
 }
 
 function windowsCodexHookCommand(wrapperPath) {
   const script = `& ${psQuote(wrapperPath)}`;
-  return `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
+  return `powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
 }
 
 function claudeSettings(profile) {
