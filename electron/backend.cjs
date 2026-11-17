@@ -4,7 +4,7 @@ const path = require('node:path');
 const net = require('node:net');
 const { randomUUID } = require('node:crypto');
 const { LIMITS, locations, createToken, authenticated, fail, string, integer } = require('./backend/shared.cjs');
-const { discover, validateLaunch } = require('./backend/environment.cjs');
+const { discover, validateLaunch, validateSessionHookShell } = require('./backend/environment.cjs');
 const { cwdFromOsc } = require('./backend/shell-integration.cjs');
 const { terminalEnvironment } = require('./backend/terminal-env.cjs');
 const { createController: createCodexController } = require('./codex-integration.cjs');
@@ -449,8 +449,10 @@ async function startServer(options = {}) {
         const agentHooks = params.agentHooks === undefined
           ? Boolean(environment.agents?.find(agent => agent.id === agentId)?.hookAdapter)
           : params.agentHooks;
-        await validateLaunch(environment, profileId, inspected.root, agentId, false);
         const profile = environment.profiles.find(item => item.id === profileId);
+        // Probe the hook shell before any project/task state or worktree change.
+        if (agentHooks) await validateSessionHookShell(profile);
+        await validateLaunch(environment, profileId, inspected.root, agentId, false);
         const identity = value => {
           if (profile.environment !== 'windows') return path.posix.normalize(value);
           try { return fs.realpathSync.native(value).toLowerCase(); }

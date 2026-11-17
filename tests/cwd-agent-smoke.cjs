@@ -32,6 +32,11 @@ if (process.argv.includes('--fixture-daemon')) {
       command: profile.environment === 'wsl' ? linuxPath(path.join(process.env.WINMUX_FIXTURE_DIR, 'hooks.sh')) : path.join(process.env.WINMUX_FIXTURE_DIR, 'hooks.cmd'),
     });
     environment.agents.push({ id: 'fixture:missing', label: 'missing', available: true, profileId: 'powershell', environment: 'windows', command: path.join(process.env.WINMUX_FIXTURE_DIR, 'missing.exe') });
+    // A Windows profile whose hook shell reports PowerShell < 7.3 must be
+    // rejected before any task/worktree mutation (#65).
+    const oldPs = path.join(process.env.WINMUX_FIXTURE_DIR, 'fake-ps.cmd');
+    environment.profiles.push({ id: 'powershell-5.1', label: 'Windows PowerShell 5.1', environment: 'windows', command: oldPs, args: [], cwd: os.homedir() });
+    environment.agents.push({ id: 'hook:powershell-5.1:codex', label: 'codex', profileId: 'powershell-5.1', environment: 'windows', available: true, hookAdapter: 'codex', command: path.join(process.env.WINMUX_FIXTURE_DIR, 'hooks.cmd') });
     return environment;
   };
   const createTaskDelivery = ({repo, base}) => ({
@@ -51,6 +56,7 @@ if (process.argv.includes('--fixture-daemon')) {
   const outside = path.join(dataDir, 'outside');
   for (const dir of [fixture, childDir, outside]) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(fixture, 'fixture.cmd'), '@echo off\r\necho run>>"%~dp0windows-runs.txt"\r\necho SAFE_AGENT_STARTED\r\nexit /b 0\r\n');
+  fs.writeFileSync(path.join(fixture, 'fake-ps.cmd'), '@echo off\r\necho 5.1.17763\r\n');
   fs.writeFileSync(path.join(fixture, 'fixture.sh'), '#!/bin/bash\nprintf "run\\n" >> "$(dirname -- "$0")/wsl-runs.txt"\nprintf "SAFE_AGENT_STARTED\\n"\n');
   fs.writeFileSync(path.join(fixture, 'hooks.cmd'), `@echo off\r\nif defined ELECTRON_RUN_AS_NODE exit /b 91\r\nsetlocal\r\nset "ELECTRON_RUN_AS_NODE=1"\r\n"${process.execPath}" "%~dp0hooks.cjs" %*\r\nexit /b %errorlevel%\r\n`);
   fs.writeFileSync(path.join(fixture, 'hooks.sh'), `#!/bin/bash\nif [ "\${ELECTRON_RUN_AS_NODE+x}" = x ]; then exit 91; fi\nELECTRON_RUN_AS_NODE=1 WSLENV="\${WSLENV:+$WSLENV:}ELECTRON_RUN_AS_NODE" ${shQuote(linuxPath(process.execPath))} ${shQuote(path.join(fixture, 'hooks.cjs'))} "$@"\n`);
@@ -435,6 +441,29 @@ app.whenReady().then(() => {
     await client.request('task.archive', {taskId:recoveredTask.id});
     await assert.rejects(client.request('task.create', attachParams), {code:'ALREADY_EXISTS'});
     console.log('PASS interrupted attach: archive preserves worktree and allows a new task attachment');
+    // #65: an incompatible hook shell is a pre-flight rejection, before any
+    // project/task mutation or worktree creation.
+    const tasksBefore = (await client.request('state')).tasks.length;
+    const projectsBefore = (await client.request('state')).projects.length;
+    await assert.rejects(
+      client.request('task.create', { projectDirectory:taskRepo, profileId:'powershell-5.1', name:'Old PS task', baseBranch:'main', primaryBranch:'main', agentId:'hook:powershell-5.1:codex', mode:'new' }),
+      { code:'AGENT_HOOKS_UNSUPPORTED' },
+    );
+    assert.equal((await client.request('state')).tasks.length, tasksBefore, 'no task state was created');
+    assert.equal((await client.request('state')).projects.length, projectsBefore, 'no project state was created');
+    const sessionDir = path.join(dataDir, 'hooks', 'session');
+    const artifactsBefore = fs.existsSync(sessionDir) ? fs.readdirSync(sessionDir).length : 0;
+    await assert.rejects(
+      client.request('task.create', { projectDirectory:taskRepo, profileId:'powershell-5.1', name:'Old PS task 2', baseBranch:'main', primaryBranch:'main', agentId:'hook:powershell-5.1:codex', mode:'new' }),
+      { code:'AGENT_HOOKS_UNSUPPORTED' },
+    );
+    const artifactsAfter = fs.existsSync(sessionDir) ? fs.readdirSync(sessionDir).length : 0;
+    assert.equal(artifactsAfter, artifactsBefore, 'no new hook artifacts were written');
+    // The same hook agent on a compatible shell is unaffected.
+    const healthy = await client.request('task.create', { projectDirectory:taskRepo, profileId:'powershell', name:'Healthy task', baseBranch:'main', primaryBranch:'main', agentId:'hook:powershell:codex', mode:'new' });
+    assert(healthy.panes.length, 'PowerShell 7.3+ still launches a hook task');
+    await client.request('workspace.close', { workspaceId:healthy.id });
+    console.log('PASS PowerShell <7.3 hook task rejected before state/worktree mutation; compatible shells unaffected');
     await stop();
   }
   async function cleanup() {
