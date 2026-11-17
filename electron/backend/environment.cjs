@@ -56,6 +56,18 @@ async function selectedAgentForLaunch(environment, profile, agentId) {
   const resolved = { ...agent, available: Boolean(command), command: command || null };
   return selectedAgent({ ...environment, agents: environment.agents.map(item => item === agent ? resolved : item) }, profile, agentId);
 }
+// Session hook launches need PowerShell 7.3+ for reliable native argument
+// passing. Probe the actual hook shell before any state mutation so an
+// incompatible profile is a pre-flight rejection, not a mid-launch failure.
+async function validateSessionHookShell(profile) {
+  if (profile.environment !== 'windows') return;
+  const output = await run(profile.command, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'])
+    .catch(error => { fail('AGENT_HOOKS_UNSUPPORTED', `Session hooks require PowerShell 7.3 or later; cannot probe the hook shell: ${String(error.message || error).split('\n')[0]}`); });
+  const parsed = /^(\d+)\.(\d+)/.exec(output.trim());
+  if (!parsed || Number(parsed[1]) < 7 || (Number(parsed[1]) === 7 && Number(parsed[2]) < 3)) {
+    fail('AGENT_HOOKS_UNSUPPORTED', 'Session hooks require PowerShell 7.3 or later');
+  }
+}
 async function discover() {
   const profiles = [];
   if (process.platform === 'win32') {
@@ -160,8 +172,9 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
   if (!path.isAbsolute(cwd)) fail('INVALID_CWD', 'A terminal startup directory must be an absolute path');
   try { if (!fs.statSync(cwd).isDirectory()) throw new Error('not directory'); fs.accessSync(cwd, fs.constants.R_OK); }
   catch { fail('INVALID_CWD', `Directory does not exist or is inaccessible: ${cwd}`); }
+  if (agentHooks === true && selected?.hookAdapter) await validateSessionHookShell(profile);
   const agent = prepare();
   await ensureProjectHooks(agent);
   return { paneId, profile, cwd: path.resolve(cwd), ...fields(agent), spawnCwd: path.resolve(cwd), args: argsFor(agent) };
 }
-module.exports = { discover, validateLaunch, executable, taskInstructionArgs };
+module.exports = { discover, validateLaunch, validateSessionHookShell, executable, taskInstructionArgs };
