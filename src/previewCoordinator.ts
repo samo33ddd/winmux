@@ -49,9 +49,10 @@ export function reportPreviewError(intent: PreviewIntent, message: string) {
 export function previewPresented(match?: PreviewIntent | string) {
   if (typeof match === 'string') {
     // A file-preview event for a different file must not clear a newer intent
-    // or swallow its pending error.
+    // or swallow its pending error — but once that intent has already failed,
+    // any successful preview supersedes the stale error.
     if (!currentIntent) { clearPreviewError(); return true; }
-    if (currentIntent.path !== match) return false;
+    if (currentIntent.path !== match && !activeError) return false;
   } else if (match && currentIntent?.generation !== match.generation) return false;
   currentIntent = null;
   clearPreviewError();
