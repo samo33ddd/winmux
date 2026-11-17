@@ -16,7 +16,10 @@ export function setFileDraft(key: string, draft?: FileDraft) {
   changed();
 }
 export function getOrphanedFileDrafts(): { key: string; draft: FileDraft }[] { return orphanedSnapshot; }
-export function hasUnsavedFiles() { return [...drafts.values()].some(draft => draft.saving || draft.text !== draft.expectedText); }
+// The editor textarea normalizes \r\n to \n while expectedText keeps the raw
+// file content, so compare with line endings normalized.
+const lineEndings = (text: string) => text.replace(/\r\n/g, '\n');
+export function hasUnsavedFiles() { return [...drafts.values()].some(draft => draft.saving || lineEndings(draft.text) !== lineEndings(draft.expectedText)); }
 export function pruneFileDrafts(workspaces: Workspace[]) {
   let mutated = false;
   for (const [key, draft] of drafts) {

@@ -16,10 +16,24 @@ export function classifyTerminalLink(raw: string): TerminalLinkTarget | null {
   return filePath ? { kind:'file', value:filePath } : null;
 }
 
+const closers: Record<string, string> = { ')':'(', ']':'[', '}':'{' };
 function trimToken(value: string) {
   let end = value.length;
   while (end && /[.,;:!?]+$/.test(value.slice(0, end))) end--;
-  while (end && /[)\]}]/.test(value[end - 1])) end--;
+  // Drop a trailing closer only when the token has no unmatched opener for it,
+  // so genuine path characters like a closing ')' in "file(1)" survive.
+  while (end) {
+    const opener = closers[value[end - 1]];
+    if (!opener) break;
+    const token = value.slice(0, end);
+    let balance = 0;
+    for (const char of token) {
+      if (char === opener) balance++;
+      else if (char === value[end - 1]) balance--;
+    }
+    if (balance >= 0) break;
+    end--;
+  }
   return value.slice(0, end);
 }
 

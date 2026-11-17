@@ -78,7 +78,7 @@ function FilesPanel({ workspace, active, paneId, cwd }: { workspace: Workspace; 
     const key = JSON.stringify([workspace.id, paneId, cwd, entry.path]), draft = getFileDraft(key);
     if (draft && !draft.saving && draft.text === draft.expectedText) setFileDraft(key);
     const valid = () => alive.current && epoch === generation.current && request === latestRead.current;
-    const previewIntent = beginPreviewIntent(`files:${workspace.id}:${paneId ?? 'workspace'}`, epoch);
+    const previewIntent = beginPreviewIntent(`files:${workspace.id}:${paneId ?? 'workspace'}`, epoch, entry.path);
     setSelected(entry.path); setReading(true); setContent(null); setError('');
     try {
       const result = await bridge().call<FileContent>('files.read', { workspaceId: workspace.id, paneId, path: entry.path });

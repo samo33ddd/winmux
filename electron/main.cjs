@@ -67,8 +67,8 @@ function trusted(event) {
   if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame) throw new Error('Untrusted IPC sender');
 }
 async function openFilePreview(params) {
-  const preview = await readFilePreview({ ...(params || {}), client, dataDir });
-  if (win && !win.isDestroyed()) win.webContents.send('winmux:event', { type:'file-preview', ...preview });
+  const preview = await readFilePreview({ client, dataDir, ...(params || {}) });
+  if (win && !win.isDestroyed()) win.webContents.send('winmux:event', { type:'file-preview', ...preview, requestedPath:params?.path });
   return previewMetadata(preview);
 }
 // agent.status, agent.hook and notify are daemon-pipe methods for hook helpers
