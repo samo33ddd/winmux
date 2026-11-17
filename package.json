@@ -1,6 +1,6 @@
 {
   "name":"winmux",
-  "version":"0.2.3",
+  "version":"0.2.4",
   "private":true,
   "description":"A Windows terminal workspace for AI CLI agents",
   "main":"electron/main.cjs",
@@ -18,6 +18,7 @@
     "test:cookies":"node tests/cookie-import-smoke.cjs",
     "test:workspace":"node --test tests/file-drafts.cjs tests/task-git.cjs tests/task-state.cjs tests/task-delivery.cjs tests/task-instructions.cjs tests/agent-state-since.cjs tests/attention-inbox.cjs && node tests/workspace-smoke.cjs",
     "test:file-preview":"node --test tests/local-file-links.cjs && node tests/file-preview-smoke.cjs && node tests/local-file-preview-electron.cjs",
+    "test:packaged":"node tests/packaged-smoke.cjs",
     "browser":"node scripts/browser.cjs",
     "cli":"node scripts/run-electron-node.cjs cli.cjs",
     "package":"npm run build && electron-builder --dir",

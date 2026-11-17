@@ -238,7 +238,7 @@ function connectReadonly(options = {}) {
       return { data: page.threads, nextCursor: page.nextCursor };
     },
     listLoaded: async () => {
-      await daemon.refresh({ limit: 100, maxPages: 5 });
+      await daemon.refresh({ limit: 100, maxPages: 50 });
       return { data: daemon.readState().loadedThreadIds, nextCursor: null };
     },
     onNotification(listener) {
