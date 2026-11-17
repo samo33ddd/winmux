@@ -156,6 +156,10 @@ async function hoverRegisteredLink(paneId, needle, tooltip = needle) {
   throw new Error(JSON.stringify({ needle, attempts, screen:screen.text, screenshot }, null, 2));
 }
 
+async function ctrlClick(x, y) {
+  await page.keyboard.down('Control');
+  try { await page.mouse.click(x, y); } finally { await page.keyboard.up('Control'); }
+}
 async function closeDesktop() {
   if (!desktop) return;
   try {
