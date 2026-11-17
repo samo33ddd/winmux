@@ -10,6 +10,9 @@ const { once } = require('node:events');
 const { installSkills } = require('../electron/skills-install.cjs');
 const { SKILL_DESTINATIONS, readBundledSkills } = require('../electron/skills-local-installer.cjs');
 const { connect } = require('../electron/client.cjs');
+// Running this suite inside a Winmux pane must not leak the live daemon's
+// coordinates into isolated fixture daemons or connect() calls.
+for (const key of ['WINMUX_PIPE_NAME', 'WINMUX_PANE_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_TASK_ID', 'WINMUX_DATA_DIR']) delete process.env[key];
 
 const valid = { workspaceId: 'workspace-1', agent: 'codex' };
 
