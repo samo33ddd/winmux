@@ -426,6 +426,9 @@ app.whenReady().then(() => {
     delete savedTask.workspaceId;
     fs.writeFileSync(savedStateFile, JSON.stringify(saved));
     await launch();
+    const normalizedInterrupted = (await client.request('state')).tasks.find(task => task.id === interrupted.id);
+    assert.equal(normalizedInterrupted.phase, 'failed', 'loadState normalizes a persisted creating phase to failed');
+    assert(normalizedInterrupted.error && normalizedInterrupted.error.length, 'normalized task records a recovery reason');
     await assert.rejects(client.request('task.open', {taskId:interrupted.id}), {code:'TASK_INCOMPLETE'});
     await assert.rejects(client.request('task.create', attachParams), {code:'ALREADY_EXISTS'});
     const archivedInterrupted = await client.request('task.archive', {taskId:interrupted.id});
