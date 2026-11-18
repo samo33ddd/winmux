@@ -144,6 +144,18 @@ async function run() {
   await client.request('state'); log('unauthorized / malformed Unicode token / oversized frame isolation');
   await assert.rejects(client.request('workspace.create', { cwd: path.join(dataDir, 'missing') }), { code: 'INVALID_CWD' });
   await assert.rejects(client.request('workspace.create', { profileId: 'nonexistent' }), { code: 'PROFILE_UNAVAILABLE' });
+  const blockedSave = `${stateFile}.${daemon.pid}.tmp`;
+  fs.mkdirSync(blockedSave);
+  const unsavedWorkspace = await client.request('workspace.create', { cwd: dataDir });
+  const unsavedState = await client.request('state');
+  assert.equal(unsavedState.persistenceFailed, true);
+  assert.ok(unsavedState.workspaces.some(workspace => workspace.id === unsavedWorkspace.id));
+  await client.request('workspace.close', { workspaceId: unsavedWorkspace.id });
+  assert.ok(!(await client.request('state')).workspaces.some(workspace => workspace.id === unsavedWorkspace.id));
+  fs.rmdirSync(blockedSave);
+  await eventually(async () => !(await client.request('state')).persistenceFailed, 'state persistence recovers');
+  assert.ok(!JSON.parse(fs.readFileSync(stateFile, 'utf8')).state.workspaces.some(workspace => workspace.id === unsavedWorkspace.id));
+  log('workspace mutations report live state and recover after a state write failure');
   const longCwd = path.join(dataDir, 'b'.repeat(121));
   fs.mkdirSync(longCwd);
   const longWorkspace = await client.request('workspace.create', { cwd: longCwd });

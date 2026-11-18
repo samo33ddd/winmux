@@ -243,16 +243,26 @@ async function startServer(options = {}) {
   const taskGit = createTaskGitService({store:ownership}), executeTaskGit = createGitExecutor();
   let codexController, agentController;
   let stopping = false, closePromise, persistTimer, mutationTail = Promise.resolve();
-  const publicState = () => structuredClone(state);
+  let persistenceFailed = false;
+  const publicState = () => ({ ...structuredClone(state), ...(persistenceFailed && { persistenceFailed: true }) });
   function save() {
     clearTimeout(persistTimer);
     const temp = `${loc.stateFile}.${process.pid}.tmp`;
     try {
       fs.writeFileSync(temp, fitStateSize(state).serialized, { mode: 0o600 });
       fs.renameSync(temp, loc.stateFile);
+      persistenceFailed = false;
     } catch (error) { try { fs.unlinkSync(temp); } catch {} throw error; }
   }
-  function safeSave() { try { save(); } catch (error) { console.error(`Cannot save Winmux state: ${error.message}`); } }
+  function safeSave() {
+    const wasFailed = persistenceFailed;
+    try { save(); } catch (error) {
+      if (!wasFailed) console.error(`Cannot save Winmux state: ${error.message}`);
+      persistenceFailed = true;
+      if (!stopping) persistTimer = setTimeout(safeSave, 2000);
+    }
+    if (wasFailed !== persistenceFailed) broadcast({ type: 'state', state: publicState() });
+  }
   function send(client, message) {
     if (client.socket.destroyed) return;
     const frame = JSON.stringify(message) + '\n';
@@ -612,7 +622,7 @@ async function startServer(options = {}) {
         tab.titleMode = 'auto';
         const autoName = boundedText((path.basename(launch.cwd) || launch.profile.label).trim(), 120) || launch.profile.label;
         const workspace = { id: randomUUID(), name: requestedName || autoName, cwd: launch.cwd, profileId, tabs: [tab], activeTabId: tab.id, root: tab.root, panes: [pane] };
-        spawnPane(pane, launch); state.workspaces.push(workspace); if (task) { task.workspaceId = workspace.id; task.archived = false; } state.settings.activeWorkspaceId = workspace.id; changed();
+        spawnPane(pane, launch); state.workspaces.push(workspace); if (task) { task.workspaceId = workspace.id; task.archived = false; } state.settings.activeWorkspaceId = workspace.id; asyncChanged();
         return structuredClone(workspace);
       }
       case 'workspace.rename': {
@@ -623,7 +633,7 @@ async function startServer(options = {}) {
         forgetWorkspace(workspace.id);
         state.workspaces = state.workspaces.filter(w => w !== workspace);
         if (state.settings.activeWorkspaceId === workspace.id) state.settings.activeWorkspaceId = state.workspaces[0]?.id;
-        changed(); return { ok: true };
+        asyncChanged(); return { ok: true };
       }
       case 'tab.create': {
         if (runtimes.size >= LIMITS.panes) fail('LIMIT_REACHED', 'Maximum number of terminal panes reached');

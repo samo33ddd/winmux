@@ -148,6 +148,7 @@ const english: Record<string, string> = {
   'Подключение к Winmux': 'Connecting to Winmux',
   'Скрыть ошибку': 'Dismiss error',
   'Переподключить': 'Reconnect',
+  'Не удалось сохранить состояние Winmux. Повторяем запись. Не перезапускайте демон.': 'Winmux could not save its state. Retrying. Do not restart the daemon.',
   'Разделить сверху вниз (Ctrl+Shift+E)': 'Split top to bottom (Ctrl+Shift+E)',
   'Разделить активную панель сверху вниз': 'Split active pane top to bottom',
   'Разделить слева направо (Ctrl+Shift+D)': 'Split side by side (Ctrl+Shift+D)',
