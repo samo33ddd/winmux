@@ -21,7 +21,7 @@ export interface Project { id: string; name: string; root: string; profileId: st
 export interface TaskDelivery { action?: string; state: string | null; code: string | null; number: number | null; url: string | null; headOid: string | null }
 export interface TaskReview { sha: string; reviewer: string; summary: string; outcome: 'approved' | 'changes_requested'; reviewedAt: number }
 export interface Task { id: string; name: string; projectId: string; cwd: string; branch: string; base: string; managed: boolean; archived: boolean; workspaceId?: string; agentId?: string; phase?: string; error?: string; archiveReason?: string; deliverySupport?: string; delivery?: TaskDelivery; review?: TaskReview }
-export interface State { workspaces: Workspace[]; projects?: Project[]; tasks?: Task[]; notifications: Notice[]; settings: Settings }
+export interface State { workspaces: Workspace[]; projects?: Project[]; tasks?: Task[]; notifications: Notice[]; settings: Settings; persistenceFailed?: boolean }
 export interface Profile {
   id: string; label: string; environment: 'windows' | 'wsl'; command: string; args: string[];
   cwd?: string; distro?: string; available?: boolean; unavailableReason?: string;

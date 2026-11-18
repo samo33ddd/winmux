@@ -464,6 +464,7 @@ export default function App() {
         </div>
       </header>
       {environment && !tabsAvailable && <div className="upgrade-notice" role="status" data-testid="daemon-upgrade-notice"><CircleAlert /><p><strong>{t('Для новых вкладок и запуска агентов требуется обновление сессии.')}</strong> {t('Текущие терминалы продолжают работать. Когда будете готовы, завершите все сессии и откройте Winmux снова. Закрытие окна или перезагрузка интерфейса не обновляет фоновый процесс.')}</p></div>}
+      {state?.persistenceFailed && <div className="error-banner" role="alert"><CircleAlert /><span>{t("Не удалось сохранить состояние Winmux. Повторяем запись. Не перезапускайте демон.")}</span></div>}
       {error && <div className="error-banner" role="alert"><CircleAlert /><span>{error.message}</span><button className="text-button" onClick={() => setReload(value => value + 1)}>{t("Переподключить")}</button><button className="icon-button" aria-label={t("Скрыть ошибку")} onClick={() => setError('')}><X /></button></div>}
       <div className="workbench">
       <div className="workspace-stage" aria-busy={loading || working}>
