@@ -150,6 +150,7 @@ const english: Record<string, string> = {
   'Переподключить': 'Reconnect',
   'Вывод предыдущей сессии': 'Previous session output',
   'Сохранять предыдущий вывод': 'Keep previous output',
+  'Очистить сохранённый вывод': 'Clear saved output',
   'Хранит последние строки каждой панели на диске при штатной остановке. Выключение удаляет сохранённый вывод.': 'Stores recent output from each pane on disk at graceful shutdown. Turning this off clears saved output.',
   'Не удалось сохранить состояние Winmux. Повторяем запись. Не перезапускайте демон.': 'Winmux could not save its state. Retrying. Do not restart the daemon.',
   'Разделить сверху вниз (Ctrl+Shift+E)': 'Split top to bottom (Ctrl+Shift+E)',

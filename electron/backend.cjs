@@ -776,7 +776,10 @@ async function startServer(options = {}) {
         if (params.restoreHistory !== undefined) {
           if (typeof params.restoreHistory !== 'boolean') fail('INVALID_ARGUMENT', 'restoreHistory must be a boolean');
           next.restoreHistory = params.restoreHistory;
-          if (!next.restoreHistory) for (const workspace of state.workspaces) for (const pane of workspace.panes) delete pane.previousOutput;
+        }
+        if (params.clearPreviousOutput !== undefined && params.clearPreviousOutput !== true) fail('INVALID_ARGUMENT', 'clearPreviousOutput must be true');
+        if (params.restoreHistory === false || params.clearPreviousOutput) {
+          for (const workspace of state.workspaces) for (const pane of workspace.panes) delete pane.previousOutput;
         }
         state.settings = next; changed(); return { ...next };
       }
@@ -951,10 +954,11 @@ async function startServer(options = {}) {
           const buffer = runtimes.get(pane.id)?.terminal.buffer.normal;
           if (!buffer) continue;
           const lines = [];
-          for (let index = Math.max(0, buffer.length - 80); index < buffer.length; index++) {
-            lines.push(buffer.getLine(index)?.translateToString(true) ?? '');
+          for (let index = buffer.length - 1; index >= 0 && lines.length < 80; index--) {
+            const line = buffer.getLine(index)?.translateToString(true) ?? '';
+            if (line || lines.length) lines.push(line);
           }
-          pane.previousOutput = lines.join('\n').trimEnd().slice(-2048).toWellFormed();
+          pane.previousOutput = lines.reverse().join('\n').slice(-2048).toWellFormed();
         }
       }
       safeSave();

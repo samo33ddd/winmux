@@ -168,6 +168,7 @@ async function run() {
   assert.equal(historyPane.previousOutput, undefined);
   await client.request('settings.update', { restoreHistory: true });
   const historyMarker = 'PREVIOUS_OUTPUT_Ю';
+  await client.request('pane.resize', { paneId: historyPane.id, cols: 100, rows: 200 });
   await client.request('pane.input', { paneId: historyPane.id, data: "Write-Output ('PREVIOUS_' + 'OUTPUT_Ю')\r" });
   await screenContains(historyPane.id, historyMarker);
   await stop();
@@ -176,10 +177,12 @@ async function run() {
   assert.ok(previous.previousOutput.includes(historyMarker));
   assert.ok(previous.previousOutput.length <= 2048);
   assert.ok(!(await client.request('pane.screen', { paneId: historyPane.id })).text.includes(historyMarker));
-  await client.request('settings.update', { restoreHistory: false });
+  await client.request('settings.update', { clearPreviousOutput: true });
   assert.ok(!fs.readFileSync(stateFile, 'utf8').includes(historyMarker));
+  assert.equal((await client.request('state')).settings.restoreHistory, true);
+  await client.request('settings.update', { restoreHistory: false });
   await client.request('workspace.close', { workspaceId: historyWorkspace.id });
-  log('opt-in previous output restores separately from the new shell and clears when disabled');
+  log('opt-in previous output survives a tall-pane restart and clears without disabling capture');
   log('workspace mutations report live state and recover after a state write failure');
   const longCwd = path.join(dataDir, 'b'.repeat(121));
   fs.mkdirSync(longCwd);
