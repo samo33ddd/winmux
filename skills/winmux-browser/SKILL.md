@@ -50,6 +50,8 @@ node scripts/winmux-client.cjs click '{"id":123,"ref":"e0"}'
 node scripts/winmux-client.cjs fill '{"id":123,"ref":"e1","value":"Hello"}'
 node scripts/winmux-client.cjs evaluate '{"id":123,"expression":"document.title"}'
 node scripts/winmux-client.cjs screenshot '{"id":123}'
+node scripts/winmux-client.cjs captures.list
+node scripts/winmux-client.cjs captures.clear '{"confirm":true}'
 ```
 
 `click` and `fill` accept a `selector` instead of `ref`; it must match exactly one visible, enabled element. For example, click accepts `{"id":123,"selector":"#save"}`. Fill also requires `value` and an editable element. Use `id`, not `paneId` or `browserId`. Pass the operations through the installed wrapper, never as daemon `rpc browser.*` calls.
@@ -69,6 +71,7 @@ node scripts/winmux-client.cjs screenshot '{"id":123}'
 - Snapshot reads at most 40,000 body-text characters and 300 visible matching elements. It does not traverse iframe documents or shadow roots and is not a full accessibility tree.
 - Snapshot references are assigned to the current DOM. Re-snapshot after navigation or structural changes; never assume `e0` always means the same control.
 - The embedded browser allows HTTP(S), blocks popups/downloads/permission requests, and shares a persistent browser session. It may contain signed-in accounts.
+- Captures stay on disk after closing a browser tab or Winmux. Use `captures.list` to inspect the count and bytes. Copy any captures you want to keep outside `captures/` before authorizing `captures.clear`, which deletes Winmux-named PNG files for the selected instance.
 - Terminal Ctrl+Click opens plain HTTP(S) links and OSC 8 web targets in the owning workspace's embedded browser. Ordinary web-link clicks do not navigate. This UI gesture is separate from the installed wrapper's `open` operation; local file links still use the Files preview. Use the browser toolbar's external-browser action only when explicitly needed.
 - Screenshot captures the embedded page, not the whole Winmux window. Captures and snapshots may contain private data; sanitize evidence before sharing.
 - The client timeout does not prove that an action failed. Inspect `list` and `snapshot` after a lost response before retrying a click, fill, open, or mutation.
