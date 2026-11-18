@@ -40,7 +40,7 @@ export function SettingsDialog({settings, profiles, workspaces, activeWorkspaceI
       </>}
       {tab === 'terminal' && <>
         <Row title={t('Сохранять предыдущий вывод')} detail={previousOutputAvailable ? t('Хранит последние строки каждой панели на диске при штатной остановке. Выключение удаляет сохранённый вывод.') : t('Для сохранения вывода требуется обновить фоновую сессию Winmux.')}><Toggle label={t('Сохранять предыдущий вывод')} testId="restore-history" disabled={!previousOutputAvailable} checked={settings.restoreHistory === true} onChange={restoreHistory => change({restoreHistory})} /></Row>
-        {workspaces.some(workspace => workspace.panes.some(pane => pane.previousOutput)) && <Row title={t('Вывод предыдущей сессии')}><button className="button" onClick={() => {
+        {previousOutputAvailable && workspaces.some(workspace => workspace.panes.some(pane => pane.previousOutput)) && <Row title={t('Вывод предыдущей сессии')}><button className="button" onClick={() => {
           setHistoryError('');
           void bridge().call('settings.update', {clearPreviousOutput:true}).catch(error => setHistoryError(errorMessage(error)));
         }}>{t('Очистить сохранённый вывод')}</button></Row>}
