@@ -476,7 +476,7 @@ process.stdout.write('\\x1b[?2004hPASTE_READER_READY\\r\\n');
   await new Promise(resolve=>fixtureServer.listen(0,'127.0.0.1',resolve));
   const url=`http://127.0.0.1:${fixtureServer.address().port}/`;
   const target=await browser('open',{url,workspaceId:workspace.id});
-  const paletteAnchor = page.getByTestId('browser-toggle');
+  const paletteAnchor = page.locator('.xterm-helper-textarea:visible').first();
   await paletteAnchor.focus();
   await page.keyboard.press('Control+Shift+P');
   const paletteSearch = page.getByRole('textbox',{name:'Search commands'});
