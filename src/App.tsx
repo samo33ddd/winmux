@@ -1,6 +1,7 @@
 import { t, subscribeLanguage, getLanguage, dateLocale } from './i18n';
 import { defaults, getPreferences, subscribePreferences, savePreferences, paletteFor } from './appearance';
 import { SettingsDialog } from './SettingsDialog';
+import { ProjectCommands } from './ProjectCommands';
 import { BrandMark } from './BrandMark';
 import { AgentStatus, activityLabel, agentActionLabel, agentName } from './AgentStatus';
 import { assertFilesNotSaving, getOrphanedFileDrafts, pruneFileDrafts, setFileDraft, subscribeFileDrafts } from './fileDrafts';
@@ -47,6 +48,7 @@ export default function App() {
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [browserRequests, setBrowserRequests] = useState<Record<string, { url: string; serial: number }>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true); const [working, setWorking] = useState(false);
+  const [projectCommandsOpen, setProjectCommandsOpen] = useState(false);
   const [agentHooks, setAgentHooks] = useState(readAgentHooksPreference);
   const [sidebarWidth,setSidebarWidth] = usePanelWidth('winmux.sidebar-width',60,56,420);
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -450,6 +452,7 @@ export default function App() {
           {profiles.map(profile=><optgroup key={profile.id} label={profile.environment==='wsl'?`WSL · ${profile.label}`:profile.label}>{environment?.agents?.filter(agent=>agent.profileId===profile.id).map(agent=><option key={agent.id} value={agent.id} disabled={agent.available === false}>{agent.label}{agent.available === null ? t(' — проверка при запуске') : agent.available ? '' : t(' — не установлен')}</option>)}</optgroup>)}
         </select>
         {activePane && <div className="terminal-tab-tools" role="group" aria-label={t('Действия терминала')}>
+          <button className="icon-button" data-testid="project-commands" aria-label={t('Команды проекта')} title={t('Команды проекта')} onClick={() => setProjectCommandsOpen(true)}><Keyboard /></button>
           <button className="icon-button" aria-label={t("Найти в активном терминале")} title={t("Поиск (Ctrl+Shift+F)")} data-testid="terminal-search" onClick={() => handles.current.get(activePane.id)?.search()}><Search /></button>
           <button className="icon-button" aria-label={t("Разделить активную панель слева направо")} title={t("Разделить слева направо (Ctrl+Shift+D)")} data-testid="split-horizontal" disabled={working} onClick={() => void split(activePane.id, 'horizontal')}><SplitSquareHorizontal /></button>
           <button className="icon-button" aria-label={t("Разделить активную панель сверху вниз")} title={t("Разделить сверху вниз (Ctrl+Shift+E)")} data-testid="split-vertical" disabled={working} onClick={() => void split(activePane.id, 'vertical')}><SplitSquareVertical /></button>
@@ -463,6 +466,7 @@ export default function App() {
           {!sidebarOpen && <><button className="icon-button" aria-label={t('Проекты и задачи')} aria-expanded={projectsOpen} disabled={!environment?.capabilities?.projectTasks} onClick={() => { setNotificationsOpen(false); setAttentionOpen(false); setProjectsOpen(value => !value); }}><GitBranch /></button><button className={`icon-button ${attentionCount ? 'has-unread' : ''}`} aria-label={t('Внимание')} aria-expanded={attentionOpen} onClick={() => { setProjectsOpen(false); setNotificationsOpen(false); setAttentionOpen(value => !value); }}><CircleAlert /></button><button className={`icon-button ${unread ? 'has-unread' : ''}`} aria-label={t("Уведомления")} onClick={() => { setProjectsOpen(false); setAttentionOpen(false); setNotificationsOpen(value => !value); }}><Bell /></button></>}
         </div>
       </header>
+      {projectCommandsOpen && workspace && activePane && <ProjectCommands key={`${workspace.id}:${activePane.id}`} workspace={workspace} pane={activePane} projectRoot={state?.projects?.find(project => project.id === state.tasks?.find(task => task.workspaceId === workspace.id)?.projectId)?.root ?? workspace.cwd} onClose={() => setProjectCommandsOpen(false)} />}
       {environment && !tabsAvailable && <div className="upgrade-notice" role="status" data-testid="daemon-upgrade-notice"><CircleAlert /><p><strong>{t('Для новых вкладок и запуска агентов требуется обновление сессии.')}</strong> {t('Текущие терминалы продолжают работать. Когда будете готовы, завершите все сессии и откройте Winmux снова. Закрытие окна или перезагрузка интерфейса не обновляет фоновый процесс.')}</p></div>}
       {state?.persistenceFailed && <div className="error-banner" role="alert"><CircleAlert /><span>{t("Не удалось сохранить состояние Winmux. Повторяем запись. Не перезапускайте демон.")}</span></div>}
       {error && <div className="error-banner" role="alert"><CircleAlert /><span>{error.message}</span><button className="text-button" onClick={() => setReload(value => value + 1)}>{t("Переподключить")}</button><button className="icon-button" aria-label={t("Скрыть ошибку")} onClick={() => setError('')}><X /></button></div>}
