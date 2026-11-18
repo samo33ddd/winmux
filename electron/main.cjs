@@ -182,8 +182,8 @@ async function start() {
     guest.on('will-navigate',guard); guest.on('will-redirect',guard);
     guest.session.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
     guest.session.setPermissionCheckHandler(()=>false);
-    guest.session.on('will-download',(event)=>event.preventDefault());
   });
+  session.fromPartition('persist:winmux-browser').on('will-download',(event)=>event.preventDefault());
   win.webContents.on('will-navigate',(event,url) => { if (url !== win.webContents.getURL()) event.preventDefault(); });
   win.webContents.session.setPermissionRequestHandler((_webContents,_permission,callback) => callback(false));
   win.webContents.session.setPermissionCheckHandler(() => false);
