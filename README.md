@@ -6,7 +6,7 @@ For developers who live with AI agents, 24/7 on Windows.
 
 Keep your agents, shells, project files, Git changes, and browser previews in one Windows workspace. Winmux is an independent terminal multiplexer inspired by [cmux](https://cmux.com), built with Electron, TypeScript, xterm.js, and ConPTY.
 
-This source tree prepares **0.2.4**, with automatic agent status adapters, Codex discovery fixes, safer file previews and hook handling, more reliable startup, and packaged-app release checks. The interface supports English and Russian. See the [changelog](CHANGELOG.md) for release details and [verification notes](docs/verification.md) for runtime evidence and the limits of agent integration.
+This source tree prepares **0.3.0**, with optional terminal history, parameterized project commands, a keyboard command palette, and workspace and browser reliability fixes. The interface supports English and Russian. See the [changelog](CHANGELOG.md) for release details and [verification notes](docs/verification.md) for runtime evidence and the limits of agent integration.
 
 ![Winmux dark workspace with its collapsed project rail, unified header, and split terminals](docs/screenshots/workspace-dark.png)
 
@@ -32,12 +32,12 @@ The project switcher in the top header opens the current workspace list directly
 
 ## Download
 
-Use the [latest release page](https://github.com/samo33ddd/winmux/releases/latest) for published Windows builds. The Windows x64 assets prepared for 0.2.4 are:
+Use the [latest release page](https://github.com/samo33ddd/winmux/releases/latest) for published Windows builds. The Windows x64 assets prepared for 0.3.0 are:
 
 | Asset | Purpose |
 | --- | --- |
-| `Winmux-Setup-0.2.4-x64.exe` | Windows x64 installer |
-| `Winmux-Portable-0.2.4-x64.exe` | Windows x64 portable executable |
+| `Winmux-Setup-0.3.0-x64.exe` | Windows x64 installer |
+| `Winmux-Portable-0.3.0-x64.exe` | Windows x64 portable executable |
 
 A version is available only when its assets appear on the release page. These expected names do not establish publication. Portable describes how the app is launched; local state still defaults to `%LOCALAPPDATA%/Winmux/`.
 
