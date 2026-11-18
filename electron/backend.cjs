@@ -781,7 +781,10 @@ async function startServer(options = {}) {
         if (params.restoreHistory === false || params.clearPreviousOutput) {
           for (const workspace of state.workspaces) for (const pane of workspace.panes) delete pane.previousOutput;
         }
-        state.settings = next; changed(); return { ...next };
+        state.settings = next;
+        if (params.restoreHistory !== undefined || params.clearPreviousOutput) asyncChanged();
+        else changed();
+        return { ...next };
       }
       case 'daemon.shutdown': setTimeout(() => close().catch(error => console.error(error.message)), 30); return { ok: true };
       case 'codex.status': return codexController.status();
@@ -950,16 +953,19 @@ async function startServer(options = {}) {
       await Promise.allSettled([...deliveryRequests]);
       await codexController?.stop();
       if (state.settings.restoreHistory === true) {
-        for (const workspace of state.workspaces) for (const pane of workspace.panes) {
-          const buffer = runtimes.get(pane.id)?.terminal.buffer.normal;
-          if (!buffer) continue;
-          const lines = [];
-          for (let index = buffer.length - 1; index >= 0 && lines.length < 80; index--) {
-            const line = buffer.getLine(index)?.translateToString(true) ?? '';
-            if (line || lines.length) lines.push(line);
-          }
-          pane.previousOutput = lines.reverse().join('\n').slice(-2048).toWellFormed();
-        }
+        await Promise.allSettled(state.workspaces.flatMap(workspace => workspace.panes.map(async pane => {
+          const runtime = runtimes.get(pane.id);
+          if (!runtime) return;
+          await fence(runtime, () => {
+            const buffer = runtime.terminal.buffer.normal;
+            const lines = [];
+            for (let index = buffer.length - 1; index >= 0 && lines.length < 80; index--) {
+              const line = buffer.getLine(index)?.translateToString(true) ?? '';
+              if (line || lines.length) lines.push(line);
+            }
+            pane.previousOutput = lines.reverse().join('\n').slice(-2048).toWellFormed();
+          });
+        })));
       }
       safeSave();
       for (const workspace of state.workspaces) workspace.panes.forEach(disposePane);

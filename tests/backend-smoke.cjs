@@ -177,7 +177,14 @@ async function run() {
   assert.ok(previous.previousOutput.includes(historyMarker));
   assert.ok(previous.previousOutput.length <= 2048);
   assert.ok(!(await client.request('pane.screen', { paneId: historyPane.id })).text.includes(historyMarker));
+  const blockedHistorySave = `${stateFile}.${daemon.pid}.tmp`;
+  fs.mkdirSync(blockedHistorySave);
   await client.request('settings.update', { clearPreviousOutput: true });
+  const clearedState = await client.request('state');
+  assert.equal(clearedState.persistenceFailed, true);
+  assert.equal(clearedState.workspaces.find(workspace => workspace.id === historyWorkspace.id).panes[0].previousOutput, undefined);
+  fs.rmdirSync(blockedHistorySave);
+  await eventually(async () => !(await client.request('state')).persistenceFailed, 'cleared history persists');
   assert.ok(!fs.readFileSync(stateFile, 'utf8').includes(historyMarker));
   assert.equal((await client.request('state')).settings.restoreHistory, true);
   await client.request('settings.update', { restoreHistory: false });
