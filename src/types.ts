@@ -7,6 +7,7 @@ export interface Pane {
   id: string; title: string; profileId: string; cwd: string; pid: number | null;
   status: 'running' | 'exited'; exitCode?: number; cols: number; rows: number;
   tabId?: string; agentId?: string; agentLabel?: string;
+  previousOutput?: string;
   agentState?: 'starting' | 'running' | 'waiting' | 'idle' | 'completed' | 'failed' | 'unknown'; agentExitCode?: number;
   agentActivity?: 'thinking' | 'reading' | 'editing' | 'command' | 'searching' | 'browser' | 'delegating';
   agentPid?: number;
@@ -16,7 +17,7 @@ export interface Pane {
 export interface TerminalTab { id: string; title: string; titleMode?: 'auto' | 'custom'; root: LayoutNode }
 export interface Workspace { id: string; name: string; cwd: string; profileId: string; root: LayoutNode; panes: Pane[]; tabs?: TerminalTab[]; activeTabId?: string }
 export interface Notice { id: string; paneId: string; workspaceId: string; title: string; body: string; createdAt: number; read: boolean }
-export interface Settings extends Preferences { fontSize: number; theme: ThemeId; activeWorkspaceId?: string }
+export interface Settings extends Preferences { fontSize: number; theme: ThemeId; activeWorkspaceId?: string; restoreHistory?: boolean }
 export interface Project { id: string; name: string; root: string; profileId: string; primaryBranch: string }
 export interface TaskDelivery { action?: string; state: string | null; code: string | null; number: number | null; url: string | null; headOid: string | null }
 export interface TaskReview { sha: string; reviewer: string; summary: string; outcome: 'approved' | 'changes_requested'; reviewedAt: number }

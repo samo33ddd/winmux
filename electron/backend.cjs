@@ -104,6 +104,8 @@ function loadState(file) {
       unique(pane.id); string(pane.title, 'title', 256); string(pane.cwd, 'cwd', 4096); string(pane.profileId, 'profileId', 256);
       integer(pane.cols, 'cols', 2, 300); integer(pane.rows, 'rows', 1, 200);
       pane.pid = null; pane.status = 'exited'; delete pane.exitCode;
+      if (state.settings?.restoreHistory === true && typeof pane.previousOutput === 'string') pane.previousOutput = pane.previousOutput.slice(-2048).toWellFormed();
+      else delete pane.previousOutput;
       delete pane.agentId; delete pane.agentLabel; delete pane.agentThreadId; delete pane.agentSessionId; delete pane.agentBinding;
       pane.agentState = 'unknown'; delete pane.agentStateSince; delete pane.agentExitCode; delete pane.agentUpdatedAt; delete pane.agentActivity; delete pane.agentPid;
     }
@@ -771,6 +773,11 @@ async function startServer(options = {}) {
         if (params.fontSize !== undefined) next.fontSize = integer(params.fontSize, 'fontSize', 9, 32);
         if (params.theme !== undefined) { if (!['dark', 'light'].includes(params.theme)) fail('INVALID_ARGUMENT', 'theme must be dark or light'); next.theme = params.theme; }
         if (params.activeWorkspaceId !== undefined) { workspaceById(params.activeWorkspaceId); next.activeWorkspaceId = params.activeWorkspaceId; }
+        if (params.restoreHistory !== undefined) {
+          if (typeof params.restoreHistory !== 'boolean') fail('INVALID_ARGUMENT', 'restoreHistory must be a boolean');
+          next.restoreHistory = params.restoreHistory;
+          if (!next.restoreHistory) for (const workspace of state.workspaces) for (const pane of workspace.panes) delete pane.previousOutput;
+        }
         state.settings = next; changed(); return { ...next };
       }
       case 'daemon.shutdown': setTimeout(() => close().catch(error => console.error(error.message)), 30); return { ok: true };
@@ -939,6 +946,17 @@ async function startServer(options = {}) {
       await mutationTail;
       await Promise.allSettled([...deliveryRequests]);
       await codexController?.stop();
+      if (state.settings.restoreHistory === true) {
+        for (const workspace of state.workspaces) for (const pane of workspace.panes) {
+          const buffer = runtimes.get(pane.id)?.terminal.buffer.normal;
+          if (!buffer) continue;
+          const lines = [];
+          for (let index = Math.max(0, buffer.length - 80); index < buffer.length; index++) {
+            lines.push(buffer.getLine(index)?.translateToString(true) ?? '');
+          }
+          pane.previousOutput = lines.join('\n').trimEnd().slice(-2048).toWellFormed();
+        }
+      }
       safeSave();
       for (const workspace of state.workspaces) workspace.panes.forEach(disposePane);
       for (const client of clients) client.socket.destroy();
