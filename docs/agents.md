@@ -172,6 +172,8 @@ node scripts/browser.cjs fill '{"id":123,"ref":"e1","value":"Hello"}'
 node scripts/browser.cjs click '{"id":123,"ref":"e0"}'
 node scripts/browser.cjs evaluate '{"id":123,"expression":"document.title"}'
 node scripts/browser.cjs screenshot '{"id":123}'
+node scripts/browser.cjs captures.list
+node scripts/browser.cjs captures.clear '{"confirm":true}'
 ```
 
 Run a development server separately before opening its URL. `open` returns `{id, workspaceId, url, title}`; `list` returns `{id, url, title}` entries. Browser IDs are numeric Electron web contents IDs, not workspace IDs or terminal pane IDs. Use the returned ID in every subsequent call and verify the returned URL matches the intended page.

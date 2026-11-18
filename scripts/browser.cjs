@@ -40,6 +40,8 @@ Usage: node scripts/browser.cjs METHOD [JSON]
   fill       {"id":123,"ref":"e1","value":"Hello"}
   evaluate   {"id":123,"expression":"document.title"}
   screenshot {"id":123}
+  captures.list
+  captures.clear {"confirm":true}
 Use browser ids returned by open/list. Re-snapshot after navigation.
 WINMUX_DATA_DIR selects the same isolated instance as the terminal CLI.
 Requires an open desktop; actions are never automatically retried.`);
