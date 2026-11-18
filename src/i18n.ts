@@ -149,6 +149,7 @@ const english: Record<string, string> = {
   'Скрыть ошибку': 'Dismiss error',
   'Переподключить': 'Reconnect',
   'Команды проекта': 'Project commands',
+  'Определяем каталог проекта…': 'Resolving project directory…',
   'Сохранённая команда': 'Saved command',
   'Новая команда': 'New command',
   'Шаблон команды': 'Command template',

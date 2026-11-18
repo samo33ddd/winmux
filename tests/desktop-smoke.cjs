@@ -117,6 +117,9 @@ async function main() {
   await commandsDialog.getByLabel('value', {exact:true}).fill("it's quoted");
   assert.equal(await commandsDialog.getByLabel('Command preview').inputValue(), "Write-Output 'it''s quoted'");
   await commandsDialog.getByRole('button', {name:'Save',exact:true}).click();
+  const inspectedRoot = (await rpc('project.inspect',{cwd:root,profileId:'powershell'})).root;
+  const savedCommands = await page.evaluate(projectRoot => JSON.parse(localStorage.getItem(`winmux.commands.${JSON.stringify(['powershell',projectRoot.toLowerCase()])}`)), inspectedRoot);
+  assert.deepEqual(savedCommands,[{name:'Preview command',template:'Write-Output {{value}}'}]);
   await page.keyboard.press('Escape');
   await page.getByTestId('project-commands').click();
   await commandsDialog.getByLabel('Saved command').selectOption('Preview command');

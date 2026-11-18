@@ -1,15 +1,31 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Modal } from './Dialogs';
 import { t } from './i18n';
 import { bridge, errorMessage, type Pane, type Workspace } from './types';
 
 interface Command { name: string; template: string }
 
-export function ProjectCommands({ workspace, pane, projectRoot, onClose }: { workspace: Workspace; pane: Pane; projectRoot: string; onClose(): void }) {
-  const key = `winmux.commands.${JSON.stringify([workspace.profileId, projectRoot])}`;
+type Props = { workspace: Workspace; pane: Pane; projectRoot?: string; onClose(): void };
+
+export function ProjectCommands(props: Props) {
+  const {workspace, projectRoot, onClose} = props;
+  const [root, setRoot] = useState(projectRoot);
+  useEffect(() => {
+    if (projectRoot) return;
+    let active = true;
+    void bridge().call<{ root: string }>('project.inspect', { profileId:workspace.profileId, cwd:workspace.cwd })
+      .then(project => { if (active) setRoot(project.root); }, () => { if (active) setRoot(workspace.cwd); });
+    return () => { active = false; };
+  }, [projectRoot, workspace.profileId, workspace.cwd]);
+  if (!root) return <Modal title={t('Команды проекта')} onClose={onClose}><p role="status">{t('Определяем каталог проекта…')}</p></Modal>;
+  const key = `winmux.commands.${JSON.stringify([workspace.profileId, workspace.profileId.startsWith('wsl:') ? root : root.toLowerCase()])}`;
+  return <CommandEditor key={key} {...props} storageKey={key} />;
+}
+
+function CommandEditor({ workspace, pane, storageKey, onClose }: Props & {storageKey:string}) {
   const [commands, setCommands] = useState<Command[]>(() => {
     try {
-      const saved: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
+      const saved: unknown = JSON.parse(localStorage.getItem(storageKey) ?? '[]');
       return Array.isArray(saved) ? saved.filter(item => typeof item?.name === 'string' && typeof item?.template === 'string').slice(0, 40) : [];
     } catch { return []; }
   });
@@ -27,7 +43,7 @@ export function ProjectCommands({ workspace, pane, projectRoot, onClose }: { wor
   const ready = sameDirectory && pane.profileId === workspace.profileId && pane.status === 'running' && !pane.agentId;
   function save(next: Command[]) {
     try {
-      localStorage.setItem(key, JSON.stringify(next));
+      localStorage.setItem(storageKey, JSON.stringify(next));
       setCommands(next);
       setError('');
     } catch (failure) { setError(errorMessage(failure)); }
