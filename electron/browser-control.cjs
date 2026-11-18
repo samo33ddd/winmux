@@ -50,6 +50,26 @@ async function startBrowserControl({ win, client, dataDir, fileOpen }) {
       throw new Error('Browser did not finish opening within 15 seconds');
     }
     if (method === 'list') return [...guests.values()].map(guest => ({ id: guest.id, url: guest.getURL(), title: guest.getTitle() }));
+    if (method === 'captures.list' || method === 'captures.clear') {
+      const clear = method === 'captures.clear';
+      if (clear && params.confirm !== true) throw new Error('Supply confirm:true to delete Winmux browser captures');
+      const directory = path.join(await fs.realpath(dataDir), 'captures');
+      const resolved = await fs.realpath(directory).catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+      });
+      if (resolved && resolved !== directory) throw new Error('Winmux capture directory must not be redirected');
+      let count = 0, bytes = 0;
+      for (const name of resolved ? await fs.readdir(directory) : []) {
+        if (!/^\d{13}-\d+\.png$/.test(name)) continue;
+        const file = path.join(directory, name);
+        const stat = await fs.lstat(file);
+        if (!stat.isFile()) continue;
+        if (clear) await fs.unlink(file);
+        count++;
+        bytes += stat.size;
+      }
+      return { count, bytes };
+    }
     const guest = select(params.id);
     if (method === 'snapshot') return guest.executeJavaScript(`(() => {
       document.querySelectorAll('[data-winmux-ref]').forEach(el => el.removeAttribute('data-winmux-ref'));
