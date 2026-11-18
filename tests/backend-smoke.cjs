@@ -152,9 +152,17 @@ async function run() {
   assert.ok(unsavedState.workspaces.some(workspace => workspace.id === unsavedWorkspace.id));
   await client.request('workspace.close', { workspaceId: unsavedWorkspace.id });
   assert.ok(!(await client.request('state')).workspaces.some(workspace => workspace.id === unsavedWorkspace.id));
+  const retainedWorkspace = await client.request('workspace.create', { cwd: dataDir });
+  await assert.rejects(client.request('workspace.rename', { workspaceId: retainedWorkspace.id, name: 'Recovered workspace' }));
   fs.rmdirSync(blockedSave);
   await eventually(async () => !(await client.request('state')).persistenceFailed, 'state persistence recovers');
   assert.ok(!JSON.parse(fs.readFileSync(stateFile, 'utf8')).state.workspaces.some(workspace => workspace.id === unsavedWorkspace.id));
+  await stop();
+  await launch();
+  const recoveredWorkspaces = (await client.request('state')).workspaces;
+  assert.equal(recoveredWorkspaces.find(workspace => workspace.id === retainedWorkspace.id)?.name, 'Recovered workspace');
+  assert.ok(!recoveredWorkspaces.some(workspace => workspace.id === unsavedWorkspace.id));
+  await client.request('workspace.close', { workspaceId: retainedWorkspace.id });
   log('workspace mutations report live state and recover after a state write failure');
   const longCwd = path.join(dataDir, 'b'.repeat(121));
   fs.mkdirSync(longCwd);

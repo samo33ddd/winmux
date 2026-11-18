@@ -246,11 +246,11 @@ async function startServer(options = {}) {
   let persistenceFailed = false;
   const publicState = () => ({ ...structuredClone(state), ...(persistenceFailed && { persistenceFailed: true }) });
   function save() {
-    clearTimeout(persistTimer);
     const temp = `${loc.stateFile}.${process.pid}.tmp`;
     try {
       fs.writeFileSync(temp, fitStateSize(state).serialized, { mode: 0o600 });
       fs.renameSync(temp, loc.stateFile);
+      clearTimeout(persistTimer);
       persistenceFailed = false;
     } catch (error) { try { fs.unlinkSync(temp); } catch {} throw error; }
   }
@@ -259,6 +259,7 @@ async function startServer(options = {}) {
     try { save(); } catch (error) {
       if (!wasFailed) console.error(`Cannot save Winmux state: ${error.message}`);
       persistenceFailed = true;
+      clearTimeout(persistTimer);
       if (!stopping) persistTimer = setTimeout(safeSave, 2000);
     }
     if (wasFailed !== persistenceFailed) broadcast({ type: 'state', state: publicState() });

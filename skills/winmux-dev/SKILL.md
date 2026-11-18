@@ -359,6 +359,12 @@ must still pass for the actual head.
 
 ## Isolated runtime and owner-instance safety
 
+Workspace creation and closure publish the applied live state even when its
+atomic save fails. The daemon reports `state.persistenceFailed: true`, retries
+while running, and broadcasts recovery. Keep the daemon running when the warning
+appears. `npm run test:backend` blocks the isolated temporary state file during
+create and close and checks persisted recovery after removing the obstruction.
+
 Choose a disposable `WINMUX_DATA_DIR` for experiments and pass it consistently to
 UI, terminal CLI, and browser CLI. Do not accidentally target the default owner
 daemon or stop the shared native Codex daemon for discovery. Stop task-created
