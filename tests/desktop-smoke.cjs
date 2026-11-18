@@ -521,6 +521,22 @@ process.stdout.write('\\x1b[?2004hPASTE_READER_READY\\r\\n');
   await page.screenshot({path:path.join(artifacts,'browser-tabs-compact.png')});
   await page.getByTestId('browser-tab-close').nth(1).click();
   assert.equal(await page.getByTestId('browser-tab').count(),1);
+  for (let cycle = 0; cycle < 25; cycle++) {
+    await page.getByTestId('browser-tab-add').click();
+    await browser('open', {url, workspaceId:workspace.id});
+    await page.getByTestId('browser-tab-close').nth(1).click();
+  }
+  const downloadPolicy = await desktop.evaluate(({session, webContents}, {id, url}) => new Promise((resolve, reject) => {
+    const partition = session.fromPartition('persist:winmux-browser');
+    const handlers = partition.listenerCount('will-download');
+    const timeout = setTimeout(() => reject(new Error('Fixture download did not reach the session')), 5000);
+    partition.once('will-download', event => {
+      clearTimeout(timeout);
+      resolve({ handlers, blocked: event.defaultPrevented });
+    });
+    webContents.fromId(id).downloadURL(url);
+  }), {id:target.id, url});
+  assert.deepEqual(downloadPolicy, { handlers:1, blocked:true });
   findings.push('Two real browser guests retain independent form state; tab switching, closing and CLI targeting verified at 1360x900 and 960x640.');
   const skillProject=path.join(dataDir,'skill-project');fs.mkdirSync(skillProject);
   const skillWorkspace=await rpc('workspace.create',{name:'Skill verification',cwd:skillProject,profileId:'powershell'});
