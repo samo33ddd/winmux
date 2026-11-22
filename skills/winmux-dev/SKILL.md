@@ -119,6 +119,9 @@ tab/pane disposal helper while moving. Verify IDs, PIDs, screen contents, drafts
 same-tab/cross-tab layout consistency, invalid targets and persisted restoration.
 The renderer uses tab/pane headers as drag sources and a highlighted destination;
 terminal body selection and native blank-header window dragging stay independent.
+In the Electron cross-tab smoke, wait for the source pane's native drag marker
+before moving to the destination. Repeat the pointer move over the destination
+tab and split edge to deliver Chromium drag events on hosted Windows.
 
 Terminal web links have two callers in `src/TerminalPane.tsx`: WebLinksAddon for
 plain URLs and the OSC 8 `linkHandler`. Both require Ctrl+left-click and forward to
