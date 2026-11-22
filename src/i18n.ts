@@ -163,6 +163,8 @@ const english: Record<string, string> = {
   'Git проекта': 'Project Git status',
   'Файлы проекта': 'Project files',
   'Рабочее пространство': 'Workspace',
+  'Панель {0}': 'Pane {0}',
+  'Задача': 'Task',
   'Переименовать пространство': 'Rename workspace',
   'Показать боковую панель': 'Show sidebar',
   'Скрыть боковую панель': 'Hide sidebar',

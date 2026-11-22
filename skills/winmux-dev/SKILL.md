@@ -72,6 +72,12 @@ and directory changes, draft retention, expansion and browser form state.
 
 ### Terminal links and input
 
+The command palette shortcut Ctrl+Shift+P follows physical `KeyP` across keyboard
+layouts, including Russian, and must pass through xterm to the app handler. Palette
+pane results include their workspace and pane position so identical titles remain
+distinguishable; filtering, keyboard selection, Escape and focus restoration are
+covered by the isolated Electron desktop smoke at the 900px minimum width.
+
 The topbar's empty `.workspace-tabs` area is an Electron drag region; actual tab
 and toolbar buttons remain `no-drag`. Validate computed regions and, when native
 Computer Use is available, measure the restored window position after a real

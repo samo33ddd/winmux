@@ -171,7 +171,7 @@ export function TerminalPane(props: Props) {
     mount.current.addEventListener('focusin', onFocus);
     term.attachCustomKeyEventHandler(event => {
       const key = event.key.toLowerCase();
-      if (event.ctrlKey && event.shiftKey && ['d', 'e', 'w', 'f', 'n', 'u', 'enter', 'c', 'v', 'p'].includes(key)) return false;
+      if (event.ctrlKey && event.shiftKey && (['d', 'e', 'w', 'f', 'n', 'u', 'enter', 'c', 'v', 'p'].includes(key) || event.code === 'KeyP')) return false;
       if (event.altKey && ['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key)) return false;
       if (event.ctrlKey && key === ',') return false;
       if (event.ctrlKey && (key === 't' || key === 'tab')) return false;

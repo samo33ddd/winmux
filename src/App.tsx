@@ -353,7 +353,7 @@ export default function App() {
       if (event.key === 'Escape' && current.current.notificationsOpen) { event.preventDefault(); setNotificationsOpen(false); if (pane) handles.current.get(pane.id)?.focus(); return; }
       if (event.altKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); actions.current.navigatePane(event.key); return; }
       if (!event.ctrlKey || !event.shiftKey) return;
-      if (key === 'p' && !event.altKey && !event.metaKey) { event.preventDefault(); setPaletteOpen(true); return; }
+      if ((event.code === 'KeyP' || key === 'p') && !event.altKey && !event.metaKey) { event.preventDefault(); setPaletteOpen(true); return; }
       if (key === 'n') { event.preventDefault(); setDialog({ type: 'create' }); return; }
       if (key === 'u') {
         event.preventDefault();
@@ -499,7 +499,7 @@ export default function App() {
       ...(activePane ? [{ id: 'search', label: t('Поиск в терминале'), run: () => handles.current.get(activePane.id)?.search() }] : []),
       ...(state?.workspaces ?? []).flatMap(owner => [
         { id: owner.id, label: owner.name, detail: t('Рабочее пространство'), run: () => selectWorkspace(owner.id) },
-        ...owner.panes.map(pane => ({ id: pane.id, label: pane.title, detail: owner.name, run: () => selectWorkspace(owner.id, pane.id) })),
+        ...owner.panes.map((pane, index) => ({ id: pane.id, label: pane.title, detail: `${owner.name} · ${t('Панель {0}', index + 1)}`, run: () => selectWorkspace(owner.id, pane.id) })),
       ]),
       ...(state?.tasks ?? []).filter(task => !task.archived && task.phase === 'ready').map(task => ({
         id: task.id, label: task.name, detail: t('Задача'), run: () => void openTask(task.id),
