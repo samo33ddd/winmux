@@ -1,6 +1,7 @@
 import { t, subscribeLanguage, getLanguage, dateLocale } from './i18n';
 import { defaults, getPreferences, subscribePreferences, savePreferences, paletteFor } from './appearance';
 import { SettingsDialog } from './SettingsDialog';
+import { ProjectCommands } from './ProjectCommands';
 import { CommandPalette } from './CommandPalette';
 import { BrandMark } from './BrandMark';
 import { AgentStatus, activityLabel, agentActionLabel, agentName } from './AgentStatus';
@@ -48,6 +49,7 @@ export default function App() {
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [browserRequests, setBrowserRequests] = useState<Record<string, { url: string; serial: number }>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true); const [working, setWorking] = useState(false);
+  const [projectCommandsTarget, setProjectCommandsTarget] = useState<{workspaceId:string; paneId:string} | null>(null);
   const [previousOutput, setPreviousOutput] = useState<{paneId:string; text:string}>();
   const historyRequest = useRef(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -93,7 +95,9 @@ export default function App() {
   const nativeCodex = environment?.capabilities?.nativeCodex === true;
   const preferences = useSyncExternalStore(subscribePreferences, getPreferences, getPreferences);
   const settings: Settings = { ...defaults, ...state?.settings, ...preferences, fontSize:state?.settings.fontSize ?? 14, theme:preferences.theme ?? state?.settings.theme ?? 'dark' };
-  const otherModalOpen = Boolean(dialog || paletteOpen || recoveryOpen);
+  const commandsWorkspace = projectCommandsTarget && state?.workspaces.find(owner => owner.id === projectCommandsTarget.workspaceId);
+  const commandsPane = commandsWorkspace?.panes.find(pane => pane.id === projectCommandsTarget?.paneId);
+  const otherModalOpen = Boolean(dialog || paletteOpen || recoveryOpen || commandsPane);
   const current = useRef({ workspace, activePane, dialog, notificationsOpen, switcherOpen, otherModalOpen }); current.current = { workspace, activePane, dialog, notificationsOpen, switcherOpen, otherModalOpen };
   useEffect(() => {
     historyRequest.current++;
@@ -420,6 +424,7 @@ export default function App() {
         <button className={`sidebar-action ${notificationsOpen ? 'active' : ''}`} data-testid="notifications-toggle" aria-expanded={notificationsOpen} aria-label={t("Уведомления")} title={t("Уведомления")} onClick={() => { setAttentionOpen(false); setProjectsOpen(false); setNotificationsOpen(value => !value); }}><Bell />{sidebarExpanded && <span>{t("Уведомления")}</span>}{unread > 0 && <span className="unread-badge" aria-label={t("{0} непрочитанных", unread)}>{unread}</span>}</button>
         <button className="sidebar-action" data-testid="settings-open" aria-label={t("Настройки")} title={t("Настройки")} onClick={() => setDialog({ type: 'settings' })}><Settings2 />{sidebarExpanded && <><span>{t("Настройки")}</span><span className="shortcut-hint">Ctrl+,</span></>}</button>
         <button className="sidebar-action" aria-label={t("Горячие клавиши")} title={t("Горячие клавиши")} onClick={() => setDialog({ type: 'shortcuts' })}><Keyboard />{sidebarExpanded && <span>{t("Горячие клавиши")}</span>}</button>
+        {workspace && activePane && <button className="sidebar-action" data-testid="project-commands" aria-label={t('Команды проекта')} title={t('Команды проекта')} onClick={() => setProjectCommandsTarget({workspaceId:workspace.id, paneId:activePane.id})}><Keyboard />{sidebarExpanded && <span>{t('Команды проекта')}</span>}</button>}
       </div>
     </aside>
     {sidebarOpen && <ResizeHandle value={sidebarWidth} min={56} max={420} label={t('Ширина списка пространств')} testId="sidebar-resize" onChange={setSidebarWidth} />}
@@ -470,10 +475,11 @@ export default function App() {
         </div>
         {activePane && <span className="header-agent"><AgentStatus pane={activePane} showName /></span>}
         <div className="topbar-tools" role="group" aria-label={t('Инструменты проекта')}>
-          {workspace && <><button className={`icon-button ${toolTab === 'files' ? 'active-tool' : ''}`} aria-label={t("Файлы проекта")} aria-pressed={toolTab === 'files'} title={t("Файлы проекта")} data-testid="files-toggle" onClick={() => setToolTab(value => value === 'files' ? null : 'files')}><FolderOpen /></button><button className={`icon-button ${toolTab === 'git' ? 'active-tool' : ''}`} aria-label={t("Git проекта")} aria-pressed={toolTab === 'git'} title={t("Git: изменения проекта")} data-testid="git-toggle" onClick={() => setToolTab(value => value === 'git' ? null : 'git')}><GitBranch /></button><button className={`icon-button ${toolTab === 'browser' ? 'active-tool' : ''}`} aria-label={t("Встроенный браузер")} aria-pressed={toolTab === 'browser'} title={t("Встроенный браузер")} data-testid="browser-toggle" onClick={() => setToolTab(value => value === 'browser' ? null : 'browser')}><Globe /></button></>}
+          {workspace && <>{activePane && <button className="icon-button" data-testid="workspace-project-commands" aria-label={t('Команды проекта')} title={t('Команды проекта')} onClick={() => setProjectCommandsTarget({workspaceId:workspace.id, paneId:activePane.id})}><Keyboard /></button>}<button className={`icon-button ${toolTab === 'files' ? 'active-tool' : ''}`} aria-label={t("Файлы проекта")} aria-pressed={toolTab === 'files'} title={t("Файлы проекта")} data-testid="files-toggle" onClick={() => setToolTab(value => value === 'files' ? null : 'files')}><FolderOpen /></button><button className={`icon-button ${toolTab === 'git' ? 'active-tool' : ''}`} aria-label={t("Git проекта")} aria-pressed={toolTab === 'git'} title={t("Git: изменения проекта")} data-testid="git-toggle" onClick={() => setToolTab(value => value === 'git' ? null : 'git')}><GitBranch /></button><button className={`icon-button ${toolTab === 'browser' ? 'active-tool' : ''}`} aria-label={t("Встроенный браузер")} aria-pressed={toolTab === 'browser'} title={t("Встроенный браузер")} data-testid="browser-toggle" onClick={() => setToolTab(value => value === 'browser' ? null : 'browser')}><Globe /></button></>}
           {!sidebarOpen && <><button className="icon-button" aria-label={t('Проекты и задачи')} aria-expanded={projectsOpen} disabled={!environment?.capabilities?.projectTasks} onClick={() => { setNotificationsOpen(false); setAttentionOpen(false); setProjectsOpen(value => !value); }}><GitBranch /></button><button className={`icon-button ${attentionCount ? 'has-unread' : ''}`} aria-label={t('Внимание')} aria-expanded={attentionOpen} onClick={() => { setProjectsOpen(false); setNotificationsOpen(false); setAttentionOpen(value => !value); }}><CircleAlert /></button><button className={`icon-button ${unread ? 'has-unread' : ''}`} aria-label={t("Уведомления")} onClick={() => { setProjectsOpen(false); setAttentionOpen(false); setNotificationsOpen(value => !value); }}><Bell /></button></>}
         </div>
       </header>
+      {commandsWorkspace && commandsPane && <ProjectCommands key={commandsPane.id} workspace={commandsWorkspace} pane={commandsPane} onClose={() => setProjectCommandsTarget(null)} />}
       {!otherModalOpen && previousOutput?.text && activePane?.id === previousOutput.paneId && activePane.hasPreviousOutput && <Modal title={t('Вывод предыдущей сессии')} onClose={() => { historyRequest.current++; setPreviousOutput(undefined); }}><pre tabIndex={0} className="previous-terminal-output" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',maxHeight:'50vh',overflow:'auto'}}>{previousOutput.text}</pre></Modal>}
       {environment && !tabsAvailable && <div className="upgrade-notice" role="status" data-testid="daemon-upgrade-notice"><CircleAlert /><p><strong>{t('Для новых вкладок и запуска агентов требуется обновление сессии.')}</strong> {t('Текущие терминалы продолжают работать. Когда будете готовы, завершите все сессии и откройте Winmux снова. Закрытие окна или перезагрузка интерфейса не обновляет фоновый процесс.')}</p></div>}
       {state?.persistenceFailed && <div className="error-banner" role="alert"><CircleAlert /><span>{t("Не удалось сохранить состояние Winmux. Повторяем запись. Не перезапускайте демон.")}</span></div>}

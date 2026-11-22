@@ -119,6 +119,9 @@ tab/pane disposal helper while moving. Verify IDs, PIDs, screen contents, drafts
 same-tab/cross-tab layout consistency, invalid targets and persisted restoration.
 The renderer uses tab/pane headers as drag sources and a highlighted destination;
 terminal body selection and native blank-header window dragging stay independent.
+In the Electron cross-tab smoke, wait for the source pane's native drag marker
+before moving to the destination. Repeat the pointer move over the destination
+tab and split edge to deliver Chromium drag events on hosted Windows.
 
 Terminal web links have two callers in `src/TerminalPane.tsx`: WebLinksAddon for
 plain URLs and the OSC 8 `linkHandler`. Both require Ctrl+left-click and forward to
@@ -231,6 +234,21 @@ Application notification state, visible panel, and Windows toast are separate
 claims; report unavailable GUI capture without pretending an API result is a screenshot.
 
 ### Project tasks and delivery
+
+Project commands are stored by profile and Git common directory, so linked
+worktrees share templates while execution targets the selected workspace's own
+starting directory. The dialog pins the selected pane until it closes; a closed
+pane must not retarget a replacement. Parameter values are shell-quoted.
+Placeholders are separate arguments outside quotes and shell substitutions.
+Preview includes the directory change and is the exact input sent on explicit
+run. Windows parameterized commands require PowerShell 7.3 or later and use
+Standard native argument passing in their invocation scope. Windows PowerShell
+5.1 can run templates without parameters. WSL uses POSIX shell built-ins.
+Run `node tests/desktop-smoke.cjs`
+for isolated Electron verification with PowerShell and Ubuntu WSL, alongside
+`npm run test:skills`.
+The pane must be a regular running shell; its prompt and empty input still require
+the user's attention. A reported pane cwd is not proof of the shell's actual cwd.
 
 Projects are inferred during `task.create` and grouped by the Git common
 directory, shell environment, and WSL distribution. Task state is persisted with
