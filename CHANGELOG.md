@@ -8,8 +8,8 @@ User-visible changes are recorded here. Release availability and downloadable as
 
 ### Added
 
-- Optionally save recent pane output on graceful daemon shutdown and view or clear it separately after restart (Issue #118).
-- Save parameterized project commands and preview their exact text before sending them to the selected shell (Issue #119).
+- Enable previous output in Settings → Terminal to save recent pane output on graceful daemon shutdown and view or clear it after restart (Issue #118).
+- Save project commands and preview their exact text before running them in the selected shell. Parameters work in WSL and require PowerShell 7.3 or later on Windows (Issue #119).
 - Open the keyboard command palette with Ctrl+Shift+P to search workspaces, panes, tasks, and actions (Issue #120).
 
 ### Fixed
