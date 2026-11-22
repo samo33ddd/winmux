@@ -1,6 +1,7 @@
 import { t, subscribeLanguage, getLanguage, dateLocale } from './i18n';
 import { defaults, getPreferences, subscribePreferences, savePreferences, paletteFor } from './appearance';
 import { SettingsDialog } from './SettingsDialog';
+import { CommandPalette } from './CommandPalette';
 import { BrandMark } from './BrandMark';
 import { AgentStatus, activityLabel, agentActionLabel, agentName } from './AgentStatus';
 import { assertFilesNotSaving, getOrphanedFileDrafts, pruneFileDrafts, setFileDraft, subscribeFileDrafts } from './fileDrafts';
@@ -49,6 +50,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true); const [working, setWorking] = useState(false);
   const [previousOutput, setPreviousOutput] = useState<{paneId:string; text:string}>();
   const historyRequest = useRef(0);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [agentHooks, setAgentHooks] = useState(readAgentHooksPreference);
   const [sidebarWidth,setSidebarWidth] = usePanelWidth('winmux.sidebar-width',60,56,420);
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -357,6 +359,7 @@ export default function App() {
       if (event.key === 'Escape' && current.current.notificationsOpen) { event.preventDefault(); setNotificationsOpen(false); if (pane) handles.current.get(pane.id)?.focus(); return; }
       if (event.altKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); actions.current.navigatePane(event.key); return; }
       if (!event.ctrlKey || !event.shiftKey) return;
+      if ((event.code === 'KeyP' || key === 'p') && !event.altKey && !event.metaKey) { event.preventDefault(); setPaletteOpen(true); return; }
       if (key === 'n') { event.preventDefault(); setDialog({ type: 'create' }); return; }
       if (key === 'u') {
         event.preventDefault();
@@ -498,6 +501,18 @@ export default function App() {
     {dialog?.type === 'close-tab' && <ConfirmClose title={t('Закрыть вкладку терминала?')} description={t('Несохранённые изменения файлов будут потеряны.') + ' ' + t('Все терминалы вкладки «{0}» будут закрыты, их процессы — завершены. Остальные вкладки сохранятся.', (owner => owner ? tabLabel(owner, dialog.tab) : dialog.tab.title)(state?.workspaces.find(item => item.id === dialog.workspaceId)))} onClose={() => setDialog(null)} onConfirm={async () => { assertFilesNotSaving(paneIds(dialog.tab.root)); await bridge().call('tab.close', { workspaceId: dialog.workspaceId, tabId: dialog.tab.id }); await refresh(); }} />}
     {dialog?.type === 'close-workspace' && <ConfirmClose title={t("Закрыть рабочее пространство?")} description={t('Несохранённые изменения файлов будут потеряны.') + ' ' + t("Все терминалы пространства «{0}» будут закрыты, их процессы — завершены. Чтобы сохранить сессии, просто закройте окно приложения.", dialog.workspace.name)} onClose={() => setDialog(null)} onConfirm={async () => { assertFilesNotSaving(dialog.workspace.panes.map(pane => pane.id)); await bridge().call('workspace.close', { workspaceId: dialog.workspace.id }); }} />}
     {dialog?.type === 'shortcuts' && <Modal title={t("Горячие клавиши")} onClose={() => setDialog(null)}><div className="shortcut-list">{shortcuts.map(([label, key]) => <div key={key}><span>{label}</span><kbd>{key}</kbd></div>)}</div><p className="dialog-footnote">{t("Ctrl+C остаётся прерыванием процесса в терминале. Двойное нажатие на разделитель выравнивает панели.")}</p></Modal>}
+    {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} actions={[
+      { id: 'settings', label: t('Настройки'), run: () => setDialog({type:'settings'}) },
+      ...(environment && !loading ? [{ id: 'new', label: t('Новое рабочее пространство'), run: () => setDialog({type:'create'}) }] : []),
+      ...(activePane ? [{ id: 'search', label: t('Поиск в терминале'), run: () => handles.current.get(activePane.id)?.search() }] : []),
+      ...(state?.workspaces ?? []).flatMap(owner => [
+        { id: owner.id, label: owner.name, detail: t('Рабочее пространство'), run: () => selectWorkspace(owner.id) },
+        ...owner.panes.map((pane, index) => ({ id: pane.id, label: pane.title, detail: `${owner.name} · ${t('Панель {0}', index + 1)}`, run: () => selectWorkspace(owner.id, pane.id) })),
+      ]),
+      ...(state?.tasks ?? []).filter(task => !task.archived && task.phase === 'ready').map(task => ({
+        id: task.id, label: task.name, detail: t('Задача'), run: () => void openTask(task.id),
+      })),
+    ]} />}
     {dialog?.type === 'settings' && <SettingsDialog settings={settings} profiles={profiles} workspaces={state?.workspaces ?? []} activeWorkspaceId={workspace?.id} agentHooks={agentHooks} agentHooksAvailable={Boolean(hooksAvailable)} nativeCodex={nativeCodex} ompHooksAvailable={environment?.capabilities?.ompHooks === true} agentActivityAvailable={environment?.capabilities?.agentActivity === true} previousOutputAvailable={environment?.capabilities?.previousOutput === true} onAgentHooksChange={updateAgentHooks} onSkillStarted={async(workspaceId,paneId)=>{await refresh();selectWorkspace(workspaceId,paneId);setDialog(null);}} onChange={updateSettings} onClose={() => setDialog(null)} />}
     {orphan && !recoveryOpen && <div className="orphan-recovery-banner" data-testid="orphan-banner" role="alert">
       <span>{t('Есть несохранённые изменения в закрытых файлах.')}</span>
