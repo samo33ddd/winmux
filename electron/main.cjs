@@ -73,7 +73,7 @@ async function openFilePreview(params) {
 }
 // agent.status, agent.hook and notify are daemon-pipe methods for hook helpers
 // and local CLI automation; the renderer has no legitimate use for them.
-const allowedMethods = new Set(['state','environment','project.inspect','task.create','task.open','task.archive','task.delivery.context','task.delivery.refresh','task.delivery.submit','task.delivery.merge','workspace.create','workspace.rename','workspace.close','tab.create','tab.select','tab.close','pane.split','pane.move','pane.close','pane.input','pane.resize','pane.snapshot','pane.screen','agent.hooks.install','agent.sessions','agent.bind','codex.status','codex.bind','layout.ratio','notifications.read','settings.update']);
+const allowedMethods = new Set(['state','environment','project.inspect','task.create','task.open','task.archive','task.delivery.context','task.delivery.refresh','task.delivery.submit','task.delivery.merge','workspace.create','workspace.rename','workspace.close','tab.create','tab.select','tab.close','pane.split','pane.move','pane.close','pane.input','pane.resize','pane.previousOutput','pane.snapshot','pane.screen','agent.hooks.install','agent.sessions','agent.bind','codex.status','codex.bind','layout.ratio','notifications.read','settings.update']);
 function syncWindowTheme(theme) {
   const colors = {dark:['#101315','#e7eeea'],midnight:['#101523','#e1e9fa'],nord:['#252c38','#eceff4'],dracula:['#20212b','#f8f8f2'],light:['#e9eeeb','#202723'],sand:['#eee8dc','#3a3328']};
   // A persisted theme name may outlive its palette; unknown values fall back to dark.

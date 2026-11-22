@@ -72,6 +72,32 @@ and directory changes, draft retention, expansion and browser form state.
 
 ### Terminal links and input
 
+Previous terminal output is opt-in in Settings → Terminal and requires the
+daemon's `capabilities.previousOutput`. Graceful daemon shutdown fences queued
+xterm output and saves at most 80 plain-text lines and 2,048 UTF-16 units per
+pane in `state.json`. Restore uses the original pane ID and opens the saved
+output in a separate dialog. State and workspace responses expose only
+`hasPreviousOutput`; `pane.previousOutput {paneId}` retrieves one pane on demand.
+The dialog follows the selected pane and closes when another client clears its
+saved output. Ignore late fetches after selection or history changes. Optional
+history is dropped before notifications if the 4 MiB state budget is exceeded.
+Fresh shells never receive those bytes. Clearing saved output keeps the capture
+preference on; turning the preference off also clears all saved output. Watch
+the persistence warning if writing fails and verify the retry before relying on
+clear or disable.
+
+Run `npm run test:backend` with Windows PowerShell and a real WSL distribution
+for shutdown and restore, Unicode, the per-pane bound, Windows/WSL separation,
+and cleanup. After `npm run build`, `node tests/desktop-smoke.cjs` uses a
+disposable daemon and verifies enabling capture, opening the saved output after
+the daemon restarts, and clearing it in Settings or through another client.
+
+The command palette shortcut Ctrl+Shift+P follows physical `KeyP` across keyboard
+layouts, including Russian, and must pass through xterm to the app handler. Palette
+pane results include their workspace and pane position so identical titles remain
+distinguishable; filtering, keyboard selection, Escape and focus restoration are
+covered by the isolated Electron desktop smoke at the 900px minimum width.
+
 The topbar's empty `.workspace-tabs` area is an Electron drag region; actual tab
 and toolbar buttons remain `no-drag`. Validate computed regions and, when native
 Computer Use is available, measure the restored window position after a real
@@ -205,6 +231,21 @@ Application notification state, visible panel, and Windows toast are separate
 claims; report unavailable GUI capture without pretending an API result is a screenshot.
 
 ### Project tasks and delivery
+
+Project commands are stored by profile and Git common directory, so linked
+worktrees share templates while execution targets the selected workspace's own
+starting directory. The dialog pins the selected pane until it closes; a closed
+pane must not retarget a replacement. Parameter values are shell-quoted.
+Placeholders are separate arguments outside quotes and shell substitutions.
+Preview includes the directory change and is the exact input sent on explicit
+run. Windows parameterized commands require PowerShell 7.3 or later and use
+Standard native argument passing in their invocation scope. Windows PowerShell
+5.1 can run templates without parameters. WSL uses POSIX shell built-ins.
+Run `node tests/desktop-smoke.cjs`
+for isolated Electron verification with PowerShell and Ubuntu WSL, alongside
+`npm run test:skills`.
+The pane must be a regular running shell; its prompt and empty input still require
+the user's attention. A reported pane cwd is not proof of the shell's actual cwd.
 
 Projects are inferred during `task.create` and grouped by the Git common
 directory, shell environment, and WSL distribution. Task state is persisted with

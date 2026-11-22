@@ -1,6 +1,8 @@
 import { t, subscribeLanguage, getLanguage, dateLocale } from './i18n';
 import { defaults, getPreferences, subscribePreferences, savePreferences, paletteFor } from './appearance';
 import { SettingsDialog } from './SettingsDialog';
+import { ProjectCommands } from './ProjectCommands';
+import { CommandPalette } from './CommandPalette';
 import { BrandMark } from './BrandMark';
 import { AgentStatus, activityLabel, agentActionLabel, agentName } from './AgentStatus';
 import { assertFilesNotSaving, getOrphanedFileDrafts, pruneFileDrafts, setFileDraft, subscribeFileDrafts } from './fileDrafts';
@@ -47,6 +49,10 @@ export default function App() {
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [browserRequests, setBrowserRequests] = useState<Record<string, { url: string; serial: number }>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true); const [working, setWorking] = useState(false);
+  const [projectCommandsTarget, setProjectCommandsTarget] = useState<{workspaceId:string; paneId:string} | null>(null);
+  const [previousOutput, setPreviousOutput] = useState<{paneId:string; text:string}>();
+  const historyRequest = useRef(0);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [agentHooks, setAgentHooks] = useState(readAgentHooksPreference);
   const [sidebarWidth,setSidebarWidth] = usePanelWidth('winmux.sidebar-width',60,56,420);
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -89,7 +95,14 @@ export default function App() {
   const nativeCodex = environment?.capabilities?.nativeCodex === true;
   const preferences = useSyncExternalStore(subscribePreferences, getPreferences, getPreferences);
   const settings: Settings = { ...defaults, ...state?.settings, ...preferences, fontSize:state?.settings.fontSize ?? 14, theme:preferences.theme ?? state?.settings.theme ?? 'dark' };
-  const current = useRef({ workspace, activePane, dialog, notificationsOpen, switcherOpen }); current.current = { workspace, activePane, dialog, notificationsOpen, switcherOpen };
+  const commandsWorkspace = projectCommandsTarget && state?.workspaces.find(owner => owner.id === projectCommandsTarget.workspaceId);
+  const commandsPane = commandsWorkspace?.panes.find(pane => pane.id === projectCommandsTarget?.paneId);
+  const otherModalOpen = Boolean(dialog || paletteOpen || recoveryOpen || commandsPane);
+  const current = useRef({ workspace, activePane, dialog, notificationsOpen, switcherOpen, otherModalOpen }); current.current = { workspace, activePane, dialog, notificationsOpen, switcherOpen, otherModalOpen };
+  useEffect(() => {
+    historyRequest.current++;
+    setPreviousOutput(undefined);
+  }, [activePane?.id, activePane?.hasPreviousOutput, otherModalOpen]);
   const reportError = useCallback((message: string) => setError(message), []);
   const openBrowser = useCallback((workspaceId: string, url: string) => {
     setActiveWorkspace(workspaceId); setToolTab('browser'); setNotificationsOpen(false); setDialog(null);
@@ -188,10 +201,10 @@ export default function App() {
   }
   async function updateSettings(values: Partial<Settings>) {
     try {
-      const {fontSize, activeWorkspaceId, ...appearance} = values;
+      const {fontSize, activeWorkspaceId, restoreHistory, ...appearance} = values;
       if (Object.keys(appearance).length) savePreferences(appearance);
-      if (fontSize !== undefined || activeWorkspaceId !== undefined) await bridge().call('settings.update', {
-        ...(fontSize !== undefined ? {fontSize} : {}), ...(activeWorkspaceId !== undefined ? {activeWorkspaceId} : {})
+      if (fontSize !== undefined || activeWorkspaceId !== undefined || restoreHistory !== undefined) await bridge().call('settings.update', {
+        ...(fontSize !== undefined ? {fontSize} : {}), ...(activeWorkspaceId !== undefined ? {activeWorkspaceId} : {}), ...(restoreHistory !== undefined ? {restoreHistory} : {})
       });
     } catch (error) { setError(errorMessage(error)); }
   }
@@ -351,6 +364,7 @@ export default function App() {
       if (event.key === 'Escape' && current.current.notificationsOpen) { event.preventDefault(); setNotificationsOpen(false); if (pane) handles.current.get(pane.id)?.focus(); return; }
       if (event.altKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); actions.current.navigatePane(event.key); return; }
       if (!event.ctrlKey || !event.shiftKey) return;
+      if ((event.code === 'KeyP' || key === 'p') && !event.altKey && !event.metaKey) { event.preventDefault(); historyRequest.current++; setPaletteOpen(true); return; }
       if (key === 'n') { event.preventDefault(); setDialog({ type: 'create' }); return; }
       if (key === 'u') {
         event.preventDefault();
@@ -410,6 +424,7 @@ export default function App() {
         <button className={`sidebar-action ${notificationsOpen ? 'active' : ''}`} data-testid="notifications-toggle" aria-expanded={notificationsOpen} aria-label={t("Уведомления")} title={t("Уведомления")} onClick={() => { setAttentionOpen(false); setProjectsOpen(false); setNotificationsOpen(value => !value); }}><Bell />{sidebarExpanded && <span>{t("Уведомления")}</span>}{unread > 0 && <span className="unread-badge" aria-label={t("{0} непрочитанных", unread)}>{unread}</span>}</button>
         <button className="sidebar-action" data-testid="settings-open" aria-label={t("Настройки")} title={t("Настройки")} onClick={() => setDialog({ type: 'settings' })}><Settings2 />{sidebarExpanded && <><span>{t("Настройки")}</span><span className="shortcut-hint">Ctrl+,</span></>}</button>
         <button className="sidebar-action" aria-label={t("Горячие клавиши")} title={t("Горячие клавиши")} onClick={() => setDialog({ type: 'shortcuts' })}><Keyboard />{sidebarExpanded && <span>{t("Горячие клавиши")}</span>}</button>
+        {workspace && activePane && <button className="sidebar-action" data-testid="project-commands" aria-label={t('Команды проекта')} title={t('Команды проекта')} onClick={() => setProjectCommandsTarget({workspaceId:workspace.id, paneId:activePane.id})}><Keyboard />{sidebarExpanded && <span>{t('Команды проекта')}</span>}</button>}
       </div>
     </aside>
     {sidebarOpen && <ResizeHandle value={sidebarWidth} min={56} max={420} label={t('Ширина списка пространств')} testId="sidebar-resize" onChange={setSidebarWidth} />}
@@ -450,6 +465,7 @@ export default function App() {
           {profiles.map(profile=><optgroup key={profile.id} label={profile.environment==='wsl'?`WSL · ${profile.label}`:profile.label}>{environment?.agents?.filter(agent=>agent.profileId===profile.id).map(agent=><option key={agent.id} value={agent.id} disabled={agent.available === false}>{agent.label}{agent.available === null ? t(' — проверка при запуске') : agent.available ? '' : t(' — не установлен')}</option>)}</optgroup>)}
         </select>
         {activePane && <div className="terminal-tab-tools" role="group" aria-label={t('Действия терминала')}>
+          {activePane.hasPreviousOutput && <button className="icon-button" aria-label={t('Вывод предыдущей сессии')} title={t('Вывод предыдущей сессии')} onClick={() => { const paneId = activePane.id, request = ++historyRequest.current; void bridge().call<{text:string}>('pane.previousOutput', {paneId}).then(result => { if (request === historyRequest.current && !current.current.otherModalOpen && current.current.activePane?.id === paneId && current.current.activePane.hasPreviousOutput) setPreviousOutput({paneId,text:result.text}); }).catch(error => { if (request === historyRequest.current) setError(errorMessage(error)); }); }}>↶</button>}
           <button className="icon-button" aria-label={t("Найти в активном терминале")} title={t("Поиск (Ctrl+Shift+F)")} data-testid="terminal-search" onClick={() => handles.current.get(activePane.id)?.search()}><Search /></button>
           <button className="icon-button" aria-label={t("Разделить активную панель слева направо")} title={t("Разделить слева направо (Ctrl+Shift+D)")} data-testid="split-horizontal" disabled={working} onClick={() => void split(activePane.id, 'horizontal')}><SplitSquareHorizontal /></button>
           <button className="icon-button" aria-label={t("Разделить активную панель сверху вниз")} title={t("Разделить сверху вниз (Ctrl+Shift+E)")} data-testid="split-vertical" disabled={working} onClick={() => void split(activePane.id, 'vertical')}><SplitSquareVertical /></button>
@@ -459,10 +475,12 @@ export default function App() {
         </div>
         {activePane && <span className="header-agent"><AgentStatus pane={activePane} showName /></span>}
         <div className="topbar-tools" role="group" aria-label={t('Инструменты проекта')}>
-          {workspace && <><button className={`icon-button ${toolTab === 'files' ? 'active-tool' : ''}`} aria-label={t("Файлы проекта")} aria-pressed={toolTab === 'files'} title={t("Файлы проекта")} data-testid="files-toggle" onClick={() => setToolTab(value => value === 'files' ? null : 'files')}><FolderOpen /></button><button className={`icon-button ${toolTab === 'git' ? 'active-tool' : ''}`} aria-label={t("Git проекта")} aria-pressed={toolTab === 'git'} title={t("Git: изменения проекта")} data-testid="git-toggle" onClick={() => setToolTab(value => value === 'git' ? null : 'git')}><GitBranch /></button><button className={`icon-button ${toolTab === 'browser' ? 'active-tool' : ''}`} aria-label={t("Встроенный браузер")} aria-pressed={toolTab === 'browser'} title={t("Встроенный браузер")} data-testid="browser-toggle" onClick={() => setToolTab(value => value === 'browser' ? null : 'browser')}><Globe /></button></>}
+          {workspace && <>{activePane && <button className="icon-button" data-testid="workspace-project-commands" aria-label={t('Команды проекта')} title={t('Команды проекта')} onClick={() => setProjectCommandsTarget({workspaceId:workspace.id, paneId:activePane.id})}><Keyboard /></button>}<button className={`icon-button ${toolTab === 'files' ? 'active-tool' : ''}`} aria-label={t("Файлы проекта")} aria-pressed={toolTab === 'files'} title={t("Файлы проекта")} data-testid="files-toggle" onClick={() => setToolTab(value => value === 'files' ? null : 'files')}><FolderOpen /></button><button className={`icon-button ${toolTab === 'git' ? 'active-tool' : ''}`} aria-label={t("Git проекта")} aria-pressed={toolTab === 'git'} title={t("Git: изменения проекта")} data-testid="git-toggle" onClick={() => setToolTab(value => value === 'git' ? null : 'git')}><GitBranch /></button><button className={`icon-button ${toolTab === 'browser' ? 'active-tool' : ''}`} aria-label={t("Встроенный браузер")} aria-pressed={toolTab === 'browser'} title={t("Встроенный браузер")} data-testid="browser-toggle" onClick={() => setToolTab(value => value === 'browser' ? null : 'browser')}><Globe /></button></>}
           {!sidebarOpen && <><button className="icon-button" aria-label={t('Проекты и задачи')} aria-expanded={projectsOpen} disabled={!environment?.capabilities?.projectTasks} onClick={() => { setNotificationsOpen(false); setAttentionOpen(false); setProjectsOpen(value => !value); }}><GitBranch /></button><button className={`icon-button ${attentionCount ? 'has-unread' : ''}`} aria-label={t('Внимание')} aria-expanded={attentionOpen} onClick={() => { setProjectsOpen(false); setNotificationsOpen(false); setAttentionOpen(value => !value); }}><CircleAlert /></button><button className={`icon-button ${unread ? 'has-unread' : ''}`} aria-label={t("Уведомления")} onClick={() => { setProjectsOpen(false); setAttentionOpen(false); setNotificationsOpen(value => !value); }}><Bell /></button></>}
         </div>
       </header>
+      {commandsWorkspace && commandsPane && <ProjectCommands key={commandsPane.id} workspace={commandsWorkspace} pane={commandsPane} onClose={() => setProjectCommandsTarget(null)} />}
+      {!otherModalOpen && previousOutput?.text && activePane?.id === previousOutput.paneId && activePane.hasPreviousOutput && <Modal title={t('Вывод предыдущей сессии')} onClose={() => { historyRequest.current++; setPreviousOutput(undefined); }}><pre tabIndex={0} className="previous-terminal-output" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',maxHeight:'50vh',overflow:'auto'}}>{previousOutput.text}</pre></Modal>}
       {environment && !tabsAvailable && <div className="upgrade-notice" role="status" data-testid="daemon-upgrade-notice"><CircleAlert /><p><strong>{t('Для новых вкладок и запуска агентов требуется обновление сессии.')}</strong> {t('Текущие терминалы продолжают работать. Когда будете готовы, завершите все сессии и откройте Winmux снова. Закрытие окна или перезагрузка интерфейса не обновляет фоновый процесс.')}</p></div>}
       {state?.persistenceFailed && <div className="error-banner" role="alert"><CircleAlert /><span>{t("Не удалось сохранить состояние Winmux. Повторяем запись. Не перезапускайте демон.")}</span></div>}
       {error && <div className="error-banner" role="alert"><CircleAlert /><span>{error.message}</span><button className="text-button" onClick={() => setReload(value => value + 1)}>{t("Переподключить")}</button><button className="icon-button" aria-label={t("Скрыть ошибку")} onClick={() => setError('')}><X /></button></div>}
@@ -490,7 +508,19 @@ export default function App() {
     {dialog?.type === 'close-tab' && <ConfirmClose title={t('Закрыть вкладку терминала?')} description={t('Несохранённые изменения файлов будут потеряны.') + ' ' + t('Все терминалы вкладки «{0}» будут закрыты, их процессы — завершены. Остальные вкладки сохранятся.', (owner => owner ? tabLabel(owner, dialog.tab) : dialog.tab.title)(state?.workspaces.find(item => item.id === dialog.workspaceId)))} onClose={() => setDialog(null)} onConfirm={async () => { assertFilesNotSaving(paneIds(dialog.tab.root)); await bridge().call('tab.close', { workspaceId: dialog.workspaceId, tabId: dialog.tab.id }); await refresh(); }} />}
     {dialog?.type === 'close-workspace' && <ConfirmClose title={t("Закрыть рабочее пространство?")} description={t('Несохранённые изменения файлов будут потеряны.') + ' ' + t("Все терминалы пространства «{0}» будут закрыты, их процессы — завершены. Чтобы сохранить сессии, просто закройте окно приложения.", dialog.workspace.name)} onClose={() => setDialog(null)} onConfirm={async () => { assertFilesNotSaving(dialog.workspace.panes.map(pane => pane.id)); await bridge().call('workspace.close', { workspaceId: dialog.workspace.id }); }} />}
     {dialog?.type === 'shortcuts' && <Modal title={t("Горячие клавиши")} onClose={() => setDialog(null)}><div className="shortcut-list">{shortcuts.map(([label, key]) => <div key={key}><span>{label}</span><kbd>{key}</kbd></div>)}</div><p className="dialog-footnote">{t("Ctrl+C остаётся прерыванием процесса в терминале. Двойное нажатие на разделитель выравнивает панели.")}</p></Modal>}
-    {dialog?.type === 'settings' && <SettingsDialog settings={settings} profiles={profiles} workspaces={state?.workspaces ?? []} activeWorkspaceId={workspace?.id} agentHooks={agentHooks} agentHooksAvailable={Boolean(hooksAvailable)} nativeCodex={nativeCodex} ompHooksAvailable={environment?.capabilities?.ompHooks === true} agentActivityAvailable={environment?.capabilities?.agentActivity === true} onAgentHooksChange={updateAgentHooks} onSkillStarted={async(workspaceId,paneId)=>{await refresh();selectWorkspace(workspaceId,paneId);setDialog(null);}} onChange={updateSettings} onClose={() => setDialog(null)} />}
+    {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} actions={[
+      { id: 'settings', label: t('Настройки'), run: () => setDialog({type:'settings'}) },
+      ...(environment && !loading ? [{ id: 'new', label: t('Новое рабочее пространство'), run: () => setDialog({type:'create'}) }] : []),
+      ...(activePane ? [{ id: 'search', label: t('Поиск в терминале'), run: () => handles.current.get(activePane.id)?.search() }] : []),
+      ...(state?.workspaces ?? []).flatMap(owner => [
+        { id: owner.id, label: owner.name, detail: t('Рабочее пространство'), run: () => selectWorkspace(owner.id) },
+        ...owner.panes.map((pane, index) => ({ id: pane.id, label: pane.title, detail: `${owner.name} · ${t('Панель {0}', index + 1)}`, run: () => selectWorkspace(owner.id, pane.id) })),
+      ]),
+      ...(state?.tasks ?? []).filter(task => !task.archived && task.phase === 'ready').map(task => ({
+        id: task.id, label: task.name, detail: t('Задача'), run: () => void openTask(task.id),
+      })),
+    ]} />}
+    {dialog?.type === 'settings' && <SettingsDialog settings={settings} profiles={profiles} workspaces={state?.workspaces ?? []} activeWorkspaceId={workspace?.id} agentHooks={agentHooks} agentHooksAvailable={Boolean(hooksAvailable)} nativeCodex={nativeCodex} ompHooksAvailable={environment?.capabilities?.ompHooks === true} agentActivityAvailable={environment?.capabilities?.agentActivity === true} previousOutputAvailable={environment?.capabilities?.previousOutput === true} onAgentHooksChange={updateAgentHooks} onSkillStarted={async(workspaceId,paneId)=>{await refresh();selectWorkspace(workspaceId,paneId);setDialog(null);}} onChange={updateSettings} onClose={() => setDialog(null)} />}
     {orphan && !recoveryOpen && <div className="orphan-recovery-banner" data-testid="orphan-banner" role="alert">
       <span>{t('Есть несохранённые изменения в закрытых файлах.')}</span>
       <button type="button" className="button" data-testid="orphan-open" onClick={() => setRecoveryOpen(true)}>{t('Восстановить несохранённые файлы ({0})', orphanedDrafts.length)}</button>

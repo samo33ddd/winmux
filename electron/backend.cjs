@@ -56,6 +56,12 @@ function stateDocument(state) { return JSON.stringify({ version: 3, state }); }
 function fitStateSize(state) {
   let serialized = stateDocument(state);
   if (Buffer.byteLength(serialized) <= STATE_MAX_BYTES) return { serialized, dropped: 0 };
+  let droppedHistory = 0;
+  for (const workspace of state.workspaces) for (const pane of workspace.panes) {
+    if (pane.previousOutput !== undefined) { delete pane.previousOutput; droppedHistory++; }
+  }
+  serialized = stateDocument(state);
+  if (Buffer.byteLength(serialized) <= STATE_MAX_BYTES) return { serialized, dropped: droppedHistory };
   const total = state.notifications.length;
   let low = 0, high = total;
   while (low < high) {
@@ -67,7 +73,7 @@ function fitStateSize(state) {
   state.notifications = low ? state.notifications.slice(-low) : [];
   serialized = stateDocument(state);
   if (Buffer.byteLength(serialized) > STATE_MAX_BYTES) fail('STATE_INVALID', 'Saved workspace state exceeds the size limit');
-  return { serialized, dropped: total - low };
+  return { serialized, dropped: droppedHistory + total - low };
 }
 function backupRecoveredState(file) {
   const backup = `${file}.recovery-${Date.now()}-${randomUUID().slice(0, 8)}.bak`;
@@ -104,6 +110,8 @@ function loadState(file) {
       unique(pane.id); string(pane.title, 'title', 256); string(pane.cwd, 'cwd', 4096); string(pane.profileId, 'profileId', 256);
       integer(pane.cols, 'cols', 2, 300); integer(pane.rows, 'rows', 1, 200);
       pane.pid = null; pane.status = 'exited'; delete pane.exitCode;
+      if (state.settings?.restoreHistory === true && typeof pane.previousOutput === 'string') pane.previousOutput = pane.previousOutput.slice(-2048).toWellFormed();
+      else delete pane.previousOutput;
       delete pane.agentId; delete pane.agentLabel; delete pane.agentThreadId; delete pane.agentSessionId; delete pane.agentBinding;
       pane.agentState = 'unknown'; delete pane.agentStateSince; delete pane.agentExitCode; delete pane.agentUpdatedAt; delete pane.agentActivity; delete pane.agentPid;
     }
@@ -244,7 +252,12 @@ async function startServer(options = {}) {
   let codexController, agentController;
   let stopping = false, closePromise, persistTimer, mutationTail = Promise.resolve();
   let persistenceFailed = false;
-  const publicState = () => ({ ...structuredClone(state), ...(persistenceFailed && { persistenceFailed: true }) });
+  const publicWorkspace = workspace => {
+    const result = structuredClone(workspace);
+    for (const pane of result.panes) { pane.hasPreviousOutput = Boolean(pane.previousOutput); delete pane.previousOutput; }
+    return result;
+  };
+  const publicState = () => ({ ...structuredClone(state), workspaces: state.workspaces.map(publicWorkspace), ...(persistenceFailed && { persistenceFailed: true }) });
   function save() {
     const temp = `${loc.stateFile}.${process.pid}.tmp`;
     try {
@@ -551,7 +564,7 @@ async function startServer(options = {}) {
         const task = taskById(params.taskId), project = state.projects.find(item => item.id === task.projectId);
         if (!project) fail('NOT_FOUND', 'Task project not found');
         const existing = state.workspaces.find(item => item.id === task.workspaceId);
-        if (existing) return structuredClone(existing);
+        if (existing) return publicWorkspace(existing);
         if (task.phase !== 'ready') fail('TASK_INCOMPLETE', task.error || 'Task creation did not finish; inspect the worktree before retrying');
         if (task.archived && task.removed) {
           await taskGit.createWorktree({ ...projectContext(project), path:task.cwd, branch:task.branch, base:task.base, taskId:task.id, restore:true });
@@ -624,10 +637,10 @@ async function startServer(options = {}) {
         const autoName = boundedText((path.basename(launch.cwd) || launch.profile.label).trim(), 120) || launch.profile.label;
         const workspace = { id: randomUUID(), name: requestedName || autoName, cwd: launch.cwd, profileId, tabs: [tab], activeTabId: tab.id, root: tab.root, panes: [pane] };
         spawnPane(pane, launch); state.workspaces.push(workspace); if (task) { task.workspaceId = workspace.id; task.archived = false; } state.settings.activeWorkspaceId = workspace.id; asyncChanged();
-        return structuredClone(workspace);
+        return publicWorkspace(workspace);
       }
       case 'workspace.rename': {
-        const workspace = workspaceById(params.workspaceId); workspace.name = string(params.name, 'name', 120).trim(); changed(); return structuredClone(workspace);
+        const workspace = workspaceById(params.workspaceId); workspace.name = string(params.name, 'name', 120).trim(); changed(); return publicWorkspace(workspace);
       }
       case 'workspace.close': {
         const workspace = workspaceById(params.workspaceId); workspace.panes.forEach(disposePane);
@@ -727,6 +740,10 @@ async function startServer(options = {}) {
           clearTimeout(persistTimer); persistTimer = setTimeout(safeSave, 150); return { ok: true };
         });
       }
+      case 'pane.previousOutput': {
+        const { pane } = paneById(params.paneId);
+        return { text: pane.previousOutput || '' };
+      }
       case 'pane.snapshot': {
         const { runtime } = paneById(params.paneId);
         return fence(runtime, () => ({ data: runtime.serializer.serialize({ scrollback: LIMITS.scrollback }), seq: runtime.seq, cols: runtime.terminal.cols, rows: runtime.terminal.rows }));
@@ -771,7 +788,18 @@ async function startServer(options = {}) {
         if (params.fontSize !== undefined) next.fontSize = integer(params.fontSize, 'fontSize', 9, 32);
         if (params.theme !== undefined) { if (!['dark', 'light'].includes(params.theme)) fail('INVALID_ARGUMENT', 'theme must be dark or light'); next.theme = params.theme; }
         if (params.activeWorkspaceId !== undefined) { workspaceById(params.activeWorkspaceId); next.activeWorkspaceId = params.activeWorkspaceId; }
-        state.settings = next; changed(); return { ...next };
+        if (params.restoreHistory !== undefined) {
+          if (typeof params.restoreHistory !== 'boolean') fail('INVALID_ARGUMENT', 'restoreHistory must be a boolean');
+          next.restoreHistory = params.restoreHistory;
+        }
+        if (params.clearPreviousOutput !== undefined && params.clearPreviousOutput !== true) fail('INVALID_ARGUMENT', 'clearPreviousOutput must be true');
+        if (params.restoreHistory === false || params.clearPreviousOutput) {
+          for (const workspace of state.workspaces) for (const pane of workspace.panes) delete pane.previousOutput;
+        }
+        state.settings = next;
+        if (params.restoreHistory !== undefined || params.clearPreviousOutput) asyncChanged();
+        else changed();
+        return { ...next };
       }
       case 'daemon.shutdown': setTimeout(() => close().catch(error => console.error(error.message)), 30); return { ok: true };
       case 'codex.status': return codexController.status();
@@ -817,7 +845,7 @@ async function startServer(options = {}) {
       default: fail('METHOD_NOT_FOUND', `Unknown method: ${method}`);
     }
   }
-  const reads = new Set(['state', 'environment', 'project.inspect', 'task.delivery.context', 'task.delivery.refresh', 'task.delivery.submit', 'task.delivery.merge', 'pane.snapshot', 'pane.screen', 'pane.input', 'codex.status', 'agent.sessions']);
+  const reads = new Set(['state', 'environment', 'project.inspect', 'task.delivery.context', 'task.delivery.refresh', 'task.delivery.submit', 'task.delivery.merge', 'pane.previousOutput', 'pane.snapshot', 'pane.screen', 'pane.input', 'codex.status', 'agent.sessions']);
   function codexPanes() {
     return state.workspaces.flatMap(workspace => workspace.panes.map(pane => ({
       id: pane.id, pid: pane.pid, status: pane.status, cwd: pane.cwd, agentId: pane.agentId,
@@ -939,6 +967,21 @@ async function startServer(options = {}) {
       await mutationTail;
       await Promise.allSettled([...deliveryRequests]);
       await codexController?.stop();
+      if (state.settings.restoreHistory === true) {
+        await Promise.allSettled(state.workspaces.flatMap(workspace => workspace.panes.map(async pane => {
+          const runtime = runtimes.get(pane.id);
+          if (!runtime) return;
+          await fence(runtime, () => {
+            const buffer = runtime.terminal.buffer.normal;
+            const lines = [];
+            for (let index = buffer.length - 1; index >= 0 && lines.length < 80; index--) {
+              const line = buffer.getLine(index)?.translateToString(true) ?? '';
+              if (line || lines.length) lines.push(line);
+            }
+            pane.previousOutput = lines.reverse().join('\n').slice(-2048).toWellFormed();
+          });
+        })));
+      }
       safeSave();
       for (const workspace of state.workspaces) workspace.panes.forEach(disposePane);
       for (const client of clients) client.socket.destroy();
@@ -974,7 +1017,7 @@ async function startServer(options = {}) {
   server.on('error', error => console.error(`Winmux IPC server error: ${error.message}`));
   return { server, dataDir: loc.dataDir, pipeName: loc.pipeName, close, shutdown: close };
 }
-module.exports = { startServer, tabTitleMode, setAgentState, loadState };
+module.exports = { startServer, tabTitleMode, setAgentState, loadState, fitStateSize };
 if (require.main === module) {
   startServer().then(daemon => {
     const stop = () => daemon.close().then(() => process.exit(0), error => { console.error(error); process.exit(1); });
