@@ -139,6 +139,16 @@ async function main() {
   await page.screenshot({path:path.join(artifacts,'project-command-preview.png')});
   await commandsDialog.getByRole('button', {name:'Run command'}).click();
   await waitScreen(first.id,'PROJECT_COMMAND‘’‚‛_OK');
+  await rpc('pane.input',{paneId:first.id,data:"$beforePassing=$PSNativeCommandArgumentPassing; $PSNativeCommandArgumentPassing='Legacy'; Write-Output ('LEGACY_' + 'READY')\r"});
+  await waitScreen(first.id,'LEGACY_READY');
+  await page.getByTestId('workspace-project-commands').click();
+  await commandsDialog.getByLabel('Name',{exact:true}).fill('Native arguments');
+  await commandsDialog.getByLabel('Command template').fill('node -p "JSON.stringify(process.argv.slice(1))" {{one}} {{two}}');
+  await commandsDialog.getByLabel('one',{exact:true}).fill('a"b');
+  await commandsDialog.getByRole('button',{name:'Run command'}).click();
+  await waitScreen(first.id,JSON.stringify(['a"b','']));
+  await rpc('pane.input',{paneId:first.id,data:"Write-Output ('PASSING_' + $PSNativeCommandArgumentPassing); $PSNativeCommandArgumentPassing=$beforePassing\r"});
+  await waitScreen(first.id,'PASSING_Legacy');
   findings.push('Real PowerShell ConPTY output and Unicode displayed through Electron preload/RPC.');
   await rpc('pane.input', { paneId:first.id, data:"Write-Output ('CTRL_SPACE_' + 'READY'); $k=[Console]::ReadKey($true); Write-Output ('CTRL_SPACE_KEY_' + [int]$k.KeyChar)\r" });
   await waitScreen(first.id, 'CTRL_SPACE_READY');

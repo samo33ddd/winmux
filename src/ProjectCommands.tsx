@@ -56,9 +56,9 @@ function CommandEditor({ workspace, pane, storageKey, onClose }: Props & {storag
     if (state || (before && !/[ (]/.test(before)) || (after && !/[ )]/.test(after))) unsupported = true;
   }
   const expanded = template.replace(pattern, (_, field: string) => quote(Object.hasOwn(values, field) ? values[field] : ''));
-  const windowsCommand = `Set-Location -LiteralPath ${quote(workspace.cwd)}; if ($?) { . ([scriptblock]::Create(${quote(expanded)})) }`;
-  const preview = linux ? `cd -- ${quote(workspace.cwd)} && ( builtin eval ${quote(expanded)} )` : placeholders.length
-    ? `if ($PSVersionTable.PSVersion -lt [version]'7.3') { Write-Error 'Project command parameters require PowerShell 7.3 or later.' } else { ${windowsCommand} }`
+  const windowsCommand = `Microsoft.PowerShell.Management\\Set-Location -LiteralPath ${quote(workspace.cwd)}; if ($?) { . ([scriptblock]::Create(${quote(expanded)})) }`;
+  const preview = linux ? `command cd -- ${quote(workspace.cwd)} && ( command eval ${quote(expanded)} )` : placeholders.length
+    ? `if ($PSVersionTable.PSVersion -lt [version]'7.3') { Write-Error 'Project command parameters require PowerShell 7.3 or later.' } else { & { $PSNativeCommandArgumentPassing = 'Standard'; ${windowsCommand} } }`
     : windowsCommand;
   const valid = Boolean(name.trim() && template.trim() && !unsupported && !/[{}]{2}/.test(template.replace(pattern, '')) && !/[\r\n\x00-\x1f\x7f]/.test(preview) && preview.length <= 4096);
   const sameDirectory = linux ? pane.cwd === workspace.cwd : pane.cwd.toLowerCase() === workspace.cwd.toLowerCase();
