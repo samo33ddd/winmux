@@ -4,7 +4,7 @@ import { Modal } from './Dialogs';
 import { getLanguage, setLanguage, t } from './i18n';
 import { allPalettes, type ThemeId } from './appearance';
 import { ThemeEditor, BrowserSettings } from './ThemeEditor';
-import type { Profile, Settings, Workspace } from './types';
+import { bridge, errorMessage, type Profile, type Settings, type Workspace } from './types';
 import { SkillsSettings } from './SkillsSettings';
 import { AgentIntegrationSettings } from './AgentIntegrationSettings';
 import { AgentHooksSettings } from './AgentHooksSettings';
@@ -16,8 +16,9 @@ function Row({title, detail, children}: {title:string; detail?:string; children:
 function Toggle({label, checked, onChange, testId, disabled=false}: {label:string; checked:boolean; onChange(value:boolean):void; testId:string; disabled?:boolean}) {
   return <button className="preference-switch" role="switch" aria-label={label} aria-checked={checked} data-testid={testId} disabled={disabled} onClick={() => onChange(!checked)}><span /></button>;
 }
-export function SettingsDialog({settings, profiles, workspaces, activeWorkspaceId, agentHooks, agentHooksAvailable, nativeCodex, ompHooksAvailable = false, agentActivityAvailable = false, onAgentHooksChange, onSkillStarted, onChange, onClose}: {settings:Settings; profiles:Profile[]; workspaces:Workspace[]; activeWorkspaceId?:string; agentHooks:boolean; agentHooksAvailable:boolean; nativeCodex:boolean; ompHooksAvailable?:boolean; agentActivityAvailable?:boolean; onAgentHooksChange(value:boolean):void; onSkillStarted(workspaceId:string,paneId:string):void; onChange(values:Partial<Settings>):Promise<void>; onClose():void}) {
+export function SettingsDialog({settings, profiles, workspaces, activeWorkspaceId, agentHooks, agentHooksAvailable, nativeCodex, ompHooksAvailable = false, agentActivityAvailable = false, previousOutputAvailable = false, onAgentHooksChange, onSkillStarted, onChange, onClose}: {settings:Settings; profiles:Profile[]; workspaces:Workspace[]; activeWorkspaceId?:string; agentHooks:boolean; agentHooksAvailable:boolean; nativeCodex:boolean; ompHooksAvailable?:boolean; agentActivityAvailable?:boolean; previousOutputAvailable?:boolean; onAgentHooksChange(value:boolean):void; onSkillStarted(workspaceId:string,paneId:string):void; onChange(values:Partial<Settings>):Promise<void>; onClose():void}) {
   const [tab,setTab] = useState<'appearance'|'terminal'|'behavior'|'browser'|'skills'>('appearance');
+  const [historyError, setHistoryError] = useState('');
   const change = (values:Partial<Settings>) => { void onChange(values); };
   return <Modal title={t('Настройки')} className="preferences-modal" onClose={onClose}>
     <div className="preferences-layout">
@@ -38,6 +39,12 @@ export function SettingsDialog({settings, profiles, workspaces, activeWorkspaceI
         <Row title={t('Пути в списке проектов')} detail={t('Показывать стартовый каталог под названием.')}><Toggle label={t('Пути в списке проектов')} testId="workspace-paths" checked={settings.showWorkspacePaths} onChange={showWorkspacePaths => change({showWorkspacePaths})} /></Row>
       </>}
       {tab === 'terminal' && <>
+        <Row title={t('Сохранять предыдущий вывод')} detail={previousOutputAvailable ? t('Хранит последние строки каждой панели на диске при штатной остановке. Выключение удаляет сохранённый вывод.') : t('Для сохранения вывода требуется обновить фоновую сессию Winmux.')}><Toggle label={t('Сохранять предыдущий вывод')} testId="restore-history" disabled={!previousOutputAvailable} checked={settings.restoreHistory === true} onChange={restoreHistory => change({restoreHistory})} /></Row>
+        {previousOutputAvailable && workspaces.some(workspace => workspace.panes.some(pane => pane.hasPreviousOutput)) && <Row title={t('Вывод предыдущей сессии')}><button className="button" onClick={() => {
+          setHistoryError('');
+          void bridge().call('settings.update', {clearPreviousOutput:true}).catch(error => setHistoryError(errorMessage(error)));
+        }}>{t('Очистить сохранённый вывод')}</button></Row>}
+        {historyError && <p role="alert">{historyError}</p>}
         <Row title={t('Шрифт терминала')} detail={t('Cascadia Code использует Consolas, если шрифт не установлен.')}><select aria-label={t('Шрифт терминала')} data-testid="font-family" value={settings.fontFamily} onChange={e => change({fontFamily:e.target.value as Settings['fontFamily']})}>{['Cascadia Code','Consolas','Courier New'].map(font => <option key={font}>{font}</option>)}</select></Row>
         <Row title={t('Размер шрифта')}><div className="font-stepper"><button className="icon-button" aria-label={t('Уменьшить шрифт')} disabled={settings.fontSize <= 10} onClick={() => change({fontSize:settings.fontSize-1})}><Minus /></button><output data-testid="font-size">{settings.fontSize} px</output><button className="icon-button" aria-label={t('Увеличить шрифт')} disabled={settings.fontSize >= 28} onClick={() => change({fontSize:settings.fontSize+1})}><Plus /></button></div></Row>
         <Row title={t('Межстрочный интервал')}><select aria-label={t('Межстрочный интервал')} data-testid="line-height" value={settings.lineHeight} onChange={e => change({lineHeight:Number(e.target.value)})}>{[1,1.14,1.3,1.5].map(value => <option key={value} value={value}>{value}</option>)}</select></Row>
