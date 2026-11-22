@@ -4,6 +4,20 @@ User-visible changes are recorded here. Release availability and downloadable as
 
 ## Unreleased
 
+## 0.3.0 — Terminal history and project actions
+
+### Added
+
+- Enable previous output in Settings → Terminal to save recent pane output on graceful daemon shutdown and view or clear it after restart (Issue #118).
+- Save project commands and preview their exact text before running them in the selected shell. Parameters work in WSL and require PowerShell 7.3 or later on Windows (Issue #119).
+- Open the keyboard command palette with Ctrl+Shift+P to search workspaces, panes, tasks, and actions (Issue #120).
+
+### Fixed
+
+- Report live workspace changes and retry saving when disk persistence fails (Issue #115).
+- Register the embedded browser's download blocking policy once per session (Issue #116).
+- Inspect and clear generated browser screenshots through the browser client (Issue #117).
+
 ## 0.2.4 — Audit fixes and release hardening
 
 ### Fixed
