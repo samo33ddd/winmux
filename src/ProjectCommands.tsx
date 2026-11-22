@@ -5,18 +5,17 @@ import { bridge, errorMessage, type Pane, type Workspace } from './types';
 
 interface Command { name: string; template: string }
 
-type Props = { workspace: Workspace; pane: Pane; projectRoot?: string; onClose(): void };
+type Props = { workspace: Workspace; pane: Pane; onClose(): void };
 
 export function ProjectCommands(props: Props) {
-  const {workspace, projectRoot, onClose} = props;
-  const [root, setRoot] = useState(projectRoot);
+  const {workspace, onClose} = props;
+  const [root, setRoot] = useState<string>();
   useEffect(() => {
-    if (projectRoot) return;
     let active = true;
-    void bridge().call<{ root: string }>('project.inspect', { profileId:workspace.profileId, cwd:workspace.cwd })
-      .then(project => { if (active) setRoot(project.root); }, () => { if (active) setRoot(workspace.cwd); });
+    void bridge().call<{ commonDir: string }>('project.inspect', { profileId:workspace.profileId, cwd:workspace.cwd })
+      .then(project => { if (active) setRoot(project.commonDir); }, () => { if (active) setRoot(workspace.cwd); });
     return () => { active = false; };
-  }, [projectRoot, workspace.profileId, workspace.cwd]);
+  }, [workspace.profileId, workspace.cwd]);
   if (!root) return <Modal title={t('Команды проекта')} onClose={onClose}><p role="status">{t('Определяем каталог проекта…')}</p></Modal>;
   const key = `winmux.commands.${JSON.stringify([workspace.profileId, workspace.profileId.startsWith('wsl:') ? root : root.toLowerCase()])}`;
   return <CommandEditor key={key} {...props} storageKey={key} />;
@@ -34,11 +33,29 @@ function CommandEditor({ workspace, pane, storageKey, onClose }: Props & {storag
   const [values, setValues] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const placeholders = [...new Set([...template.matchAll(/\{\{([A-Za-z][A-Za-z0-9_]*)\}\}/g)].map(match => match[1]))];
   const linux = pane.profileId.startsWith('wsl:');
   const quote = (value: string) => `'${linux ? value.replaceAll("'", "'\\''") : value.replace(/[‘’']/g, mark => mark + mark)}'`;
-  const preview = template.replace(/\{\{([A-Za-z][A-Za-z0-9_]*)\}\}/g, (_, field: string) => quote(values[field] ?? ''));
-  const valid = Boolean(name.trim() && template.trim() && !/[\r\n\x00-\x1f\x7f]/.test(preview) && preview.length <= 4096);
+  const pattern = /\{\{([A-Za-z][A-Za-z0-9_]*)\}\}/g;
+  const shellTemplate = linux ? template : template.replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
+  const matches = [...shellTemplate.matchAll(pattern)];
+  const placeholders = [...new Set(matches.map(match => match[1]))];
+  let state = '', offset = 0;
+  let unsupported = matches.length > 0 && (template.includes('$(') || (linux ? /[`]|\$['"]/.test(template) : template.includes('--%')));
+  for (const match of matches) {
+    for (; offset < match.index; offset++) {
+      const char = shellTemplate[offset];
+      if ((linux ? char === '\\' && state !== "'" : char === '`' && state !== "'") && offset + 1 < match.index) { offset++; continue; }
+      if (char === state) { if (!linux && state === "'" && shellTemplate[offset + 1] === char) offset++; else state = ''; }
+      else if (!state && (char === "'" || char === '"')) state = char;
+    }
+    const before = shellTemplate[match.index - 1];
+    offset = match.index + match[0].length;
+    const after = shellTemplate[offset];
+    if (state || (before && !/[ (]/.test(before)) || (after && !/[ )]/.test(after))) unsupported = true;
+  }
+  const expanded = template.replace(pattern, (_, field: string) => quote(Object.hasOwn(values, field) ? values[field] : ''));
+  const preview = linux ? `cd -- ${quote(workspace.cwd)} && ( ${expanded} )` : `Set-Location -LiteralPath ${quote(workspace.cwd)}; if ($?) { ${expanded} }`;
+  const valid = Boolean(name.trim() && template.trim() && !unsupported && !/[{}]{2}/.test(template.replace(pattern, '')) && !/[\r\n\x00-\x1f\x7f]/.test(preview) && preview.length <= 4096);
   const sameDirectory = linux ? pane.cwd === workspace.cwd : pane.cwd.toLowerCase() === workspace.cwd.toLowerCase();
   const ready = sameDirectory && pane.profileId === workspace.profileId && pane.status === 'running' && !pane.agentId;
   function save(next: Command[]) {
@@ -68,10 +85,11 @@ function CommandEditor({ workspace, pane, storageKey, onClose }: Props & {storag
       }}><option value="">{t('Новая команда')}</option>{commands.map(command => <option key={command.name}>{command.name}</option>)}</select></label>
       <label>{t('Название')}<input value={name} maxLength={80} onChange={event => setName(event.target.value)} /></label>
       <label>{t('Шаблон команды')}<input value={template} maxLength={2048} placeholder="npm test -- {{filter}}" onChange={event => setTemplate(event.target.value)} /></label>
-      {placeholders.map(field => <label key={field}>{field}<input value={values[field] ?? ''} maxLength={512} onChange={event => setValues({ ...values, [field]: event.target.value })} /></label>)}
+      {placeholders.map(field => <label key={field}>{field}<input value={Object.hasOwn(values, field) ? values[field] : ''} maxLength={512} onChange={event => setValues({ ...values, [field]: event.target.value })} /></label>)}
       <label>{t('Итоговая команда')}<input readOnly value={preview} /></label>
       <p className="field-hint">{t('Панель')}: {pane.title} · {pane.cwd}</p>
       <p className="field-hint">{t('Перед запуском убедитесь, что панель ждёт команду и строка ввода пуста.')}</p>
+      {unsupported && <p role="status">{t('Параметры должны быть отдельными аргументами вне кавычек и подстановок оболочки.')}</p>}
       {!ready && <p role="status">{t('Выберите обычный терминал в стартовом каталоге рабочей области.')}</p>}
       {error && <p role="alert">{error}</p>}
     </div>

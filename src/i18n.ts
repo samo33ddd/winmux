@@ -149,6 +149,7 @@ const english: Record<string, string> = {
   'Скрыть ошибку': 'Dismiss error',
   'Переподключить': 'Reconnect',
   'Команды проекта': 'Project commands',
+  'Параметры должны быть отдельными аргументами вне кавычек и подстановок оболочки.': 'Use parameters as separate arguments outside quotes and shell substitutions.',
   'Определяем каталог проекта…': 'Resolving project directory…',
   'Сохранённая команда': 'Saved command',
   'Новая команда': 'New command',

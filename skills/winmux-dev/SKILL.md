@@ -206,6 +206,18 @@ claims; report unavailable GUI capture without pretending an API result is a scr
 
 ### Project tasks and delivery
 
+Project commands are stored by profile and Git common directory, so linked
+worktrees share templates while execution targets the selected workspace's own
+starting directory. The dialog pins the selected pane until it closes; a closed
+pane must not retarget a replacement. Parameter values are shell-quoted.
+Placeholders are separate arguments outside quotes and shell substitutions.
+Preview includes the directory change
+and is the exact input sent on explicit run. Run `node tests/desktop-smoke.cjs`
+for isolated Electron verification with PowerShell and Ubuntu WSL, alongside
+`npm run test:skills`.
+The pane must be a regular running shell; its prompt and empty input still require
+the user's attention. A reported pane cwd is not proof of the shell's actual cwd.
+
 Projects are inferred during `task.create` and grouped by the Git common
 directory, shell environment, and WSL distribution. Task state is persisted with
 workspaces in state version 3. Loading version 1 or 2 produces a byte-identical
