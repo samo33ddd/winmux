@@ -47,7 +47,8 @@ export default function App() {
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [browserRequests, setBrowserRequests] = useState<Record<string, { url: string; serial: number }>>({});
   const [sidebarOpen, setSidebarOpen] = useState(true); const [working, setWorking] = useState(false);
-  const [previousOutput, setPreviousOutput] = useState<string>();
+  const [previousOutput, setPreviousOutput] = useState<{paneId:string; text:string}>();
+  const historyRequest = useRef(0);
   const [agentHooks, setAgentHooks] = useState(readAgentHooksPreference);
   const [sidebarWidth,setSidebarWidth] = usePanelWidth('winmux.sidebar-width',60,56,420);
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -91,6 +92,10 @@ export default function App() {
   const preferences = useSyncExternalStore(subscribePreferences, getPreferences, getPreferences);
   const settings: Settings = { ...defaults, ...state?.settings, ...preferences, fontSize:state?.settings.fontSize ?? 14, theme:preferences.theme ?? state?.settings.theme ?? 'dark' };
   const current = useRef({ workspace, activePane, dialog, notificationsOpen, switcherOpen }); current.current = { workspace, activePane, dialog, notificationsOpen, switcherOpen };
+  useEffect(() => {
+    historyRequest.current++;
+    setPreviousOutput(undefined);
+  }, [activePane?.id, activePane?.hasPreviousOutput]);
   const reportError = useCallback((message: string) => setError(message), []);
   const openBrowser = useCallback((workspaceId: string, url: string) => {
     setActiveWorkspace(workspaceId); setToolTab('browser'); setNotificationsOpen(false); setDialog(null);
@@ -451,7 +456,7 @@ export default function App() {
           {profiles.map(profile=><optgroup key={profile.id} label={profile.environment==='wsl'?`WSL · ${profile.label}`:profile.label}>{environment?.agents?.filter(agent=>agent.profileId===profile.id).map(agent=><option key={agent.id} value={agent.id} disabled={agent.available === false}>{agent.label}{agent.available === null ? t(' — проверка при запуске') : agent.available ? '' : t(' — не установлен')}</option>)}</optgroup>)}
         </select>
         {activePane && <div className="terminal-tab-tools" role="group" aria-label={t('Действия терминала')}>
-          {activePane.hasPreviousOutput && <button className="icon-button" aria-label={t('Вывод предыдущей сессии')} title={t('Вывод предыдущей сессии')} onClick={() => { void bridge().call<{text:string}>('pane.previousOutput', {paneId:activePane.id}).then(result => setPreviousOutput(result.text)).catch(error => setError(errorMessage(error)));  }}>↶</button>}
+          {activePane.hasPreviousOutput && <button className="icon-button" aria-label={t('Вывод предыдущей сессии')} title={t('Вывод предыдущей сессии')} onClick={() => { const paneId = activePane.id, request = ++historyRequest.current; void bridge().call<{text:string}>('pane.previousOutput', {paneId}).then(result => { if (request === historyRequest.current && current.current.activePane?.id === paneId && current.current.activePane.hasPreviousOutput) setPreviousOutput({paneId,text:result.text}); }).catch(error => { if (request === historyRequest.current) setError(errorMessage(error)); }); }}>↶</button>}
           <button className="icon-button" aria-label={t("Найти в активном терминале")} title={t("Поиск (Ctrl+Shift+F)")} data-testid="terminal-search" onClick={() => handles.current.get(activePane.id)?.search()}><Search /></button>
           <button className="icon-button" aria-label={t("Разделить активную панель слева направо")} title={t("Разделить слева направо (Ctrl+Shift+D)")} data-testid="split-horizontal" disabled={working} onClick={() => void split(activePane.id, 'horizontal')}><SplitSquareHorizontal /></button>
           <button className="icon-button" aria-label={t("Разделить активную панель сверху вниз")} title={t("Разделить сверху вниз (Ctrl+Shift+E)")} data-testid="split-vertical" disabled={working} onClick={() => void split(activePane.id, 'vertical')}><SplitSquareVertical /></button>
@@ -465,7 +470,7 @@ export default function App() {
           {!sidebarOpen && <><button className="icon-button" aria-label={t('Проекты и задачи')} aria-expanded={projectsOpen} disabled={!environment?.capabilities?.projectTasks} onClick={() => { setNotificationsOpen(false); setAttentionOpen(false); setProjectsOpen(value => !value); }}><GitBranch /></button><button className={`icon-button ${attentionCount ? 'has-unread' : ''}`} aria-label={t('Внимание')} aria-expanded={attentionOpen} onClick={() => { setProjectsOpen(false); setNotificationsOpen(false); setAttentionOpen(value => !value); }}><CircleAlert /></button><button className={`icon-button ${unread ? 'has-unread' : ''}`} aria-label={t("Уведомления")} onClick={() => { setProjectsOpen(false); setAttentionOpen(false); setNotificationsOpen(value => !value); }}><Bell /></button></>}
         </div>
       </header>
-      {previousOutput && <Modal title={t('Вывод предыдущей сессии')} onClose={() => setPreviousOutput(undefined)}><pre tabIndex={0} className="previous-terminal-output" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',maxHeight:'50vh',overflow:'auto'}}>{previousOutput}</pre></Modal>}
+      {previousOutput?.text && activePane?.id === previousOutput.paneId && activePane.hasPreviousOutput && <Modal title={t('Вывод предыдущей сессии')} onClose={() => { historyRequest.current++; setPreviousOutput(undefined); }}><pre tabIndex={0} className="previous-terminal-output" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',maxHeight:'50vh',overflow:'auto'}}>{previousOutput.text}</pre></Modal>}
       {environment && !tabsAvailable && <div className="upgrade-notice" role="status" data-testid="daemon-upgrade-notice"><CircleAlert /><p><strong>{t('Для новых вкладок и запуска агентов требуется обновление сессии.')}</strong> {t('Текущие терминалы продолжают работать. Когда будете готовы, завершите все сессии и откройте Winmux снова. Закрытие окна или перезагрузка интерфейса не обновляет фоновый процесс.')}</p></div>}
       {state?.persistenceFailed && <div className="error-banner" role="alert"><CircleAlert /><span>{t("Не удалось сохранить состояние Winmux. Повторяем запись. Не перезапускайте демон.")}</span></div>}
       {error && <div className="error-banner" role="alert"><CircleAlert /><span>{error.message}</span><button className="text-button" onClick={() => setReload(value => value + 1)}>{t("Переподключить")}</button><button className="icon-button" aria-label={t("Скрыть ошибку")} onClick={() => setError('')}><X /></button></div>}
