@@ -150,6 +150,7 @@ const english: Record<string, string> = {
   'Переподключить': 'Reconnect',
   'Команды проекта': 'Project commands',
   'Параметры должны быть отдельными аргументами вне кавычек и подстановок оболочки.': 'Use parameters as separate arguments outside quotes and shell substitutions.',
+  'Для параметров команд требуется PowerShell 7.3 или новее.': 'Command parameters require PowerShell 7.3 or later.',
   'Определяем каталог проекта…': 'Resolving project directory…',
   'Сохранённая команда': 'Saved command',
   'Новая команда': 'New command',

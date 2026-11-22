@@ -7,6 +7,8 @@ interface Command { name: string; template: string }
 
 type Props = { workspace: Workspace; pane: Pane; onClose(): void };
 
+const powershellApostrophes = /['\u2018-\u201b]/g;
+
 export function ProjectCommands(props: Props) {
   const {workspace, onClose} = props;
   const [root, setRoot] = useState<string>();
@@ -34,9 +36,9 @@ function CommandEditor({ workspace, pane, storageKey, onClose }: Props & {storag
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const linux = pane.profileId.startsWith('wsl:');
-  const quote = (value: string) => `'${linux ? value.replaceAll("'", "'\\''") : value.replace(/[‘’']/g, mark => mark + mark)}'`;
+  const quote = (value: string) => `'${linux ? value.replaceAll("'", "'\\''") : value.replace(powershellApostrophes, mark => mark + mark)}'`;
   const pattern = /\{\{([A-Za-z][A-Za-z0-9_]*)\}\}/g;
-  const shellTemplate = linux ? template : template.replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
+  const shellTemplate = linux ? template : template.replace(powershellApostrophes, "'").replace(/[\u201c-\u201e]/g, '"');
   const matches = [...shellTemplate.matchAll(pattern)];
   const placeholders = [...new Set(matches.map(match => match[1]))];
   let state = '', offset = 0;
@@ -54,7 +56,10 @@ function CommandEditor({ workspace, pane, storageKey, onClose }: Props & {storag
     if (state || (before && !/[ (]/.test(before)) || (after && !/[ )]/.test(after))) unsupported = true;
   }
   const expanded = template.replace(pattern, (_, field: string) => quote(Object.hasOwn(values, field) ? values[field] : ''));
-  const preview = linux ? `cd -- ${quote(workspace.cwd)} && ( ${expanded} )` : `Set-Location -LiteralPath ${quote(workspace.cwd)}; if ($?) { ${expanded} }`;
+  const windowsCommand = `Set-Location -LiteralPath ${quote(workspace.cwd)}; if ($?) { . ([scriptblock]::Create(${quote(expanded)})) }`;
+  const preview = linux ? `cd -- ${quote(workspace.cwd)} && ( builtin eval ${quote(expanded)} )` : placeholders.length
+    ? `if ($PSVersionTable.PSVersion -lt [version]'7.3') { Write-Error 'Project command parameters require PowerShell 7.3 or later.' } else { ${windowsCommand} }`
+    : windowsCommand;
   const valid = Boolean(name.trim() && template.trim() && !unsupported && !/[{}]{2}/.test(template.replace(pattern, '')) && !/[\r\n\x00-\x1f\x7f]/.test(preview) && preview.length <= 4096);
   const sameDirectory = linux ? pane.cwd === workspace.cwd : pane.cwd.toLowerCase() === workspace.cwd.toLowerCase();
   const ready = sameDirectory && pane.profileId === workspace.profileId && pane.status === 'running' && !pane.agentId;
@@ -89,6 +94,7 @@ function CommandEditor({ workspace, pane, storageKey, onClose }: Props & {storag
       <label>{t('Итоговая команда')}<input readOnly value={preview} /></label>
       <p className="field-hint">{t('Панель')}: {pane.title} · {pane.cwd}</p>
       <p className="field-hint">{t('Перед запуском убедитесь, что панель ждёт команду и строка ввода пуста.')}</p>
+      {!linux && placeholders.length > 0 && <p className="field-hint">{t('Для параметров команд требуется PowerShell 7.3 или новее.')}</p>}
       {unsupported && <p role="status">{t('Параметры должны быть отдельными аргументами вне кавычек и подстановок оболочки.')}</p>}
       {!ready && <p role="status">{t('Выберите обычный терминал в стартовом каталоге рабочей области.')}</p>}
       {error && <p role="alert">{error}</p>}

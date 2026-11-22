@@ -211,8 +211,10 @@ worktrees share templates while execution targets the selected workspace's own
 starting directory. The dialog pins the selected pane until it closes; a closed
 pane must not retarget a replacement. Parameter values are shell-quoted.
 Placeholders are separate arguments outside quotes and shell substitutions.
-Preview includes the directory change
-and is the exact input sent on explicit run. Run `node tests/desktop-smoke.cjs`
+Preview includes the directory change and is the exact input sent on explicit
+run. Windows parameterized commands require PowerShell 7.3 or later for native
+argument passing. Windows PowerShell 5.1 can run templates without parameters.
+Run `node tests/desktop-smoke.cjs`
 for isolated Electron verification with PowerShell and Ubuntu WSL, alongside
 `npm run test:skills`.
 The pane must be a regular running shell; its prompt and empty input still require

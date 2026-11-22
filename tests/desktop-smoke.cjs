@@ -115,7 +115,9 @@ async function main() {
   await commandsDialog.getByLabel('Name', {exact:true}).fill('Preview command');
   await commandsDialog.getByLabel('Command template').fill('Write-Output {{value}}');
   await commandsDialog.getByLabel('value', {exact:true}).fill("it's quoted");
-  assert.equal(await commandsDialog.getByLabel('Command preview').inputValue(), `Set-Location -LiteralPath '${root.replace(/[‘’']/g, mark => mark + mark)}'; if ($?) { Write-Output 'it''s quoted' }`);
+  const commandPreview = await commandsDialog.getByLabel('Command preview').inputValue();
+  assert.ok(commandPreview.includes(`Set-Location -LiteralPath '${root.replace(/['‘’‚‛]/g, mark => mark + mark)}'`));
+  assert.ok(commandPreview.includes(". ([scriptblock]::Create('Write-Output ''it''''s quoted'''))"));
   await commandsDialog.getByRole('button', {name:'Save',exact:true}).click();
   const inspectedRoot = (await rpc('project.inspect',{cwd:root,profileId:'powershell'})).commonDir;
   const savedCommands = await page.evaluate(projectRoot => JSON.parse(localStorage.getItem(`winmux.commands.${JSON.stringify(['powershell',projectRoot.toLowerCase()])}`)), inspectedRoot);
@@ -124,19 +126,19 @@ async function main() {
   await page.getByTestId('project-commands').click();
   await commandsDialog.getByLabel('Saved command').selectOption('Preview command');
   assert.equal(await commandsDialog.getByLabel('Command template').inputValue(), 'Write-Output {{value}}');
-  for (const invalid of ['Write-Output "{{value}}"', 'Write-Output “{{value}}”', 'Write-Output prefix{{value}}']) {
+  for (const invalid of ['Write-Output "{{value}}"', 'Write-Output „ {{value}} „', 'Write-Output prefix{{value}}']) {
     await commandsDialog.getByLabel('Command template').fill(invalid);
     assert.equal(await commandsDialog.getByRole('button', {name:'Run command'}).isDisabled(), true);
   }
   await commandsDialog.getByLabel('Command template').fill('Write-Output {{constructor}}');
   await commandsDialog.getByLabel('constructor', {exact:true}).fill('safe');
-  assert.match(await commandsDialog.getByLabel('Command preview').inputValue(), /'safe'/);
-  await commandsDialog.getByLabel('Command template').fill("Write-Output ({{value}} + '_OK')");
-  await commandsDialog.getByLabel('value', {exact:true}).fill('PROJECT_COMMAND');
-  assert.ok(!(await rpc('pane.screen',{paneId:first.id})).text.includes('PROJECT_COMMAND_OK'));
+  assert.match(await commandsDialog.getByLabel('Command preview').inputValue(), /''safe''/);
+  await commandsDialog.getByLabel('Command template').fill("Write-Output ({{value}} + '_OK') # fixture note");
+  await commandsDialog.getByLabel('value', {exact:true}).fill('PROJECT_COMMAND‘’‚‛');
+  assert.ok(!(await rpc('pane.screen',{paneId:first.id})).text.includes('PROJECT_COMMAND‘’‚‛_OK'));
   await page.screenshot({path:path.join(artifacts,'project-command-preview.png')});
   await commandsDialog.getByRole('button', {name:'Run command'}).click();
-  await waitScreen(first.id,'PROJECT_COMMAND_OK');
+  await waitScreen(first.id,'PROJECT_COMMAND‘’‚‛_OK');
   findings.push('Real PowerShell ConPTY output and Unicode displayed through Electron preload/RPC.');
   await rpc('pane.input', { paneId:first.id, data:"Write-Output ('CTRL_SPACE_' + 'READY'); $k=[Console]::ReadKey($true); Write-Output ('CTRL_SPACE_KEY_' + [int]$k.KeyChar)\r" });
   await waitScreen(first.id, 'CTRL_SPACE_READY');
@@ -226,7 +228,7 @@ process.stdout.write('\\x1b[?2004hPASTE_READER_READY\\r\\n');
     await page.locator(`[data-testid="workspace-item"][data-workspace-id="${commandWorkspace.id}"]`).click();
     await page.getByTestId('workspace-project-commands').click();
     await commandsDialog.getByLabel('Name',{exact:true}).fill('WSL fixture command');
-    await commandsDialog.getByLabel('Command template').fill("printf '%s%s\\n' CWD_ \"$PWD\"; printf '%s%s\\n' WSL_ {{value}}");
+    await commandsDialog.getByLabel('Command template').fill("printf '%s%s\\n' CWD_ \"$PWD\"; printf '%s%s\\n' WSL_ {{value}} # fixture note");
     await commandsDialog.getByLabel('value',{exact:true}).fill("COMMANDS_'$HOME");
     const commandMarker = "WSL_COMMANDS_'$HOME";
     assert.ok(!(await rpc('pane.screen',{paneId:commandPane.id})).text.includes(commandMarker));
