@@ -86,6 +86,17 @@ async function raw(frame) {
   });
 }
 async function run() {
+  const { fitStateSize } = require('../electron/backend.cjs');
+  const budgetState = { workspaces:[{panes:[{previousOutput:'H'.repeat(2048)}]}], notifications:[{body:''}] };
+  const baseSize = Buffer.byteLength(JSON.stringify({version:3,state:budgetState}));
+  budgetState.notifications[0].body = 'N'.repeat(stateMaxBytes - baseSize - 1);
+  assert.ok(Buffer.byteLength(JSON.stringify({version:3,state:budgetState})) <= stateMaxBytes);
+  budgetState.workspaces[0].panes[0].previousOutput += 'extra history';
+  const fittedBudget = fitStateSize(budgetState);
+  assert.ok(Buffer.byteLength(fittedBudget.serialized) <= stateMaxBytes);
+  assert.equal(budgetState.notifications.length, 1);
+  assert.equal(budgetState.workspaces[0].panes[0].previousOutput, undefined);
+  log('optional previous output yields to existing state and notifications');
   fs.mkdirSync(reviewRepo);
   await execFileAsync('git', ['init', reviewRepo], { cwd: root, windowsHide: true });
   await execFileAsync('git', ['-C', reviewRepo, 'checkout', '-b', 'winmux/review-test'], { cwd: root, windowsHide: true });
@@ -163,6 +174,60 @@ async function run() {
   assert.equal(recoveredWorkspaces.find(workspace => workspace.id === retainedWorkspace.id)?.name, 'Recovered workspace');
   assert.ok(!recoveredWorkspaces.some(workspace => workspace.id === unsavedWorkspace.id));
   await client.request('workspace.close', { workspaceId: retainedWorkspace.id });
+  const historyWorkspace = await client.request('workspace.create', { cwd: dataDir });
+  const historyPane = historyWorkspace.panes[0];
+  assert.equal(historyPane.previousOutput, undefined);
+  await client.request('settings.update', { restoreHistory: true });
+  const historyMarker = 'PREVIOUS_OUTPUT_Ю';
+  await client.request('pane.resize', { paneId: historyPane.id, cols: 100, rows: 200 });
+  await client.request('pane.input', { paneId: historyPane.id, data: "Write-Output ('PREVIOUS_' + 'OUTPUT_Ю')\r" });
+  await screenContains(historyPane.id, historyMarker);
+  const historyWsl = environment.profiles.find(profile => profile.environment === 'wsl');
+  const historyLinux = historyWsl && await client.request('workspace.create', { profileId:historyWsl.id, cwd:'~' });
+  const linuxHistoryMarker = 'LINUX_PREVIOUS_λ';
+  if (historyLinux) {
+    const paneId = historyLinux.panes[0].id;
+    await client.request('pane.input', { paneId, data:"printf '%s%s\\n' LINUX_ PREVIOUS_λ\r" });
+    await screenContains(paneId, linuxHistoryMarker);
+  }
+  await stop();
+  await launch();
+  const restoredHistory = (await client.request('state')).workspaces;
+  const previous = restoredHistory.find(workspace => workspace.id === historyWorkspace.id).panes[0];
+  assert.equal(previous.hasPreviousOutput, true);
+  assert.equal(previous.previousOutput, undefined);
+  assert.ok(!JSON.stringify(await client.request('state')).includes(historyMarker));
+  assert.ok(!JSON.stringify(await client.request('workspace.rename', {workspaceId:historyWorkspace.id, name:'History fixture'})).includes(historyMarker));
+  assert.ok(!(await cli('list')).includes(historyMarker));
+  const previousText = (await client.request('pane.previousOutput', {paneId:historyPane.id})).text;
+  assert.ok(previousText.includes(historyMarker));
+  assert.ok(previousText.length <= 2048);
+  assert.ok(!(await client.request('pane.screen', { paneId: historyPane.id })).text.includes(historyMarker));
+  if (historyLinux) {
+    const linuxPane = restoredHistory.find(workspace => workspace.id === historyLinux.id).panes[0];
+    assert.equal(linuxPane.hasPreviousOutput, true);
+    const linuxText = (await client.request('pane.previousOutput', {paneId:linuxPane.id})).text;
+    assert.ok(linuxText.includes(linuxHistoryMarker));
+    assert.ok(!linuxText.includes(historyMarker) && !previousText.includes(linuxHistoryMarker));
+    assert.ok(!(await client.request('pane.screen', { paneId:linuxPane.id })).text.includes(linuxHistoryMarker));
+    await client.request('workspace.close', { workspaceId:historyLinux.id });
+    assert.ok(!fs.readFileSync(stateFile, 'utf8').includes(linuxHistoryMarker));
+    log('WSL previous output stays with its own pane and is removed on close', historyWsl.id);
+  }
+  const blockedHistorySave = `${stateFile}.${daemon.pid}.tmp`;
+  fs.mkdirSync(blockedHistorySave);
+  await client.request('settings.update', { clearPreviousOutput: true });
+  const clearedState = await client.request('state');
+  assert.equal(clearedState.persistenceFailed, true);
+  assert.equal(clearedState.workspaces.find(workspace => workspace.id === historyWorkspace.id).panes[0].hasPreviousOutput, false);
+  assert.equal((await client.request('pane.previousOutput', {paneId:historyPane.id})).text, '');
+  fs.rmdirSync(blockedHistorySave);
+  await eventually(async () => !(await client.request('state')).persistenceFailed, 'cleared history persists');
+  assert.ok(!fs.readFileSync(stateFile, 'utf8').includes(historyMarker));
+  assert.equal((await client.request('state')).settings.restoreHistory, true);
+  await client.request('settings.update', { restoreHistory: false });
+  await client.request('workspace.close', { workspaceId: historyWorkspace.id });
+  log('opt-in previous output survives a tall-pane restart and clears without disabling capture');
   log('workspace mutations report live state and recover after a state write failure');
   const longCwd = path.join(dataDir, 'b'.repeat(121));
   fs.mkdirSync(longCwd);
