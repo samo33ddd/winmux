@@ -56,6 +56,12 @@ function stateDocument(state) { return JSON.stringify({ version: 3, state }); }
 function fitStateSize(state) {
   let serialized = stateDocument(state);
   if (Buffer.byteLength(serialized) <= STATE_MAX_BYTES) return { serialized, dropped: 0 };
+  let droppedHistory = 0;
+  for (const workspace of state.workspaces) for (const pane of workspace.panes) {
+    if (pane.previousOutput !== undefined) { delete pane.previousOutput; droppedHistory++; }
+  }
+  serialized = stateDocument(state);
+  if (Buffer.byteLength(serialized) <= STATE_MAX_BYTES) return { serialized, dropped: droppedHistory };
   const total = state.notifications.length;
   let low = 0, high = total;
   while (low < high) {
@@ -67,7 +73,7 @@ function fitStateSize(state) {
   state.notifications = low ? state.notifications.slice(-low) : [];
   serialized = stateDocument(state);
   if (Buffer.byteLength(serialized) > STATE_MAX_BYTES) fail('STATE_INVALID', 'Saved workspace state exceeds the size limit');
-  return { serialized, dropped: total - low };
+  return { serialized, dropped: droppedHistory + total - low };
 }
 function backupRecoveredState(file) {
   const backup = `${file}.recovery-${Date.now()}-${randomUUID().slice(0, 8)}.bak`;
@@ -246,7 +252,12 @@ async function startServer(options = {}) {
   let codexController, agentController;
   let stopping = false, closePromise, persistTimer, mutationTail = Promise.resolve();
   let persistenceFailed = false;
-  const publicState = () => ({ ...structuredClone(state), ...(persistenceFailed && { persistenceFailed: true }) });
+  const publicWorkspace = workspace => {
+    const result = structuredClone(workspace);
+    for (const pane of result.panes) { pane.hasPreviousOutput = Boolean(pane.previousOutput); delete pane.previousOutput; }
+    return result;
+  };
+  const publicState = () => ({ ...structuredClone(state), workspaces: state.workspaces.map(publicWorkspace), ...(persistenceFailed && { persistenceFailed: true }) });
   function save() {
     const temp = `${loc.stateFile}.${process.pid}.tmp`;
     try {
@@ -553,7 +564,7 @@ async function startServer(options = {}) {
         const task = taskById(params.taskId), project = state.projects.find(item => item.id === task.projectId);
         if (!project) fail('NOT_FOUND', 'Task project not found');
         const existing = state.workspaces.find(item => item.id === task.workspaceId);
-        if (existing) return structuredClone(existing);
+        if (existing) return publicWorkspace(existing);
         if (task.phase !== 'ready') fail('TASK_INCOMPLETE', task.error || 'Task creation did not finish; inspect the worktree before retrying');
         if (task.archived && task.removed) {
           await taskGit.createWorktree({ ...projectContext(project), path:task.cwd, branch:task.branch, base:task.base, taskId:task.id, restore:true });
@@ -626,10 +637,10 @@ async function startServer(options = {}) {
         const autoName = boundedText((path.basename(launch.cwd) || launch.profile.label).trim(), 120) || launch.profile.label;
         const workspace = { id: randomUUID(), name: requestedName || autoName, cwd: launch.cwd, profileId, tabs: [tab], activeTabId: tab.id, root: tab.root, panes: [pane] };
         spawnPane(pane, launch); state.workspaces.push(workspace); if (task) { task.workspaceId = workspace.id; task.archived = false; } state.settings.activeWorkspaceId = workspace.id; asyncChanged();
-        return structuredClone(workspace);
+        return publicWorkspace(workspace);
       }
       case 'workspace.rename': {
-        const workspace = workspaceById(params.workspaceId); workspace.name = string(params.name, 'name', 120).trim(); changed(); return structuredClone(workspace);
+        const workspace = workspaceById(params.workspaceId); workspace.name = string(params.name, 'name', 120).trim(); changed(); return publicWorkspace(workspace);
       }
       case 'workspace.close': {
         const workspace = workspaceById(params.workspaceId); workspace.panes.forEach(disposePane);
@@ -728,6 +739,10 @@ async function startServer(options = {}) {
           runtime.terminal.resize(cols, rows); pane.cols = cols; pane.rows = rows;
           clearTimeout(persistTimer); persistTimer = setTimeout(safeSave, 150); return { ok: true };
         });
+      }
+      case 'pane.previousOutput': {
+        const { pane } = paneById(params.paneId);
+        return { text: pane.previousOutput || '' };
       }
       case 'pane.snapshot': {
         const { runtime } = paneById(params.paneId);
@@ -830,7 +845,7 @@ async function startServer(options = {}) {
       default: fail('METHOD_NOT_FOUND', `Unknown method: ${method}`);
     }
   }
-  const reads = new Set(['state', 'environment', 'project.inspect', 'task.delivery.context', 'task.delivery.refresh', 'task.delivery.submit', 'task.delivery.merge', 'pane.snapshot', 'pane.screen', 'pane.input', 'codex.status', 'agent.sessions']);
+  const reads = new Set(['state', 'environment', 'project.inspect', 'task.delivery.context', 'task.delivery.refresh', 'task.delivery.submit', 'task.delivery.merge', 'pane.previousOutput', 'pane.snapshot', 'pane.screen', 'pane.input', 'codex.status', 'agent.sessions']);
   function codexPanes() {
     return state.workspaces.flatMap(workspace => workspace.panes.map(pane => ({
       id: pane.id, pid: pane.pid, status: pane.status, cwd: pane.cwd, agentId: pane.agentId,
@@ -1002,7 +1017,7 @@ async function startServer(options = {}) {
   server.on('error', error => console.error(`Winmux IPC server error: ${error.message}`));
   return { server, dataDir: loc.dataDir, pipeName: loc.pipeName, close, shutdown: close };
 }
-module.exports = { startServer, tabTitleMode, setAgentState, loadState };
+module.exports = { startServer, tabTitleMode, setAgentState, loadState, fitStateSize };
 if (require.main === module) {
   startServer().then(daemon => {
     const stop = () => daemon.close().then(() => process.exit(0), error => { console.error(error); process.exit(1); });

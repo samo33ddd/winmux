@@ -72,6 +72,21 @@ and directory changes, draft retention, expansion and browser form state.
 
 ### Terminal links and input
 
+Previous terminal output is opt-in in Settings → Terminal and requires the
+daemon's `capabilities.previousOutput`. Graceful daemon shutdown fences queued
+xterm output and saves at most 80 plain-text lines and 2,048 UTF-16 units per
+pane in `state.json`. Restore uses the original pane ID and opens the saved
+output in a separate dialog. State and workspace responses expose only `hasPreviousOutput`; `pane.previousOutput {paneId}` retrieves one pane on demand. Optional history is dropped before notifications if the 4 MiB state budget is exceeded. Fresh shells never receive those bytes. Clearing
+saved output keeps the capture preference on; turning the preference off also
+clears all saved output. Watch the persistence warning if writing fails and
+verify the retry before relying on clear or disable.
+
+Run `npm run test:backend` with Windows PowerShell and a real WSL distribution
+for shutdown and restore, Unicode, the per-pane bound, Windows/WSL separation,
+and cleanup. After `npm run build`, `node tests/desktop-smoke.cjs` uses a
+disposable daemon and verifies enabling capture, opening the saved output after
+the daemon restarts, and clearing it in Settings.
+
 The topbar's empty `.workspace-tabs` area is an Electron drag region; actual tab
 and toolbar buttons remain `no-drag`. Validate computed regions and, when native
 Computer Use is available, measure the restored window position after a real

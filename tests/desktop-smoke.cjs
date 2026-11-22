@@ -568,6 +568,48 @@ process.stdout.write('\\x1b[?2004hPASTE_READER_READY\\r\\n');
   assert.ok(!fs.existsSync(skillCapture.path));
   await rpc('workspace.close',{workspaceId:skillWorkspace.id});
   findings.push('Installed skills verified through their wrappers: terminal list/send/read with real PowerShell output; browser open/snapshot/fill/click/evaluate/screenshot against local HTTP fixture.');
+  await page.getByTestId('settings-open').click();
+  await page.getByTestId('settings-tab-terminal').click();
+  const restoreHistory = page.getByTestId('restore-history');
+  assert.equal(await restoreHistory.getAttribute('aria-checked'), 'false');
+  await restoreHistory.click();
+  await page.locator('[data-testid="restore-history"][aria-checked="true"]').waitFor();
+  await page.keyboard.press('Escape');
+  const historyWorkspace = await rpc('workspace.create', {name:'History fixture', cwd:filesDir, profileId:'powershell'});
+  const historyPane = historyWorkspace.panes[0];
+  await rpc('settings.update', {activeWorkspaceId:historyWorkspace.id});
+  const marker = 'WINMUX_HISTORY_Ю';
+  await rpc('pane.input', {paneId:historyPane.id, data:"Write-Output ('WINMUX_' + 'HISTORY_Ю')\r"});
+  await waitScreen(historyPane.id, marker);
+  await closeDesktop();
+  const stop = spawnSync(require('electron'), [path.join(root,'cli.cjs'),'shutdown'], {
+    cwd:root, env:{...env,ELECTRON_RUN_AS_NODE:'1'}, encoding:'utf8', timeout:15000
+  });
+  assert.equal(stop.status, 0, stop.stderr || stop.error?.message || stop.stdout);
+  const lockFile = path.join(dataDir, 'daemon.lock');
+  const shutdownDeadline = Date.now() + 15000;
+  while (fs.existsSync(lockFile) && Date.now() < shutdownDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.ok(!fs.existsSync(lockFile), 'The isolated daemon must finish its graceful shutdown');
+  await launch();
+  await page.getByRole('button',{name:'Previous session output'}).click();
+  const historyDialog = page.getByRole('dialog',{name:'Previous session output'});
+  await historyDialog.locator('pre').filter({hasText:marker}).waitFor();
+  await page.keyboard.press('Tab');
+  assert.equal(await historyDialog.locator('pre').evaluate(element => document.activeElement === element), true);
+  assert.ok(!(await rpc('pane.screen', {paneId:historyPane.id})).text.includes(marker));
+  await page.screenshot({path:path.join(artifacts,'previous-terminal-output.png')});
+  await page.keyboard.press('Escape');
+  await page.getByTestId('settings-open').click();
+  await page.getByTestId('settings-tab-terminal').click();
+  await page.getByRole('button',{name:'Clear saved output'}).click();
+  await page.getByRole('button',{name:'Clear saved output'}).waitFor({state:'detached'});
+  await page.keyboard.press('Escape');
+  await page.getByRole('button',{name:'Previous session output'}).waitFor({state:'detached'});
+  await rpc('settings.update', {restoreHistory:false});
+  await rpc('workspace.close', {workspaceId:historyWorkspace.id});
+  findings.push('Optional Unicode output survives a real daemon restart and opens and clears separately in Electron.');
   await desktop.evaluate(({BrowserWindow})=>{const window=BrowserWindow.getAllWindows()[0];window.setMinimumSize(320,360);window.setSize(390,844);});
   await page.waitForTimeout(200);
   await page.screenshot({path:path.join(artifacts,'mobile-stress.png')});

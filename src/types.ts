@@ -7,7 +7,7 @@ export interface Pane {
   id: string; title: string; profileId: string; cwd: string; pid: number | null;
   status: 'running' | 'exited'; exitCode?: number; cols: number; rows: number;
   tabId?: string; agentId?: string; agentLabel?: string;
-  previousOutput?: string;
+  hasPreviousOutput?: boolean;
   agentState?: 'starting' | 'running' | 'waiting' | 'idle' | 'completed' | 'failed' | 'unknown'; agentExitCode?: number;
   agentActivity?: 'thinking' | 'reading' | 'editing' | 'command' | 'searching' | 'browser' | 'delegating';
   agentPid?: number;
