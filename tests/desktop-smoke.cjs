@@ -284,11 +284,12 @@ process.stdout.write('\\x1b[?2004hPASTE_READER_READY\\r\\n');
   const reconnected = await rpc('state');
   const livePane = reconnected.workspaces.flatMap(item=>item.panes).find(item=>item.id===first.id);
   assert.equal(livePane.pid,first.pid,'Closing and reopening UI must preserve shell PID');
-  await waitScreen(first.id,'WINMUX_DESKTOP_OK');
+  const restoredBuffer = await rpc('pane.snapshot',{paneId:first.id});
+  assert.ok(restoredBuffer.data.includes('WINMUX_DESKTOP_OK'),'Closing and reopening UI must preserve scrollback');
   await page.waitForSelector('.xterm');
   await rpc('pane.input',{paneId:first.id,data:"Write-Output ('RECONNECT_' + 'OK')\r"});
   await waitScreen(first.id,'RECONNECT_OK');
-  findings.push(`Close/reopen preserved PowerShell PID ${first.pid}, screen and working input.`);
+  findings.push(`Close/reopen preserved PowerShell PID ${first.pid}, scrollback and working input.`);
   await page.getByTestId('settings-open').click();
   for (const theme of ['midnight','nord','dracula','sand','light','dark']) {
     await page.getByTestId(`theme-${theme}`).click();
