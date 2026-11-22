@@ -618,8 +618,32 @@ process.stdout.write('\\x1b[?2004hPASTE_READER_READY\\r\\n');
   }
   assert.ok(!fs.existsSync(lockFile), 'The isolated daemon must finish its graceful shutdown');
   await launch();
-  await page.getByRole('button',{name:'Previous session output'}).click();
+  const historyButton = page.getByRole('button',{name:'Previous session output'});
   const historyDialog = page.getByRole('dialog',{name:'Previous session output'});
+  await desktop.evaluate(({ipcMain}) => {
+    const original = ipcMain._invokeHandlers.get('winmux:call');
+    const delay = new Promise(resolve => { globalThis.releaseWinmuxHistoryFixture = resolve; });
+    ipcMain.removeHandler('winmux:call');
+    ipcMain.handle('winmux:call', async (event, method, params) => {
+      if (method !== 'pane.previousOutput') return original(event, method, params);
+      ipcMain.removeHandler('winmux:call');
+      ipcMain.handle('winmux:call', original);
+      const result = await original(event, method, params);
+      await delay;
+      return result;
+    });
+  });
+  await historyButton.click();
+  await page.keyboard.press('Control+Shift+P');
+  const palette = page.getByRole('dialog',{name:'Command palette'});
+  await palette.waitFor();
+  await desktop.evaluate(() => globalThis.releaseWinmuxHistoryFixture());
+  await rpc('state');
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await historyDialog.count(), 0);
+  assert.equal(await palette.getByRole('textbox').evaluate(element => document.activeElement === element), true);
+  await page.keyboard.press('Escape');
+  await historyButton.click();
   await historyDialog.locator('pre').filter({hasText:marker}).waitFor();
   await page.keyboard.press('Tab');
   assert.equal(await historyDialog.locator('pre').evaluate(element => document.activeElement === element), true);
