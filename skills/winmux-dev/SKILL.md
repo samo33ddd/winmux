@@ -286,8 +286,12 @@ tests/automation-smoke.cjs` (five adapters over real worktrees/PTYs, drain cases
 waiting/abort, replacement, disposal, Hermes binding, CLI exit codes). The smoke
 test injects the process table so a real fixture `node.exe` process is classified
 as each adapter, and it rebuilds the full agent argv around its own script path
-and id because OMP's `launch` token precedes them. Fixture success is not
-installed-agent compatibility.
+and id because OMP's `launch` token precedes them. It also points `HERMES_HOME`
+at its own profile directory, because the Hermes project plugin installs into a
+profile and a machine without Hermes configured returns `NOT_FOUND`. A CI runner
+has neither WSL nor Hermes; run the smoke test on a machine that at least matches
+the runner before claiming the suite is environment-independent. Fixture success
+is not installed-agent compatibility.
 
 Observed limitation, not fixed by this contract: `agent-hooks-install.cjs`'s
 `assertContained` compares a resolved root with the caller's unresolved path, so a

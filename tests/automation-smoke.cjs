@@ -174,8 +174,12 @@ spawnSync(stop.command.file, stop.command.args, { input: stop.command.input, env
 `);
   const pipeName = process.platform === 'win32' ? `\\\\.\\pipe\\winmux-automation-${randomUUID()}` : path.join(dataDir, 'ipc.sock');
   const options = { dataDir, pipeName };
+  // The Hermes project plugin installs into a profile directory. Own it here so
+  // the fixture never depends on a developer machine having Hermes configured.
+  const hermesHome = path.join(fixtureDir, 'hermes-home');
+  fs.mkdirSync(hermesHome, { recursive: true });
   const daemonEnv = { ...process.env, WINMUX_DATA_DIR: dataDir, WINMUX_PIPE_NAME: pipeName, WINMUX_FIXTURE_DIR: fixtureDir,
-    WINMUX_FIXTURE_NODE: nodeExe, WINMUX_NO_PROFILE: '1' };
+    WINMUX_FIXTURE_NODE: nodeExe, WINMUX_NO_PROFILE: '1', HERMES_HOME: hermesHome };
   let daemon, client, logs = '';
   async function eventually(action, label, timeout = 30000) {
     const end = Date.now() + timeout;
