@@ -5,7 +5,7 @@
 // prompt or captured output.
 const crypto = require('node:crypto');
 const { fail, string } = require('./shared.cjs');
-const { AGENT_IDS, AGENTS, agentEntry } = require('./agent-registry.cjs');
+const { AGENT_IDS, agentEntry } = require('./agent-registry.cjs');
 
 const RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
