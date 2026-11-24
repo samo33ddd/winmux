@@ -56,6 +56,67 @@ PowerShell starts without user profiles and initializes UTF-8 console input/outp
 
 Pane metadata includes `agentId`, `agentLabel`, `agentState` (`starting`, `running`, `waiting`, `idle`, `completed`, `failed`, `unknown`), optional `agentExitCode`, and `agentUpdatedAt`. Shell lifecycle confirms invocation/exit; it cannot infer model activity. Session-only Claude/Codex hooks report explicit lifecycle events. When `agentHooks` is true, a Windows launch of OMP, Pi or Hermes ensures its project adapter before the process starts; an installation conflict is logged and does not block the terminal. Task-created workspaces forward the same preference. `agent.status {paneId,launchId,state}` uses the existing authenticated client and rejects stale launch identities. Windows Codex reads exact pane/launch/data-directory/pipe context from per-launch `hooks/session` JSON and PowerShell wrapper files, because the shared app-server does not inherit terminal `WINMUX_*` variables. Other session helpers retain their environment route. The helper reads the token at execution time, ignores prompt/transcript content, and bounds delivery time. Normal disposal and failed launch remove the artifacts. Claude uses additive session settings; Codex uses native hook settings collected from its session layer, without overriding `notify` or bypassing hook review/trust. Windows session hooks require PowerShell 7.3+; the complete encoded and quoted launch is limited to 30,000 UTF-16 units before spawning.
 
+## Automation runs
+
+`environment.capabilities.automationRuns` advertises `task.run.start` and
+`task.run.get`. No request copies a prompt into shell source: `task.run.start`
+reuses `task.create`'s project inspection, worktree ownership and `validateLaunch`,
+then appends the prompt as one argument for the selected adapter
+(`...args -- prompt` for Codex/Claude/Pi, `launch ...args -- prompt` for OMP and
+`chat --query=prompt` for Hermes). Ordinary launches keep their previous argv.
+
+`task.run.start {runId, projectDirectory, name, profileId, agentId, baseBranch, primaryBranch?, prompt}`
+requires a lowercase UUID `runId`, which becomes the task identifier, and a Windows
+profile. `agentId` is one of `codex`, `claude`, `omp`, `pi` or `hermes`; `mode` is
+always `new` and hooks are always required, because an automation run without an
+evidence channel could never report a confirmed outcome. Unknown request fields,
+a non-Windows profile (`UNSUPPORTED_ENVIRONMENT`), a prompt that is blank,
+contains NUL or exceeds 16 KiB, or a Pi prompt beginning with `@`
+(`INVALID_AUTOMATION_PROMPT`) are rejected before any project, task or worktree
+change. Repeating the same request returns the recorded run and never launches
+again; the same `runId` with a different request is `RUN_CONFLICT`.
+
+The private record is `task.automation` (`version`, `requestHash`, `status`,
+`code`, `revision`, timestamps, optional `workspaceId`/`paneId` and a pending
+`exit`). It never contains the prompt or captured output and is removed from every
+public projection, including `state` broadcasts and the CLI `list` command;
+`task.run.get` is the only way to read it. `requestHash` is SHA-256 over the
+normalized request, so a repeated start can prove it is the same request.
+
+Status is `creating`, `starting`, `running`, `waiting`, `completed`, `failed` or
+`interrupted`, and `revision` advances only when observable metadata changes.
+Only validated lifecycle evidence advances it: Codex/Claude session
+`UserPromptSubmit`/`Stop`/`StopFailure` and waiting events, and OMP/Pi/Hermes
+extension `agent_start`/`agent_end` and approval requests. A terminal report
+without a prior acceptance leaves the run unresolved. A proven replacement is
+`AGENT_REPLACED`, session shutdown is `AGENT_SESSION_ENDED`, pane disposal is
+`PANE_CLOSED`, and a daemon restart turns every unfinished run into
+`DAEMON_RESTARTED` without replaying the prompt.
+
+A shell-observed agent exit (PTY exit or the OSC 1337 agent record) publishes
+nothing for up to 10,000 ms. It is stored privately as `exit` and starts a drain
+because a valid `Stop` can be serialized behind the mutation tail. Confirmed
+evidence inside the window cancels the drain; otherwise the run becomes
+`failed`/`AGENT_EXITED` for a nonzero code or `interrupted`/
+`AGENT_EXITED_UNCONFIRMED` for a zero or unknown code, with one revision bump. A
+zero exit is not prompt completion.
+
+`task.run.get {runId, includeScreen?}` is a read, so it stays concurrent with
+lifecycle updates. With `includeScreen: true` it fences the active viewport and
+returns `{run, screen, screenError}`. A removed runtime, a closed pane or a
+restored shell that reuses the saved pane identifier reports
+`screenError: "RUN_OUTPUT_UNAVAILABLE"` rather than returning another process's
+text; a failed pane lookup propagates its own code. The screen is the current
+terminal view, never a complete transcript, and it is not persisted.
+
+`electron/automation-client.cjs` exports `startRun`, `getRun` and `waitForRun`.
+Each owns one authenticated connection, verifies the capability and never retries.
+`waitForRun` polls the small run record every 250 ms, honors a `timeoutMs` of
+0–86,400,000 (0 inspects once), returns a terminal status immediately, returns
+`waiting` only above `afterRevision`, and supports an `AbortSignal` that stops
+only that caller. `client.cjs` keeps a 20-second deadline for `task.run.get` and
+the 120-second class for `task.run.start`, which performs worktree and spawn work.
+
 ## Native Codex integration
 
 The Windows backend attaches to the already-running Codex daemon using WebSocket JSON-RPC over `codex app-server proxy`. It first checks `app-server daemon version`; absence or incompatibility gives a disconnected state. Discovery never starts/stops that daemon, submits a model turn, or responds to approvals. Only a verified Codex descendant of a live pane shell can receive native identity.

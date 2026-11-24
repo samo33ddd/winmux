@@ -9,6 +9,7 @@ const SKILL_NAMES = Object.freeze(['winmux-terminal', 'winmux-browser']);
 const SKILL_CONNECTION = 'scripts/connection.json';
 const RUNTIME_FILES = Object.freeze([
   'cli.cjs',
+  'electron/automation-client.cjs',
   'electron/client.cjs',
   'electron/backend/shared.cjs',
   'scripts/browser.cjs',

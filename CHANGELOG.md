@@ -4,6 +4,20 @@ User-visible changes are recorded here. Release availability and downloadable as
 
 ## Unreleased
 
+### Added
+
+- Run one local agent on an initial prompt in a new task worktree and wait for a
+  confirmed lifecycle outcome: `task.run.start`/`task.run.get` over the existing
+  daemon, `electron/automation-client.cjs`, and the CLI `run`, `run-status` and
+  `run-wait` commands with documented exit codes (Issue #130).
+
+### Fixed
+
+- A queued agent `Stop` or `agent_end` is no longer lost when the shell reports the
+  agent command exited first: the shell exit stays private for a bounded window
+  and a pending run instead publishes `AGENT_EXITED` or
+  `AGENT_EXITED_UNCONFIRMED`.
+
 ## 0.3.0 — Terminal history and project actions
 
 ### Added

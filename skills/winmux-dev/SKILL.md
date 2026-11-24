@@ -233,6 +233,68 @@ agent when finished and check that it creates no duplicate completion notice.
 Application notification state, visible panel, and Windows toast are separate
 claims; report unavailable GUI capture without pretending an API result is a screenshot.
 
+### Automation runs
+
+`task.run.start`/`task.run.get` own one initial root turn of one newly created
+managed task. `electron/backend/task-automation.cjs` holds the request contract,
+the private `task.automation` record and the lifecycle reducer; no second task
+table, queue or provider call exists. The caller-supplied lowercase UUID `runId`
+is the task ID, and `requestHash` (SHA-256 over the normalized request) makes a
+repeat idempotent while a different request with the same ID is `RUN_CONFLICT`.
+The record never stores the prompt or captured output, and `publicTask()` strips
+it from `state`, broadcasts and `list`; `task.run.get` is the only reader.
+
+`createTask`/`createWorkspace` in `electron/backend.cjs` take a private
+`automation` context that ordinary `task.create`/`workspace.create` never supply.
+It forces `agentHooks: true` and `mode: 'new'`, probes the hook shell for every
+adapter, propagates project-hook installation failures, and adapts only the final
+argument vector: `...args -- prompt` for Codex/Claude/Pi, `launch ...args --
+prompt` for OMP and `chat --query=prompt` for Hermes. The prompt is one argument
+and never shell source; the existing 30,000-unit encoded-command budget still
+applies, so an oversized vector is a retained failed run, not a rejection.
+WSL profiles fail with `UNSUPPORTED_ENVIRONMENT` and a Pi prompt starting with `@`
+fails with `INVALID_AUTOMATION_PROMPT`, both before any task exists.
+
+Status advances only from validated lifecycle evidence. `agent-status.cjs`
+forwards the recognized hook event name and a bounded `session_id`, and
+`agent.status` re-checks event-to-state consistency before reducing. Project
+extensions reach the reducer through `agent-integration.cjs`'s `onLifecycle` and
+`onIdentityLost` callbacks; `holdIdentity` keeps a run-bound record alive during
+the drain. Never accept a turn or finish a run from pane state, OSC, quiet output,
+timestamps or tool events.
+
+A shell-observed exit (PTY exit or OSC 1337) is private for `DRAIN_MS` (10,000 ms)
+because a valid `Stop` can sit behind the mutation tail while `agentEnded` is
+already set. `agent.status` accepts that evidence for the bound launch during the
+drain only; ordinary panes keep the strict gate. Expiry publishes
+`AGENT_EXITED`/`AGENT_EXITED_UNCONFIRMED` with one revision bump. Pane disposal is
+`PANE_CLOSED` immediately, a proven replacement is `AGENT_REPLACED`, and startup
+normalization turns every unfinished run into `DAEMON_RESTARTED` with the existing
+recovery backup.
+
+Hermes keeps at most three metadata-only first-turn pieces (first start, latest
+nonterminal evidence, first immutable end) per verified observer, and
+`bind(paneId, sessionId, constraint)` requires a unique observer for the exact
+task directory whose session-start and first-start receipts are at or after the
+run start. Replay those pieces after binding; binding an idle snapshot must not
+invent acceptance. `persistenceFailed`, hook trust and plugin enablement stay
+user-visible prerequisites, never something the automation path enables.
+
+Verify with `node --test tests/task-automation.cjs` (reducer, drain, persistence,
+restart normalization) and `node scripts/run-electron-node.cjs
+tests/automation-smoke.cjs` (five adapters over real worktrees/PTYs, drain cases,
+waiting/abort, replacement, disposal, Hermes binding, CLI exit codes). The smoke
+test injects the process table so a real fixture `node.exe` process is classified
+as each adapter, and it rebuilds the full agent argv around its own script path
+and id because OMP's `launch` token precedes them. Fixture success is not
+installed-agent compatibility.
+
+Observed limitation, not fixed by this contract: `agent-hooks-install.cjs`'s
+`assertContained` compares a resolved root with the caller's unresolved path, so a
+junctioned project or data directory fails with `UNSAFE_PATH`. Keep automation
+fixtures on a non-junctioned directory and report the failure code rather than
+silently degrading to no evidence.
+
 ### Project tasks and delivery
 
 Project commands are stored by profile and Git common directory, so linked
@@ -393,6 +455,8 @@ contracts and the requirements in `CONTRIBUTING.md`.
 | Actual Electron UI/screenshots | `npm run test:desktop` |
 | Release publisher | `node --test tests/release-workflow-regression.cjs` |
 | Task Git, state, delivery unit contracts | `node --test tests/task-git.cjs tests/task-delivery.cjs tests/task-state.cjs tests/task-instructions.cjs` |
+| Automation run record, reducer, drain, restart | `node --test tests/task-automation.cjs` |
+| Automation launch, wait, CLI, Hermes binding | `node scripts/run-electron-node.cjs tests/automation-smoke.cjs` |
 
 For node-pty ABI mismatch, use the Electron runner through the package commands
 or `scripts/run-electron-node.cjs`; run `npm run rebuild` when required and retry

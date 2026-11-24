@@ -137,6 +137,59 @@ locked, or ownership-conflicted worktrees remain on disk. Inspect the returned
 `{archived, removed, reason}` and do not report disk cleanup when `removed` is
 false.
 
+## Automation Runs
+
+Automation requires `environment.capabilities.automationRuns`. It creates one task
+worktree, launches one selected agent with an initial prompt as a launch argument,
+waits for a confirmed lifecycle outcome and returns a bounded terminal view. It is
+not a general way to type into a running editor: `send`, `key` and `read` remain
+the interactive path.
+
+```powershell
+node scripts/winmux-client.cjs run --spec C:/path/to/run.json --timeout 600000
+node scripts/winmux-client.cjs run-status RUN_ID
+node scripts/winmux-client.cjs run-wait RUN_ID --after 3
+```
+
+The caller supplies a lowercase UUID `runId`, which becomes the task ID. Repeating
+`run` with the same request returns the recorded run and never launches again; the
+same UUID with a different request is `RUN_CONFLICT`. `--spec -` reads the JSON
+request from stdin, which is how a WSL client starts a Windows run. The spec is
+bounded to 64 KiB and no failure message echoes the prompt. `--no-wait`
+acknowledges the launch only and cannot be combined with `--timeout`.
+
+Exit codes are `0` completed, `2` waiting, `3` failed or interrupted, `4` timeout
+and `1` for local, validation or transport failure. A lost start response is
+recovered with `run-status`/`run-wait` using the UUID already supplied; repeating
+`run` with that same spec is idempotent, not an automatic retry.
+
+Request fields are `runId`, `projectDirectory`, `name`, `profileId`, `agentId`
+(`codex`, `claude`, `omp`, `pi`, `hermes`), `baseBranch`, optional `primaryBranch`
+and `prompt`. The prompt is preserved byte for byte; blank, NUL-containing or
+larger than 16 KiB is rejected, and a Pi prompt starting with `@` is refused
+because its CLI would read a file instead. WSL profiles are rejected with
+`UNSUPPORTED_ENVIRONMENT` before any task exists. `mode` is always `new`, and
+hooks are always required.
+
+The run status is `creating`, `starting`, `running`, `waiting`, `completed`,
+`failed` or `interrupted`. It advances only on validated lifecycle evidence from
+the agent's own hooks or project extension. `waiting` means the agent needs an
+answer or an association: answer it in the pane with `send`, then resume with
+`run-wait RUN_ID --after <returned revision>`. Hermes reports `BINDING_REQUIRED`
+when its shared gateway must be associated explicitly; use `agent.sessions` and
+`agent.bind` with the session for that task directory.
+
+A shell-observed agent exit publishes nothing for up to 10 seconds so a queued
+`Stop` can still arrive. Without evidence the run then becomes `AGENT_EXITED`
+(nonzero exit) or `AGENT_EXITED_UNCONFIRMED` (zero or unknown); zero is not
+success. A disposed pane is `PANE_CLOSED`, a proven replacement is
+`AGENT_REPLACED`, and a daemon restart turns every unfinished run into
+`DAEMON_RESTARTED` while retaining the task and worktree. No prompt is replayed.
+
+`screen` is the current terminal view at read time. It can contain earlier
+terminal chrome or output that arrived later, and it is never a complete
+transcript; read the pane again when the newest rendering matters.
+
 ## GitHub Delivery
 
 The delivery RPC works only for an active, non-archived task whose
@@ -254,11 +307,13 @@ and verify the returned `workspaceId`/`tabId` and live process afterward.
 - In the terminal UI, Ctrl+Click opens plain HTTP(S) and OSC 8 web links in that workspace's embedded browser; an ordinary web-link click does not navigate. Local file clicks retain their in-app preview. The browser toolbar's external-browser action remains explicit.
 - Terminal RPC input is limited to 64 KiB of UTF-8 per request. The desktop chunks and serializes large pastes, preserving Unicode and bracketed-paste order. Direct CLI/RPC callers must respect request limits themselves; a failed input is never replayed automatically. Ctrl+Space can deliver NUL to terminal applications without relaxing identifier/path validation.
 - Confirmed turn completion, failure and shell-observed agent exit create pane/workspace notifications. Unknown activity is not completion. An exit code is shown only for a confirmed ended launch; it is not an activity counter. If status is unavailable, inspect Settings and the relevant native connection/hook support rather than inferring activity from a running shell.
+- An automation outcome comes only from confirmed lifecycle evidence. Quiet output, `agentUpdatedAt`, OSC notifications, screen text and tool events never accept a turn or complete a run. Never answer an approval, accept a hook, enable a plugin or retype a prompt to make a run look finished; report the unconfirmed or waiting state instead.
+- An automation run keeps the task and worktree of a failed launch for inspection. Do not archive or delete it merely because the run failed, and do not repeat the run to "retry" a launch failure: a repeat with the same request returns the same failed run.
 - For a confirmed running agent without a specific tool event, the header and workspace list show a generic task-processing caption. Specific action captions replace it when available; unknown, waiting and ended states show no current action. This presentation does not infer which tool is running or establish task delivery.
 
 ## Verification
 
-Read the affected pane and list state after an operation. Confirm the intended pane ID, observable output, and required result. For task operations, verify the task's `phase`, worktree existence, branch, archive result, and delivery blockers. For reconnect checks, compare the recorded process ID before and after UI closure without restarting the daemon. Report only what was observed; do not claim a runtime check merely because this skill was read.
+Read the affected pane and list state after an operation. Confirm the intended pane ID, observable output, and required result. For task operations, verify the task's `phase`, worktree existence, branch, archive result, and delivery blockers. For an automation run, verify `run-status`, its outcome code and the retained worktree; a `timeout`, `waiting` or unconfirmed status is not success. For reconnect checks, compare the recorded process ID before and after UI closure without restarting the daemon. Report only what was observed; do not claim a runtime check merely because this skill was read.
 
 The source-checkout agent guide in `docs/agents.md` contains additional quoting guidance.
 

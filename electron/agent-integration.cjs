@@ -7,6 +7,7 @@ const { AGENTS, HOOK_AGENT_IDS, HOOK_STATES, EXTENSION_EVENTS } = require('./bac
 const STATES = new Set(HOOK_STATES);
 const SESSION_EVENTS = new Set(['session_start', 'session_switch', 'SessionStart']);
 const EXTENSION_EVENT_SET = new Set(EXTENSION_EVENTS);
+const TURN_END_STATES = new Set(['completed', 'failed', 'idle']);
 const CLAUDE_STATES = AGENTS.claude.eventStates;
 const cwdKey = value => typeof value === 'string' && value ? path.win32.normalize(value).replace(/[\\/]+$/, '').toLowerCase() : '';
 
@@ -35,6 +36,35 @@ function createController(options = {}) {
     if (!row || !findPrimaryAgents(row.ppid, processes).some(agent => agent.pid === pid && agent.agentId === 'hermes')) return null;
     return row;
   }
+  // Retain at most three metadata-only pieces of the first root turn for a
+  // verified observer: the first accepted start, the latest nonterminal
+  // waiting/running evidence and the first immutable end. No text is stored.
+  function retainFirstTurn(observer, input, state, at) {
+    const generation = `${observer.pid}:${observer.createdAt || ''}:${observer.sessionId}`;
+    if (input.event === 'session_start') { observer.firstTurn = { generation, sessionStartedAt: at }; return; }
+    if (input.event === 'agent_start') {
+      observer.firstTurn ??= { generation, sessionStartedAt: null };
+      observer.firstTurn.generation = generation;
+      observer.firstTurn.agentStart ??= { event: input.event, state, at, stamp: input.stamp };
+      return;
+    }
+    if (!observer.firstTurn) return;
+    // A compression emits session_switch with the plugin's stable reporting id;
+    // keeping the retained pieces is what proves the same first turn survived it.
+    if (input.event === 'agent_end' && TURN_END_STATES.has(state)) {
+      observer.firstTurn.terminal ??= { event: input.event, state, at, stamp: input.stamp };
+      return;
+    }
+    if (state === 'running' || state === 'waiting') observer.firstTurn.pending = { event: input.event, state, at, stamp: input.stamp };
+  }
+  function retainedEvidence(observer) {
+    const turn = observer.firstTurn;
+    if (!turn) return [];
+    const pieces = [turn.agentStart, turn.pending, turn.terminal].filter(Boolean);
+    if (!pieces.length) return [];
+    const generation = turn.generation;
+    return pieces.map(piece => ({ event: piece.event, state: piece.state, at: piece.at, stamp: piece.stamp, generation }));
+  }
   function scan(nextProcesses) {
     processes = nextProcesses;
     const panes = options.panes?.() || [];
@@ -46,7 +76,14 @@ function createController(options = {}) {
       const agent = primary.length === 1 && primary[0].agentId !== 'codex' ? primary[0] : null;
       const previous = records.get(pane.id);
       if (!agent) {
-        if (previous) { retire(previous); records.delete(pane.id); options.apply?.(pane.id, null); }
+        if (previous) {
+          // A run inside its bounded evidence drain keeps the generation so a
+          // still-queued Stop is accepted; the shell exit is handled separately.
+          if (options.holdIdentity?.(pane.id, previous.generation)) continue;
+          retire(previous); records.delete(pane.id);
+          options.onIdentityLost?.(pane.id, previous.generation);
+          options.apply?.(pane.id, null);
+        }
         continue;
       }
       const processRow = processes.find(row => row.pid === agent.pid);
@@ -58,16 +95,23 @@ function createController(options = {}) {
           if (!source || (source.createdAt || '') !== previous.observer.createdAt) {
             previous.observer = null; previous.state = 'unknown'; previous.activity.clear();
             options.apply?.(pane.id, identity(previous));
+            options.onIdentityLost?.(pane.id, previous.generation);
           }
         }
         continue;
       }
       retire(previous);
+      // The replacement generation is passed along so an observer can tell a
+      // proven replacement apart from an agent that vanished without a successor.
+      if (previous) options.onIdentityLost?.(pane.id, previous.generation, generation);
       const record = { agent, generation, createdAt, state: 'unknown', sessionId: '', stamp: -1n, activity: createActivityTracker() };
       records.set(pane.id, record);
       options.apply?.(pane.id, identity(record));
     }
-    for (const [paneId, record] of records) if (!live.has(paneId)) { retire(record); records.delete(paneId); }
+    for (const [paneId, record] of records) if (!live.has(paneId)) {
+      retire(record); records.delete(paneId);
+      options.onIdentityLost?.(paneId, record.generation);
+    }
     for (const [key, observer] of observers) {
       const row = observerProcess(observer.pid);
       if (!row || (row.createdAt || '') !== observer.createdAt || now() - observer.lastSeen > 600000) observers.delete(key);
@@ -99,11 +143,12 @@ function createController(options = {}) {
       if (stamp <= (previous?.stamp ?? -1n) || stamp > monotonic() + 1000000000n) return { applied: false, reason: 'stale' };
       const createdAtMs = Date.parse(row.createdAt);
       if (Number.isFinite(createdAtMs) && stamp < monotonic() - BigInt(Math.max(0, Math.ceil(now() - createdAtMs + 1000))) * 1000000n) return { applied: false, reason: 'stale-process' };
-      const observer = previous || { pid: input.pid, sessionId: input.sessionId, cwd: input.cwd, createdAt: row.createdAt || '', activity: createActivityTracker() };
+      const observer = previous || { pid: input.pid, sessionId: input.sessionId, cwd: input.cwd, createdAt: row.createdAt || '', activity: createActivityTracker(), firstTurn: null };
       observer.stamp = stamp; observer.state = state; observer.lastSeen = now();
       if (SESSION_EVENTS.has(input.event)) observer.activity.clear();
       if (input.phase) observer.activity.update(input);
       if (!['running', 'waiting'].includes(state)) observer.activity.clear();
+      retainFirstTurn(observer, input, state, now());
       observers.set(key, observer);
       if (observers.size > 128) observers.delete(observers.keys().next().value);
       return { applied: false, reason: 'binding-required' };
@@ -149,6 +194,8 @@ function createController(options = {}) {
       if (observer) { observer.stamp = record.stamp; observer.state = state; observer.lastSeen = now(); }
     }
     options.apply?.(paneId, identity(record));
+    options.onLifecycle?.({ paneId, agentId: record.agent.agentId, generation: record.generation,
+      sessionId: input.sessionId, event: input.event, state, receivedAt: now(), stamp: input.stamp });
     return { applied: true, paneId, state };
   }
   return {
@@ -158,9 +205,14 @@ function createController(options = {}) {
       return { sessions: [...observers.values()].map(item => ({ agentId: 'hermes', sessionId: item.sessionId, pid: item.pid, cwd: item.cwd, state: item.state, lastSeen: item.lastSeen })),
         panes: [...records].filter(([, record]) => record.agent.agentId === 'hermes').map(([paneId, record]) => ({ paneId, agentId: 'hermes', sessionId: record.sessionId || null })) };
     },
-    bind(paneId, sessionId) {
+    bind(paneId, sessionId, automationConstraint = null) {
       const record = records.get(paneId);
-      const candidates = [...observers.values()].filter(item => item.sessionId === sessionId && observerProcess(item.pid) && now() - item.lastSeen <= 600000);
+      let candidates = [...observers.values()].filter(item => item.sessionId === sessionId && observerProcess(item.pid) && now() - item.lastSeen <= 600000);
+      // An automation run only accepts the observer created for its own task
+      // directory and after the run started, so an older session cannot satisfy it.
+      if (automationConstraint) candidates = candidates.filter(item => cwdKey(item.cwd) === cwdKey(automationConstraint.cwd)
+        && Number.isFinite(item.firstTurn?.sessionStartedAt) && item.firstTurn.sessionStartedAt >= automationConstraint.notBefore
+        && Number.isFinite(item.firstTurn?.agentStart?.at) && item.firstTurn.agentStart.at >= automationConstraint.notBefore);
       if (!record || record.agent.agentId !== 'hermes' || candidates.length !== 1) return { applied: false, reason: 'unmapped' };
       const observer = candidates[0];
       if ([...records].some(([id, other]) => id !== paneId && other.observer?.pid === observer.pid && other.sessionId === sessionId)) return { applied: false, reason: 'ambiguous' };
@@ -168,7 +220,7 @@ function createController(options = {}) {
       record.sessionId = sessionId; record.state = observer.state; record.stamp = observer.stamp;
       retired.delete(retirementKey(record, sessionId));
       options.apply?.(paneId, identity(record));
-      return { applied: true, paneId, sessionId };
+      return { applied: true, paneId, sessionId, retained: retainedEvidence(observer) };
     },
   };
 }

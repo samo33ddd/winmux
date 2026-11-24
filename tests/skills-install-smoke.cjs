@@ -225,6 +225,30 @@ test('installed Windows wrapper uses a plain runtime and authenticated IPC from 
   assert.ok(Array.isArray((await live.request('state')).workspaces));
   live.close();
 
+  // The copied runtime carries the automation CLI and client; the wrapper's
+  // value-option table must not mistake --spec for a command.
+  const missingRun = '00000000-0000-4000-8000-000000000000';
+  const wrapperRun = (args, options = {}) => spawnSync(process.execPath, [wrapper, ...args], {
+    cwd: unrelated, encoding: 'utf8', timeout: 30000, windowsHide: true,
+    env: { ...process.env, WINMUX_DATA_DIR: path.join(unrelated, 'wrong-instance') }, ...options,
+  });
+  const status = wrapperRun(['run-status', missingRun]);
+  assert.equal(status.status, 1, status.stderr);
+  assert.match(status.stderr, /Automation run not found/);
+  const waited = wrapperRun(['run-wait', missingRun]);
+  assert.equal(waited.status, 1, waited.stderr);
+  assert.match(waited.stderr, /Automation run not found/);
+  const rejected = wrapperRun(['run', '--spec', '-', '--no-wait'], {
+    input: JSON.stringify({ runId: '11111111-1111-4111-8111-111111111111', projectDirectory: unrelated,
+      name: 'Rejected run', profileId: 'powershell', agentId: 'pi', baseBranch: 'main', prompt: '@attachment.md summarize' }),
+  });
+  assert.equal(rejected.status, 1, rejected.stderr);
+  assert.match(rejected.stderr, /INVALID_AUTOMATION_PROMPT/);
+  assert.equal(rejected.stderr.includes('@attachment.md'), false, 'the prompt is never echoed');
+  const check = await connect({ dataDir: daemon.dataDir, connectTimeout: 1500, requestTimeout: 2000 });
+  assert.deepEqual((await check.request('state')).tasks, [], 'a rejected automation request creates no task');
+  check.close();
+
   const browser = path.join(project, '.agents', 'skills', 'winmux-browser', 'scripts', 'winmux-client.cjs');
   const browserHelp = spawnSync(process.execPath, [browser, '--help'], {
     cwd: unrelated,

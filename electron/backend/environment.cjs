@@ -11,6 +11,7 @@ const { withSessionHooks } = require('./agent-hooks.cjs');
 const { installProjectAgentHooks } = require('../agent-hooks-install.cjs');
 const { taskInstructionArgs } = require('./task-instructions.cjs');
 const { AGENTS, AGENT_IDS } = require('./agent-registry.cjs');
+const { automationArgs } = require('./task-automation.cjs');
 const execFileAsync = promisify(execFile); // Argument arrays only; no shell interpolation.
 const agentNames = AGENT_IDS;
 const wslAgentScript = 'PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; command -v "$1" 2>/dev/null || true';
@@ -97,11 +98,15 @@ async function discover() {
     // actually launches a WSL pane or task.
     for (const name of agentNames) agents.push(wslAgent(profile, name, null, null));
   }
-  return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { paneMove: true, terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, projectAgentHooks: true, nativeCodex: true, ompHooks: true, agentActivity: true, projectTasks: true, previousOutput: true, protocolVersion: 3 } };
+  return { profiles, agents, defaultCwd: os.homedir(), platform: process.platform, capabilities: { paneMove: true, terminalTabs: true, liveCwd: true, agentLaunch: true, agentStatus: true, sessionAgentHooks: true, projectAgentHooks: true, nativeCodex: true, ompHooks: true, agentActivity: true, projectTasks: true, previousOutput: true, automationRuns: true, protocolVersion: 3 } };
 }
-async function validateLaunch(environment, profileId, requestedCwd, agentId, agentHooks, hookContext, taskId) {
+// `automation` is private launch context for one automation run: it forces
+// evidence hooks, appends the initial prompt as a single argument and turns a
+// project-hook installation failure into a launch failure.
+async function validateLaunch(environment, profileId, requestedCwd, agentId, agentHooks, hookContext, taskId, automation = null) {
   const profile = environment.profiles.find(p => p.id === profileId);
   if (!profile) fail('PROFILE_UNAVAILABLE', `Terminal profile is unavailable: ${profileId}`);
+  if (automation) agentHooks = true;
   if (agentHooks !== undefined && typeof agentHooks !== 'boolean') fail('INVALID_ARGUMENT', 'agentHooks must be a boolean');
   const selected = await selectedAgentForLaunch(environment, profile, agentId);
   const paneId = randomUUID();
@@ -125,6 +130,9 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
         helperRoot: path.join(__dirname, '..', 'hooks'),
       });
     } catch (error) {
+      // An ordinary launch keeps the terminal usable; an automation run needs a
+      // real evidence channel, so the launch fails with the original code.
+      if (automation) throw Object.assign(new Error(`Winmux ${agent.id} status hooks were not installed: ${error.message}`), { code: typeof error.code === 'string' ? error.code : 'AGENT_HOOKS_INSTALL_FAILED' });
       console.warn(`Winmux ${agent.id} status hooks were not installed: ${error.message}`);
     }
   };
@@ -134,7 +142,10 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
   } : {};
   const argsFor = (agent, bashAvailable) => {
     try {
-      if (agent) agent = { ...agent, args: [...(agent.args || []), ...taskInstructionArgs(agent, taskId)] };
+      if (agent) {
+        const args = [...(agent.args || []), ...taskInstructionArgs(agent, taskId)];
+        agent = { ...agent, args: automation ? automationArgs(agent.id, args, automation.prompt) : args };
+      }
       return shellArgs(profile, agent, bashAvailable);
     }
     catch (error) { agent?.cleanupHooks?.(); throw error; }
@@ -161,7 +172,10 @@ async function validateLaunch(environment, profileId, requestedCwd, agentId, age
   if (!path.isAbsolute(cwd)) fail('INVALID_CWD', 'A terminal startup directory must be an absolute path');
   try { if (!fs.statSync(cwd).isDirectory()) throw new Error('not directory'); fs.accessSync(cwd, fs.constants.R_OK); }
   catch { fail('INVALID_CWD', `Directory does not exist or is inaccessible: ${cwd}`); }
-  if (agentHooks === true && selected?.hookAdapter) await validateSessionHookShell(profile);
+  // Automation forces evidence hooks for every adapter. Windows PowerShell 5.1
+  // mangles quoted native arguments, so probe the hook shell for all of them
+  // rather than corrupting the prompt bytes.
+  if (agentHooks === true && (selected?.hookAdapter || automation)) await validateSessionHookShell(profile);
   const agent = prepare();
   await ensureProjectHooks(agent);
   return { paneId, profile, cwd: path.resolve(cwd), ...fields(agent), spawnCwd: path.resolve(cwd), args: argsFor(agent) };
