@@ -5,7 +5,7 @@
 // prompt or captured output.
 const crypto = require('node:crypto');
 const { fail, string } = require('./shared.cjs');
-const { AGENT_IDS, AGENTS } = require('./agent-registry.cjs');
+const { AGENT_IDS, AGENTS, agentEntry } = require('./agent-registry.cjs');
 
 const RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -267,7 +267,9 @@ module.exports = {
   closeRun: finish,
   failRun(record, code, at) { return finish(record, 'failed', code || 'RUN_CREATE_FAILED', at); },
   agentEventState(agentId, event) {
-    const entry = AGENTS[agentId];
+    // A pane carries a launch id such as `wsl:Ubuntu-24.04:claude` or
+    // `hook:powershell:codex`; the adapter is its last segment.
+    const entry = agentEntry(agentId);
     if (!entry) return null;
     if (event === 'Notification') return 'waiting';
     return entry.eventStates?.[event] ?? null;

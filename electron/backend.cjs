@@ -516,7 +516,9 @@ async function startServer(options = {}) {
       ? taskAutomation.closeRun(record, status, code, at)
       : taskAutomation.setStatus(record, status, code, at);
     if (!updated) return false;
-    if (binding.drain) { clearTimeout(binding.drain); binding.drain = null; }
+    // A waiting publish must not cancel a drain that is still holding a private
+    // shell exit; only a terminal outcome owns the record.
+    if (taskAutomation.isTerminal(record.status) && binding.drain) { clearTimeout(binding.drain); binding.drain = null; }
     asyncChanged();
     return true;
   }
@@ -537,6 +539,8 @@ async function startServer(options = {}) {
     if (binding.drain) return; // a duplicate observation keeps the original deadline
     binding.drain = setTimeout(() => {
       binding.drain = null;
+      // A replacement proven while the exit was private is the specific outcome.
+      if (binding.replaced) { publishAutomation(binding, 'interrupted', 'AGENT_REPLACED', Date.now()); return; }
       if (taskAutomation.expireExit(record, Date.now())) asyncChanged();
     }, taskAutomation.DRAIN_MS);
     binding.drain.unref?.();
@@ -546,7 +550,13 @@ async function startServer(options = {}) {
     if (!binding) return;
     const record = binding.task.automation;
     if (!record || taskAutomation.isTerminal(record.status)) return;
-    if (binding.drain || record.exit) return; // the shell-observed exit owns the outcome
+    if (binding.drain || record.exit) {
+      // The shell exit stays private for the drain so a queued Stop can still
+      // describe a completed turn; a replacement proven meanwhile is published
+      // when the window ends without evidence.
+      if (nextGeneration && record.acceptedAt !== undefined) binding.replaced = true;
+      return;
+    }
     if (record.acceptedAt === undefined) return; // no turn was accepted, so no outcome is lost
     if (nextGeneration) publishAutomation(binding, 'interrupted', 'AGENT_REPLACED', Date.now());
     else observeAutomationExit(binding, null);

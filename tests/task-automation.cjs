@@ -323,3 +323,14 @@ test('duplicate run identifiers are rejected on load', () => {
     assert.throws(() => loadState(file), { code: 'STATE_INVALID' });
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('lifecycle provenance resolves composite and WSL launch ids', () => {
+  // Panes carry a launch id, not a bare adapter id: `hook:<profile>:<adapter>`
+  // for hook smokes and `wsl:<distro>:<adapter>` for WSL launches.
+  assert.equal(ta.agentEventState('codex', 'UserPromptSubmit'), 'running');
+  assert.equal(ta.agentEventState('hook:powershell:codex', 'UserPromptSubmit'), 'running');
+  assert.equal(ta.agentEventState('wsl:Ubuntu-24.04:claude', 'Stop'), 'completed');
+  assert.equal(ta.agentEventState('hook:wsl:Ubuntu-24.04:claude', 'Notification'), 'waiting');
+  assert.equal(ta.agentEventState('wsl:Ubuntu-24.04:pi', 'agent_end'), null, 'extension events are not session events');
+  assert.equal(ta.agentEventState('unknown', 'Stop'), null);
+});

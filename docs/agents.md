@@ -187,7 +187,8 @@ output, timestamps, OSC notifications and tool events never accept or complete
 one. A shell-observed agent exit is recorded privately for up to 10 seconds so a
 `Stop` that is serialized behind other daemon work still arrives; without evidence
 the run publishes `AGENT_EXITED` for a nonzero exit or
-`AGENT_EXITED_UNCONFIRMED` for a zero or unknown one. A daemon restart turns every
+`AGENT_EXITED_UNCONFIRMED` for a zero or unknown one, or `AGENT_REPLACED` when a
+replacement process was proven during the window. A daemon restart turns every
 unfinished run into `DAEMON_RESTARTED` and never replays the prompt.
 
 Hermes inherits its explicit-binding policy: a verified gateway must be associated

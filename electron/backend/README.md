@@ -99,7 +99,10 @@ because a valid `Stop` can be serialized behind the mutation tail. Confirmed
 evidence inside the window cancels the drain; otherwise the run becomes
 `failed`/`AGENT_EXITED` for a nonzero code or `interrupted`/
 `AGENT_EXITED_UNCONFIRMED` for a zero or unknown code, with one revision bump. A
-zero exit is not prompt completion.
+zero exit is not prompt completion. A replacement generation proven during the
+window is published as `interrupted`/`AGENT_REPLACED` when the window ends without
+confirmed evidence, because the replacement is the specific observation; a
+non-terminal publish such as `BINDING_REQUIRED` never cancels the window.
 
 `task.run.get {runId, includeScreen?}` is a read, so it stays concurrent with
 lifecycle updates. With `includeScreen: true` it fences the active viewport and

@@ -272,6 +272,17 @@ drain only; ordinary panes keep the strict gate. Expiry publishes
 normalization turns every unfinished run into `DAEMON_RESTARTED` with the existing
 recovery backup.
 
+Only a terminal publish may cancel the drain: a non-terminal publish such as
+`waiting/BINDING_REQUIRED` must leave the window running, or a private exit is
+stranded with no timer. A replacement proven during the window is published as
+`AGENT_REPLACED` when the window ends without evidence, so a queued `Stop` can
+still describe a completed turn first.
+
+Lifecycle provenance must resolve the adapter through `agentEntry()`, never
+`AGENTS[id]`: a pane carries a launch id such as `wsl:<distro>:claude` or
+`hook:<profile>:codex`, so a direct lookup rejects every WSL and hook-smoke
+`agent.status` with `INVALID_ARGUMENT`.
+
 Hermes keeps at most three metadata-only first-turn pieces (first start, latest
 nonterminal evidence, first immutable end) per verified observer, and
 `bind(paneId, sessionId, constraint)` requires a unique observer for the exact

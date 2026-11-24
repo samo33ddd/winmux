@@ -69,7 +69,10 @@ async function waitForRun(connection, runId, options = {}) {
   // for the next poll: re-check after the only await before the loop starts.
   if (signal?.aborted) { client.close(); throw abortError(); }
   const deadline = Date.now() + timeoutMs;
-  const aborted = new Promise((_, reject) => { signal?.addEventListener('abort', () => reject(abortError()), { once: true }); });
+  let rejectAbort = () => {};
+  const aborted = new Promise((_, reject) => { rejectAbort = () => reject(abortError()); });
+  const onAbort = () => rejectAbort();
+  signal?.addEventListener('abort', onAbort, { once: true });
   aborted.catch(() => {});
   const read = async includeScreen => client.request('task.run.get', includeScreen ? { runId, includeScreen: true } : { runId });
   // A bounded capture is the caller's view of the pane at this moment, never a
@@ -100,6 +103,7 @@ async function waitForRun(connection, runId, options = {}) {
       await Promise.race([sleep(Math.min(POLL_MS, remaining), signal), aborted]);
     }
   } finally {
+    signal?.removeEventListener('abort', onAbort);
     client.close();
   }
 }
