@@ -204,6 +204,13 @@ function classify(evidence) {
 // Returns true when persisted run state changed.
 function applyEvidence(record, evidence, session = {}) {
   if (isTerminal(record.status)) return false;
+  // One run follows the process generation that produced its first evidence: a
+  // successor in the same pane is a different turn owner even when it resumes
+  // the same session id, so its evidence can never accept or finish this run.
+  if (evidence.generation) {
+    if (!session.generation) session.generation = evidence.generation;
+    else if (session.generation !== evidence.generation) return false;
+  }
   const at = evidence.at;
   const action = classify(evidence);
   if (!action) return false;

@@ -334,3 +334,31 @@ test('lifecycle provenance resolves composite and WSL launch ids', () => {
   assert.equal(ta.agentEventState('wsl:Ubuntu-24.04:pi', 'agent_end'), null, 'extension events are not session events');
   assert.equal(ta.agentEventState('unknown', 'Stop'), null);
 });
+
+test('a successor generation cannot accept or finish the run it replaced', () => {
+  const record = ta.createRecord(HASH, 1000);
+  const binding = { sessionId: null, drain: null };
+  const first = { channel: 'extension', event: 'agent_start', state: 'running', sessionId: 'resumed', generation: 'pane:11:1000', at: 1100 };
+  assert.equal(ta.applyEvidence(record, first, binding), true);
+  assert.equal(record.acceptedAt, 1100);
+  assert.equal(binding.generation, 'pane:11:1000');
+  // The launched process exits privately; the accepted turn is still open.
+  assert.equal(ta.observeExit(record, 0, 1200), true);
+  // A successor in the same pane resumes the very same session id. Its events
+  // describe a different process, so they are not evidence about this turn.
+  for (const event of [
+    { event: 'agent_start', state: 'running' },
+    { event: 'tool_approval_requested', state: 'waiting' },
+    { event: 'agent_end', state: 'completed' },
+    { event: 'agent_end', state: 'failed' },
+  ]) {
+    assert.equal(ta.applyEvidence(record, { ...event, channel: 'extension', sessionId: 'resumed', generation: 'pane:22:2000', at: 1300 }, binding), false, event.event);
+  }
+  assert.equal(record.status, 'running');
+  assert.equal(record.finishedAt, undefined);
+  assert.equal(record.exit.code, 'AGENT_EXITED_UNCONFIRMED');
+  // The launched generation still owns the outcome.
+  assert.equal(ta.applyEvidence(record, { channel: 'extension', event: 'agent_end', state: 'completed', sessionId: 'resumed', generation: 'pane:11:1000', at: 1400 }, binding), true);
+  assert.equal(record.status, 'completed');
+  assert.equal(record.finishedAt, 1400);
+});

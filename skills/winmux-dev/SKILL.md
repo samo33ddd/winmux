@@ -283,6 +283,17 @@ Lifecycle provenance must resolve the adapter through `agentEntry()`, never
 `hook:<profile>:codex`, so a direct lookup rejects every WSL and hook-smoke
 `agent.status` with `INVALID_ARGUMENT`.
 
+The reducer pins the process generation of the first evidence. A run follows the
+process the daemon launched, so a successor in the same pane cannot accept,
+complete, fail or interrupt it even when it resumes the same session id; only
+that generation decides the outcome. The pin lives on the in-memory binding, so a
+restart still normalizes the run instead of trusting a replay.
+
+Only extension evidence carries a generation. The Codex/Claude session channel is
+instead gated by `launchId` at `agent.status`, and a Hermes replay is deliberately
+unpinned because its pieces come from the bound observer rather than the pane
+record; do not add a generation there without matching the live event's source.
+
 Hermes keeps at most three metadata-only first-turn pieces (first start, latest
 nonterminal evidence, first immutable end) per verified observer, and
 `bind(paneId, sessionId, constraint)` requires a unique observer for the exact

@@ -690,7 +690,7 @@ async function startServer(options = {}) {
     const binding = automationForPane(evidence.paneId);
     if (!binding) return;
     applyAutomationEvidence(binding, { channel: 'extension', event: evidence.event, state: evidence.state,
-      sessionId: evidence.sessionId || null, at: evidence.receivedAt });
+      sessionId: evidence.sessionId || null, generation: evidence.generation || null, at: evidence.receivedAt });
   }
   // A verified Hermes gateway is a shared process: its first turn needs an
   // explicit association before it can describe this run. Request it as an
