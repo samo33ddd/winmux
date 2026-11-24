@@ -17,6 +17,12 @@ User-visible changes are recorded here. Release availability and downloadable as
   agent command exited first: the shell exit stays private for a bounded window
   and a pending run instead publishes `AGENT_EXITED` or
   `AGENT_EXITED_UNCONFIRMED`.
+- Automation waits now return a reason consistent with their latest terminal
+  view, honor their deadline during slow metadata reads, and abort promptly during
+  connection setup. A missing process snapshot no longer fabricates an exit;
+  process creation identity prevents reused PIDs from completing another run,
+  and proven replacements, PTY launch failures and Hermes binding requests
+  retain their correct outcomes (Issue #134).
 
 ## 0.3.0 — Terminal history and project actions
 

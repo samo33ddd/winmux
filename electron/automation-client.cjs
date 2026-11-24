@@ -64,7 +64,7 @@ function sleep(ms, signal) {
 async function waitForRun(connection, runId, options = {}) {
   const { timeoutMs, afterRevision, signal } = waitOptions(options);
   if (signal?.aborted) throw abortError();
-  const client = await connect(connection ?? {});
+  const client = await connect({ ...(connection ?? {}), signal });
   // An abort that lands while the connection is being established must not wait
   // for the next poll: re-check after the only await before the loop starts.
   if (signal?.aborted) { client.close(); throw abortError(); }
@@ -74,33 +74,46 @@ async function waitForRun(connection, runId, options = {}) {
   const onAbort = () => rejectAbort();
   signal?.addEventListener('abort', onAbort, { once: true });
   aborted.catch(() => {});
-  const read = async includeScreen => client.request('task.run.get', includeScreen ? { runId, includeScreen: true } : { runId });
-  // A bounded capture is the caller's view of the pane at this moment, never a
-  // promise that the response text is complete.
-  const finish = async (reason, fallback) => {
-    let result;
-    const pendingRead = read(true);
-    pendingRead.catch(() => {}); // a lane lost to an abort must not surface later
-    try { result = await Promise.race([pendingRead, aborted]); }
-    catch (error) {
-      if (error?.code === 'ABORT_ERR') throw error;
-      result = { run: fallback, screen: null, screenError: typeof error?.code === 'string' ? error.code : 'RUN_OUTPUT_UNAVAILABLE' };
-    }
-    return { reason, ...result };
-  };
+  const read = async (includeScreen, requestSignal = null) => client.request('task.run.get', includeScreen ? { runId, includeScreen: true } : { runId }, requestSignal);
+  const reasonFor = run => TERMINAL.has(run.status) ? run.status
+    : run.status === 'waiting' && run.revision > afterRevision ? 'waiting' : null;
+  const expired = Symbol('deadline expired');
   try {
     await requireAutomation(client);
+    let firstPoll = true;
     for (;;) {
-      const pending = read(false);
-      pending.catch(() => {}); // the losing side of an abort race must not surface later
-      const result = await Promise.race([pending, aborted]);
-      const run = result.run;
-      // Every terminal run view is final, including an exit published after its drain.
-      if (TERMINAL.has(run.status)) return await finish(run.status, run);
-      if (run.status === 'waiting' && run.revision > afterRevision) return await finish('waiting', run);
+      let result = expired;
+      // Always issue the initial inspection, even for a zero timeout. Later
+      // polls must not start once the original deadline has passed.
+      if (firstPoll || Date.now() < deadline) {
+        firstPoll = false;
+        let timer;
+        const pollController = new AbortController();
+        try {
+          const deadlineReached = new Promise(resolve => {
+            timer = setTimeout(() => resolve(expired), Math.max(0, deadline - Date.now()));
+          });
+          // Promise.race handles rejection when the losing poll is cancelled.
+          result = await Promise.race([read(false, pollController.signal), deadlineReached, aborted]);
+        } finally {
+          clearTimeout(timer);
+          // An expired poll must not retain its request timer and interrupt the
+          // final capture on this connection. This only cancels the local read.
+          pollController.abort();
+        }
+      }
+      if (result === expired || reasonFor(result.run) || Date.now() >= deadline) {
+        // The capture can observe a newer state than the poll. Only daemon-reported
+        // screen errors are recoverable; a failed RPC leaves the latest state unknown.
+        const pendingRead = read(true);
+        pendingRead.catch(() => {});
+        const captured = await Promise.race([pendingRead, aborted]);
+        const reason = reasonFor(captured.run);
+        if (reason) return { reason, ...captured };
+        if (Date.now() >= deadline) return { reason: 'timeout', ...captured };
+      }
       const remaining = deadline - Date.now();
-      if (remaining <= 0) return await finish('timeout', run);
-      await Promise.race([sleep(Math.min(POLL_MS, remaining), signal), aborted]);
+      if (remaining > 0) await sleep(Math.min(POLL_MS, remaining), signal);
     }
   } finally {
     signal?.removeEventListener('abort', onAbort);

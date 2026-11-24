@@ -106,6 +106,14 @@ test('strict stamps are strings and nested Claude roots are filtered', () => {
   }
 });
 
+test('extension events preserve only well-formed process identities', () => {
+  const processIdentity = '638000000000000001';
+  assert.equal(eventPayload(JSON.stringify({ ...baseEvent, processIdentity })).processIdentity, processIdentity);
+  for (const invalid of ['', '12x', '1'.repeat(21), 42, null]) {
+    assert.throws(() => eventPayload(JSON.stringify({ ...baseEvent, processIdentity: invalid })), /Invalid Winmux process identity/);
+  }
+});
+
 test('deliver correlates a real named pipe response and rejects its own errors or close', async () => {
   const pipe = pipePath();
   const token = 'a'.repeat(64);

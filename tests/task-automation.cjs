@@ -208,6 +208,7 @@ test('a shell-observed exit stays private until the drain resolves it', () => {
   // A zero exit proves nothing about the turn.
   const zero = acceptedRecord();
   ta.observeExit(zero, 0, 3000);
+  assert.equal(ta.observeExit(zero, 9, 3500), false, 'a later exit cannot replace an already confirmed shell exit');
   ta.expireExit(zero, 13000);
   assert.equal(zero.status, 'interrupted');
   assert.equal(zero.code, 'AGENT_EXITED_UNCONFIRMED');
@@ -293,9 +294,14 @@ test('malformed automation records fail the whole state', () => {
     ['bad code', { ...valid, code: 'lowercase' }],
     ['bad revision', { ...valid, revision: 0 }],
     ['bad timestamp', { ...valid, createdAt: -1 }],
+    ['unsafe timestamp', { ...valid, createdAt: Number.MAX_SAFE_INTEGER + 1 }],
     ['inverted timestamps', { ...valid, updatedAt: valid.createdAt - 1 }],
+    ['bad workspace ID', { ...valid, workspaceId: '../workspace' }],
+    ['bad pane ID', { ...valid, paneId: 'pane/other' }],
     ['finish without terminal status', { ...valid, finishedAt: 2000 }],
     ['terminal without finish', { ...valid, status: 'completed' }],
+    ['completion without acceptance', { ...freshRecord(), status: 'completed', finishedAt: 2000, updatedAt: 2000 }],
+    ['completion before acceptance', { ...valid, status: 'completed', acceptedAt: 3000, finishedAt: 2000, updatedAt: 3000 }],
     ['exit after finishing', { ...acceptedRecord(), status: 'completed', finishedAt: 2000, exit: { outcome: 'failed', code: 'AGENT_EXITED', observedAt: 1000 } }],
     ['bad exit shape', { ...valid, exit: { outcome: 'failed', code: 'AGENT_EXITED' } }],
     ['unknown field', { ...valid, prompt: 'leak' }],
@@ -306,6 +312,7 @@ test('malformed automation records fail the whole state', () => {
     try { assert.throws(() => loadState(file), { code: 'STATE_INVALID' }, label); }
     finally { fs.rmSync(dir, { recursive: true, force: true }); }
   }
+  assert.throws(() => ta.validateRecord({ ...valid, updatedAt: Infinity }, TASK), { code: 'STATE_INVALID' });
 });
 
 test('duplicate run identifiers are rejected on load', () => {

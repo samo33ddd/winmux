@@ -2,7 +2,25 @@
 // Project-local Pi extension for Winmux lifecycle reporting. The installer
 // replaces the configuration placeholder before copying this file into
 // <workspace>/.pi/extensions/winmux-status.js.
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+
+function captureProcessIdentity() {
+  if (process.platform !== 'win32') return Promise.resolve(undefined);
+  return new Promise(resolve => {
+    try {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        `(Get-Process -Id ${process.pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString()`],
+      { windowsHide: true, timeout: 5000, maxBuffer: 1024 }, (error, stdout) => {
+        const identity = typeof stdout === 'string' ? stdout.trim() : '';
+        resolve(!error && /^\d{1,20}$/.test(identity) ? identity : undefined);
+      });
+    } catch {
+      resolve(undefined);
+    }
+  });
+}
+
+const processIdentity = captureProcessIdentity();
 
 export const MARKER = 'winmux-pi-extension';
 const CONFIG_ENCODED = '__WINMUX_CONFIG_B64__';
@@ -97,6 +115,8 @@ export function createWinmuxPiExtension(config = CONFIG, options = {}) {
   const clock = typeof options.clock === 'function'
     ? options.clock
     : () => process.hrtime.bigint();
+  const identity = Promise.resolve(options.processIdentity ?? processIdentity)
+    .then(value => typeof value === 'string' && /^\d{1,20}$/.test(value) ? value : undefined, () => undefined);
 
   return function winmuxPiExtension(pi) {
     if (!pi || typeof pi.on !== 'function') {
@@ -110,7 +130,11 @@ export function createWinmuxPiExtension(config = CONFIG, options = {}) {
       // Capture the event order before serialising delivery.
       payload.stamp = clock().toString();
       if (!/^\d{1,30}$/.test(payload.stamp)) return Promise.resolve(false);
-      tail = tail.then(() => send(payload)).then(() => true, () => false);
+      tail = tail.then(async () => {
+        const value = await identity;
+        if (value !== undefined) payload.processIdentity = value;
+        return send(payload);
+      }).then(() => true, () => false);
       return tail;
     }
 

@@ -477,12 +477,12 @@ async function startServer(options = {}) {
         }).catch(error => { if (!runtime.disposed && !stopping) console.error(error.message); });
       }));
       return runtime;
-    } catch (error) { launch.cleanupHooks?.(); disposePane(pane); fail('SPAWN_FAILED', `Cannot start ${launch.profile.label}: ${error.message}`); }
+    } catch (error) { launch.cleanupHooks?.(); disposePane(pane, { launchFailed: true }); fail('SPAWN_FAILED', `Cannot start ${launch.profile.label}: ${error.message}`); }
   }
-  function disposePane(pane) {
+  function disposePane(pane, options = {}) {
     const runtime = runtimes.get(pane.id);
     if (!runtime) return;
-    interruptAutomationForPane(pane.id);
+    if (!options.launchFailed) interruptAutomationForPane(pane.id);
     runtime.disposed = true;
     runtime.cleanupHooks?.();
     try { runtime.pty?.kill(); } catch (error) { if (pane.status === 'running') console.warn(`PTY cleanup: ${error.message}`); }
@@ -539,8 +539,6 @@ async function startServer(options = {}) {
     if (binding.drain) return; // a duplicate observation keeps the original deadline
     binding.drain = setTimeout(() => {
       binding.drain = null;
-      // A replacement proven while the exit was private is the specific outcome.
-      if (binding.replaced) { publishAutomation(binding, 'interrupted', 'AGENT_REPLACED', Date.now()); return; }
       if (taskAutomation.expireExit(record, Date.now())) asyncChanged();
     }, taskAutomation.DRAIN_MS);
     binding.drain.unref?.();
@@ -550,20 +548,19 @@ async function startServer(options = {}) {
     if (!binding) return;
     const record = binding.task.automation;
     if (!record || taskAutomation.isTerminal(record.status)) return;
-    if (binding.drain || record.exit) {
-      // The shell exit stays private for the drain so a queued Stop can still
-      // describe a completed turn; a replacement proven meanwhile is published
-      // when the window ends without evidence.
-      if (nextGeneration && record.acceptedAt !== undefined) binding.replaced = true;
-      return;
-    }
-    if (record.acceptedAt === undefined) return; // no turn was accepted, so no outcome is lost
-    if (nextGeneration) publishAutomation(binding, 'interrupted', 'AGENT_REPLACED', Date.now());
-    else observeAutomationExit(binding, null);
+    // A proven replacement is final immediately, including inside a drain and
+    // before acceptance; its events belong to a different process generation.
+    if (nextGeneration) { publishAutomation(binding, 'interrupted', 'AGENT_REPLACED', Date.now()); return; }
+  }
+  function automationPreserveObserver(cwd) {
+    const key = path.win32.normalize(cwd || '').replace(/[\\/]+$/, '').toLowerCase();
+    return Boolean(key && [...automationRuns.values()].some(binding => binding.task.agentId === 'hermes'
+      && binding.task.automation && !taskAutomation.isTerminal(binding.task.automation.status)
+      && path.win32.normalize(binding.task.cwd).replace(/[\\/]+$/, '').toLowerCase() === key));
   }
   function automationHoldIdentity(paneId) {
-    const binding = automationForPane(paneId);
-    return Boolean(binding?.drain);
+    const record = automationForPane(paneId)?.task.automation;
+    return Boolean(record && !taskAutomation.isTerminal(record.status));
   }
   function interruptAutomationForPane(paneId) {
     const binding = automationForPane(paneId);
@@ -597,6 +594,20 @@ async function startServer(options = {}) {
       if (state.settings.activeWorkspaceId === workspace.id) state.settings.activeWorkspaceId = state.workspaces[0]?.id;
     }
   }
+  async function inspectProject(params, knownRepository = null) {
+    if (stopping) fail('SHUTTING_DOWN', 'Daemon is shutting down');
+    const profile = environment.profiles.find(item => item.id === params.profileId);
+    if (!profile || profile.available === false || !['windows', 'wsl'].includes(profile.environment)) fail('PROFILE_UNAVAILABLE', 'Project shell environment is unavailable');
+    const repo = string(params.cwd, 'cwd', 4096);
+    const context = { repo, environment: profile.environment, distro: profile.distro };
+    const repository = knownRepository || await taskGit.inspectRepository(context);
+    const branches = await taskGit.listBranches(context);
+    const worktrees = await taskGit.listWorktrees(context);
+    let primary = '';
+    try { primary = (await executeTaskGit(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], { cwd:repo, environment:profile.environment, distro:profile.distro })).stdout.trim().replace(/^origin\//, ''); } catch {}
+    if (!branches.some(branch => branch.name === primary)) primary = ['main', 'master'].find(name => branches.some(branch => branch.name === name)) || '';
+    return { root:worktrees[0]?.path || repository.root, commonDir:repository.commonDir, branches:branches.map(branch => branch.name), primary, worktrees:worktrees.map((worktree, index) => ({ path:worktree.path, branch:worktree.branch || '', primary:index === 0, detached:worktree.detached })) };
+  }
   // Task and workspace creation are shared with task.run.start, which supplies
   // private automation context. No public request property can forge it.
   async function createTask(params, automation = null) {
@@ -607,7 +618,28 @@ async function startServer(options = {}) {
     const mode = automation ? 'new' : params.mode;
     if (!automation && params.agentHooks !== undefined && typeof params.agentHooks !== 'boolean') fail('INVALID_ARGUMENT', 'agentHooks must be a boolean');
     if (!['new', 'attach'].includes(mode)) fail('INVALID_ARGUMENT', 'Invalid task mode');
-    const inspected = await dispatch('project.inspect', { cwd:params.projectDirectory, profileId });
+    const profile = environment.profiles.find(item => item.id === profileId);
+    const identity = value => {
+      if (profile.environment !== 'windows') return path.posix.normalize(value);
+      try { return fs.realpathSync.native(value).toLowerCase(); }
+      catch { return path.win32.normalize(value).toLowerCase(); }
+    };
+    const projectFor = commonDir => {
+      const key = identity(commonDir);
+      return state.projects.find(item => {
+        const projectProfile = environment.profiles.find(candidate => candidate.id === item.profileId);
+        return projectProfile?.environment === profile.environment && projectProfile.distro === profile.distro && identity(item.commonDir || '') === key;
+      });
+    };
+    let knownRepository = null;
+    if (automation && state.projects.length >= 1024) {
+      // Git's common directory is the authoritative identity for linked
+      // worktrees and aliases. Resolve it once before the full project inspect.
+      const repo = string(params.projectDirectory, 'cwd', 4096);
+      knownRepository = await taskGit.inspectRepository({ repo, environment: profile.environment, distro: profile.distro });
+      if (!projectFor(knownRepository.commonDir)) fail('LIMIT_REACHED', 'Maximum number of projects reached');
+    }
+    const inspected = await inspectProject({ cwd:params.projectDirectory, profileId }, knownRepository);
     const primary = inspected.primary || string(params.primaryBranch, 'primaryBranch', 256);
     if (!inspected.branches.includes(primary)) fail('PRIMARY_UNAVAILABLE', 'Select an existing primary branch');
     if (!inspected.branches.includes(base)) fail('INVALID_ARGUMENT', 'Base branch must be local');
@@ -616,19 +648,10 @@ async function startServer(options = {}) {
     const agentHooks = automation ? true : params.agentHooks === undefined
       ? Boolean(environment.agents?.find(agent => agent.id === agentId)?.hookAdapter)
       : params.agentHooks;
-    const profile = environment.profiles.find(item => item.id === profileId);
     // Probe the hook shell before any project/task state or worktree change.
     if (agentHooks) await validateSessionHookShell(profile);
     await validateLaunch(environment, profileId, inspected.root, agentId, false);
-    const identity = value => {
-      if (profile.environment !== 'windows') return path.posix.normalize(value);
-      try { return fs.realpathSync.native(value).toLowerCase(); }
-      catch { return path.win32.normalize(value).toLowerCase(); }
-    };
-    let project = state.projects.find(item => {
-      const projectProfile = environment.profiles.find(candidate => candidate.id === item.profileId);
-      return identity(item.commonDir || '') === identity(inspected.commonDir) && projectProfile?.environment === profile.environment && projectProfile.distro === profile.distro;
-    });
+    let project = projectFor(inspected.commonDir);
     if (!project) {
       // Refuse to create a project that could not be admitted; a leaked project
       // record would otherwise survive a later task failure.
@@ -689,6 +712,7 @@ async function startServer(options = {}) {
   function automationEvidence(evidence) {
     const binding = automationForPane(evidence.paneId);
     if (!binding) return;
+    if (evidence.agentId !== 'claude' && !evidence.generationVerified) return;
     applyAutomationEvidence(binding, { channel: 'extension', event: evidence.event, state: evidence.state,
       sessionId: evidence.sessionId || null, generation: evidence.generation || null, at: evidence.receivedAt });
   }
@@ -697,10 +721,10 @@ async function startServer(options = {}) {
   // orchestration action instead of claiming the model is idle.
   function markBindingRequired(cwd, event) {
     const key = path.win32.normalize(cwd || '').replace(/[\\/]+$/, '').toLowerCase();
-    if (!key || !['session_start', 'agent_start'].includes(event)) return;
+    if (!key || event !== 'agent_start') return;
     for (const binding of automationRuns.values()) {
       const record = binding.task.automation;
-      if (!record || taskAutomation.isTerminal(record.status) || record.acceptedAt !== undefined) continue;
+      if (binding.task.agentId !== 'hermes' || !record || taskAutomation.isTerminal(record.status) || record.acceptedAt !== undefined) continue;
       if (path.win32.normalize(binding.task.cwd).replace(/[\\/]+$/, '').toLowerCase() !== key) continue;
       publishAutomation(binding, 'waiting', 'BINDING_REQUIRED', Date.now());
     }
@@ -709,7 +733,8 @@ async function startServer(options = {}) {
     const runId = string(params.runId, 'runId', 128);
     const task = state.tasks.find(item => item.id === runId);
     if (!task || !task.automation) fail('RUN_NOT_FOUND', 'Automation run not found');
-    const run = taskAutomation.runView(task, task.automation);
+    const view = () => taskAutomation.runView(task, task.automation);
+    const run = view();
     if (params.includeScreen !== undefined && typeof params.includeScreen !== 'boolean') fail('INVALID_ARGUMENT', 'includeScreen must be a boolean');
     if (params.includeScreen !== true) return { run, screen: null, screenError: null };
     const binding = automationRuns.get(runId);
@@ -719,8 +744,18 @@ async function startServer(options = {}) {
     catch (error) { return { run, screen: null, screenError: typeof error.code === 'string' ? error.code : 'NOT_FOUND' }; }
     // A restored shell can reuse a saved pane identifier; it never carries this run's output.
     if (entry.runtime !== binding.runtime || entry.runtime.disposed) return { run, screen: null, screenError: 'RUN_OUTPUT_UNAVAILABLE' };
-    try { return { run, screen: await fence(entry.runtime, () => readScreen(entry.runtime)), screenError: null }; }
-    catch (error) { return { run, screen: null, screenError: typeof error.code === 'string' ? error.code : 'TIMEOUT' }; }
+    try {
+      const screen = await fence(entry.runtime, () => readScreen(entry.runtime));
+      if (automationRuns.get(runId) !== binding || binding.runtime !== entry.runtime || entry.runtime.disposed) {
+        return { run: view(), screen: null, screenError: 'RUN_OUTPUT_UNAVAILABLE' };
+      }
+      return { run: view(), screen, screenError: null };
+    } catch (error) {
+      if (automationRuns.get(runId) !== binding || binding.runtime !== entry.runtime || entry.runtime.disposed) {
+        return { run: view(), screen: null, screenError: 'RUN_OUTPUT_UNAVAILABLE' };
+      }
+      return { run: view(), screen: null, screenError: typeof error.code === 'string' ? error.code : 'TIMEOUT' };
+    }
   }
   async function startAutomationRun(params) {
     const spec = taskAutomation.normalizeRunStart(params, environment);
@@ -754,19 +789,7 @@ async function startServer(options = {}) {
     switch (method) {
       case 'state': return publicState();
       case 'environment': return structuredClone(environment);
-      case 'project.inspect': {
-        const profile = environment.profiles.find(item => item.id === params.profileId);
-        if (!profile || profile.available === false || !['windows', 'wsl'].includes(profile.environment)) fail('PROFILE_UNAVAILABLE', 'Project shell environment is unavailable');
-        const repo = string(params.cwd, 'cwd', 4096);
-        const context = { repo, environment: profile.environment, distro: profile.distro };
-        const repository = await taskGit.inspectRepository(context);
-        const branches = await taskGit.listBranches(context);
-        const worktrees = await taskGit.listWorktrees(context);
-        let primary = '';
-        try { primary = (await executeTaskGit(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], { cwd:repo, environment:profile.environment, distro:profile.distro })).stdout.trim().replace(/^origin\//, ''); } catch {}
-        if (!branches.some(branch => branch.name === primary)) primary = ['main', 'master'].find(name => branches.some(branch => branch.name === name)) || '';
-        return { root:worktrees[0]?.path || repository.root, commonDir:repository.commonDir, branches:branches.map(branch => branch.name), primary, worktrees:worktrees.map((worktree, index) => ({ path:worktree.path, branch:worktree.branch || '', primary:index === 0, detached:worktree.detached })) };
-      }
+      case 'project.inspect': return inspectProject(params);
       case 'task.create': return createTask(params);
       case 'task.run.start': return startAutomationRun(params);
       case 'task.run.get': return readAutomationRun(params);
@@ -1021,13 +1044,13 @@ async function startServer(options = {}) {
         const binding = automationForPane(pane.id);
         const record = binding?.task.automation;
         const constraint = record && !taskAutomation.isTerminal(record.status)
-          ? { cwd: pane.cwd, notBefore: record.createdAt } : null;
+          ? { cwd: binding.task.cwd, notBefore: record.createdAt } : null;
         const result = agentController.bind(pane.id, sessionId, constraint);
         if (!result.applied) fail('INVALID_BINDING', constraint ? 'Select a new Hermes session for this task directory' : 'Select a current Hermes session and its terminal pane');
         // Replay the retained first turn with its original receipt times; binding
         // an idle snapshot alone never invents acceptance or completion.
         if (binding && result.retained?.length) {
-          for (const piece of result.retained) applyAutomationEvidence(binding, { channel: 'extension', event: piece.event, state: piece.state, sessionId, at: piece.at }, false);
+          for (const piece of result.retained) applyAutomationEvidence(binding, { channel: 'extension', event: piece.event, state: piece.state, sessionId, generation: piece.generation, at: piece.at }, false);
           changed();
         }
         return { applied: true, paneId: result.paneId, sessionId: result.sessionId };
@@ -1058,10 +1081,16 @@ async function startServer(options = {}) {
         const pid = params.pid === undefined ? undefined : integer(params.pid, 'pid', 1, Number.MAX_SAFE_INTEGER);
         const stamp = params.stamp === undefined ? undefined : string(params.stamp, 'stamp', 32);
         const emittedAt = params.emittedAt === undefined ? undefined : integer(params.emittedAt, 'emittedAt', 1, Number.MAX_SAFE_INTEGER);
-        const hook = { agentId, event, sessionId, cwd, paneId, pid, stamp, emittedAt, state: params.state, toolName, toolId, phase };
+        const processIdentity = params.processIdentity === undefined ? undefined : string(params.processIdentity, 'processIdentity', 20);
+        if (processIdentity !== undefined && !/^\d+$/.test(processIdentity)) fail('INVALID_ARGUMENT', 'Invalid process identity');
+        const hook = { agentId, event, sessionId, cwd, paneId, pid, stamp, emittedAt, processIdentity, state: params.state, toolName, toolId, phase };
         if (!agentController.hasCandidate(hook)) await codexController.refreshProcesses();
         const result = agentController.hook(hook);
-        if (result?.reason === 'binding-required') markBindingRequired(cwd, event);
+        if (result?.reason === 'binding-required' && result.generationVerified) markBindingRequired(cwd, event);
+        if (result?.generationVerified !== undefined) {
+          const { generationVerified, ...publicResult } = result;
+          return publicResult;
+        }
         return result;
       }
       default: fail('METHOD_NOT_FOUND', `Unknown method: ${method}`);
@@ -1136,10 +1165,11 @@ async function startServer(options = {}) {
     if (after !== before) { setAgentState(pane, pane.agentState, oldState !== pane.agentState || oldIdentity !== `${pane.agentId || ''}:${pane.agentPid || ''}:${pane.agentSessionId || ''}`); notifyAgentState(pane); pane.agentUpdatedAt = Date.now(); asyncChanged(); }
   }
   agentController = createAgentController({ panes: codexPanes, apply: applyAgentIdentity,
-    onLifecycle: automationEvidence, onIdentityLost: automationIdentityLost, holdIdentity: automationHoldIdentity });
+    onLifecycle: automationEvidence, onIdentityLost: automationIdentityLost,
+    holdIdentity: automationHoldIdentity, preserveObserver: automationPreserveObserver });
   codexController = createCodexController({
     panes: codexPanes, apply: applyCodexIdentity,
-    onProcesses: processes => agentController.scan(processes),
+    onProcesses: (processes, available, snapshotStart) => agentController.scan(processes, available, snapshotStart),
     ...(options.codex ? { connect: options.codex.connect, listProcesses: options.codex.listProcesses, intervalMs: options.codex.intervalMs } : {}),
   });
   const server = net.createServer(socket => {

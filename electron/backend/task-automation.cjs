@@ -97,11 +97,13 @@ function validateRecord(record, task) {
   timestamp(record.createdAt, 'createdAt'); timestamp(record.updatedAt, 'updatedAt');
   if (record.updatedAt < record.createdAt) fail('STATE_INVALID', 'Invalid automation run timestamps');
   if (record.acceptedAt !== undefined) timestamp(record.acceptedAt, 'acceptedAt');
+  if (record.status === 'completed' && record.acceptedAt === undefined) fail('STATE_INVALID', 'Automation run completed without acceptance');
   if (record.finishedAt !== undefined) {
     timestamp(record.finishedAt, 'finishedAt');
     if (!isTerminal(record.status)) fail('STATE_INVALID', 'Invalid automation run finish timestamp');
   }
   if (isTerminal(record.status) && record.finishedAt === undefined) fail('STATE_INVALID', 'Automation run ended without a finish timestamp');
+  if (record.status === 'completed' && record.acceptedAt > record.finishedAt) fail('STATE_INVALID', 'Automation run finished before acceptance');
   for (const key of ['workspaceId', 'paneId']) {
     if (record[key] !== undefined && (typeof record[key] !== 'string' || !TASK_ID_PATTERN.test(record[key]))) fail('STATE_INVALID', `Invalid automation ${key}`);
   }
@@ -204,16 +206,16 @@ function classify(evidence) {
 // Returns true when persisted run state changed.
 function applyEvidence(record, evidence, session = {}) {
   if (isTerminal(record.status)) return false;
-  // One run follows the process generation that produced its first evidence: a
-  // successor in the same pane is a different turn owner even when it resumes
-  // the same session id, so its evidence can never accept or finish this run.
-  if (evidence.generation) {
-    if (!session.generation) session.generation = evidence.generation;
-    else if (session.generation !== evidence.generation) return false;
-  }
   const at = evidence.at;
   const action = classify(evidence);
   if (!action) return false;
+  // The generation that accepted the turn owns its outcome. A preliminary
+  // session boundary or tool event cannot claim that identity before a root
+  // start, including when Hermes is subsequently bound to a shared observer.
+  if (evidence.generation) {
+    if (session.generation && session.generation !== evidence.generation) return false;
+    if (!session.generation && action.kind === 'accept') session.generation = evidence.generation;
+  }
   // A missing optional session identity neither fabricates nor invalidates one;
   // only a present, different identity proves a replacement.
   // A boundary from a different session is a proven replacement, never evidence

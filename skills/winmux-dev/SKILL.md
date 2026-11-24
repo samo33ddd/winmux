@@ -260,8 +260,27 @@ forwards the recognized hook event name and a bounded `session_id`, and
 `agent.status` re-checks event-to-state consistency before reducing. Project
 extensions reach the reducer through `agent-integration.cjs`'s `onLifecycle` and
 `onIdentityLost` callbacks; `holdIdentity` keeps a run-bound record alive during
-the drain. Never accept a turn or finish a run from pane state, OSC, quiet output,
-timestamps or tool events.
+the run, including before acceptance and after a missing or unavailable process
+snapshot. Disappearance alone never starts a shell-exit drain; a proven successor
+generation still interrupts immediately. Never accept a turn or finish a run from
+pane state, OSC, quiet output, timestamps or tool events.
+
+OMP, Pi and Hermes extensions include the emitting process's full Windows
+creation time as decimal .NET ticks in `processIdentity`, captured before
+delivery is queued. The process table compares full-precision `Get-Process`
+creation times with CIM timestamps before attaching that identity. The reducer
+accepts extension evidence only when the event and the observed process match;
+timestamps alone cannot distinguish a successor that reused the PID before a
+snapshot. Preserve the original identity on queued events and on each retained
+Hermes first-turn piece. If capture or matching fails, ordinary status can still
+work but automation must remain unconfirmed. Reinstall updated project adapters
+and restart existing agent processes before verifying this contract.
+If the first snapshot lacks full ticks, a later matching PID and truncated CIM
+timestamp do not prove the original generation; do not promote that run-bound
+record. A bound Hermes lifecycle generation combines the pane generation with
+the observer PID and ticks. Replay and later events use that same generation;
+after binding, the pane process cannot complete the observer's turn. A session
+boundary does not pin the generation before the first accepted root start.
 
 A shell-observed exit (PTY exit or OSC 1337) is private for `DRAIN_MS` (10,000 ms)
 because a valid `Stop` can sit behind the mutation tail while `agentEnded` is
@@ -274,9 +293,23 @@ recovery backup.
 
 Only a terminal publish may cancel the drain: a non-terminal publish such as
 `waiting/BINDING_REQUIRED` must leave the window running, or a private exit is
-stranded with no timer. A replacement proven during the window is published as
-`AGENT_REPLACED` when the window ends without evidence, so a queued `Stop` can
-still describe a completed turn first.
+stranded with no timer. A proven replacement immediately publishes
+`AGENT_REPLACED`, including during the drain and before acceptance; a later
+event from the old generation cannot change that final outcome.
+
+If PTY spawn fails, dispose its unspawned runtime without treating it as a user
+pane closure. `task.run.start` then retains a failed run with `SPAWN_FAILED`;
+ordinary pane disposal still interrupts with `PANE_CLOSED`.
+
+`waitForRun` must reconcile the status returned by its final fenced screen read
+with the polling result: return the newer terminal outcome or qualifying waiting
+state, or keep polling a resumed run until the original deadline. A screen error
+reported in a valid response retains the run outcome; a transport failure rejects
+the wait. Cancel a pending metadata request at the deadline without closing its
+socket, so only the final capture gets its own 20-second RPC budget. Abort closes
+the caller's connection even during authentication. Run `node --test
+tests/automation-client.cjs` for deterministic socket regressions including
+transitions during capture, a delayed poll, abort and disconnect.
 
 Lifecycle provenance must resolve the adapter through `agentEntry()`, never
 `AGENTS[id]`: a pane carries a launch id such as `wsl:<distro>:claude` or
@@ -301,11 +334,18 @@ task directory whose session-start and first-start receipts are at or after the
 run start. Replay those pieces after binding; binding an idle snapshot must not
 invent acceptance. `persistenceFailed`, hook trust and plugin enablement stay
 user-visible prerequisites, never something the automation path enables.
+Only a verified Hermes root `agent_start` requests `BINDING_REQUIRED`, and only
+for an unaccepted Hermes run in that directory; a session boundary or a matching
+directory belonging to another agent must not trigger it.
+An automation binding pins the task's original cwd: a bound observer's event from
+another directory cannot resolve the run, and a verified session boundary there
+interrupts it as a replacement. Ordinary explicit bindings retain their policy.
 
 Verify with `node --test tests/task-automation.cjs` (reducer, drain, persistence,
 restart normalization) and `node scripts/run-electron-node.cjs
 tests/automation-smoke.cjs` (five adapters over real worktrees/PTYs, drain cases,
-waiting/abort, replacement, disposal, Hermes binding, CLI exit codes). The smoke
+waiting/abort, replacement, disposal, Hermes binding, CLI exit codes and the
+installed wrapper with its copied runtime). The smoke
 test injects the process table so a real fixture `node.exe` process is classified
 as each adapter, and it rebuilds the full agent argv around its own script path
 and id because OMP's `launch` token precedes them. It also points `HERMES_HOME`

@@ -100,9 +100,15 @@ evidence inside the window cancels the drain; otherwise the run becomes
 `failed`/`AGENT_EXITED` for a nonzero code or `interrupted`/
 `AGENT_EXITED_UNCONFIRMED` for a zero or unknown code, with one revision bump. A
 zero exit is not prompt completion. A replacement generation proven during the
-window is published as `interrupted`/`AGENT_REPLACED` when the window ends without
-confirmed evidence, because the replacement is the specific observation; a
-non-terminal publish such as `BINDING_REQUIRED` never cancels the window.
+window immediately publishes `interrupted`/`AGENT_REPLACED`; a non-terminal publish
+such as `BINDING_REQUIRED` never cancels the window.
+An unavailable or incomplete process snapshot does not itself prove an exit:
+the active run retains its last verified generation until shell-exit evidence,
+proven replacement or pane disposal. OMP, Pi and Hermes automation events also
+carry the originating process's Windows creation identity; an event without a
+matching identity cannot accept or finish the run, even if a PID is reused. A
+delayed event from the verified process remains usable after a missing snapshot.
+Ordinary pane status remains available when the identity cannot be obtained.
 
 `task.run.get {runId, includeScreen?}` is a read, so it stays concurrent with
 lifecycle updates. With `includeScreen: true` it fences the active viewport and
@@ -117,7 +123,10 @@ Each owns one authenticated connection, verifies the capability and never retrie
 `waitForRun` polls the small run record every 250 ms, honors a `timeoutMs` of
 0–86,400,000 (0 inspects once), returns a terminal status immediately, returns
 `waiting` only above `afterRevision`, and supports an `AbortSignal` that stops
-only that caller. `client.cjs` keeps a 20-second deadline for `task.run.get` and
+only that caller, including during connection setup. A final screen read observes
+the latest run metadata; a pending metadata poll is canceled at the wait deadline
+without closing its connection before the final capture. `client.cjs` keeps a
+20-second deadline for `task.run.get` and
 the 120-second class for `task.run.start`, which performs worktree and spawn work.
 
 ## Native Codex integration
@@ -154,7 +163,7 @@ The shared process snapshot identifies the topmost Codex, Claude, OMP, Hermes, o
 
 OMP supplies `emittedAt` as epoch milliseconds alongside its decimal monotonic `stamp`: the former validates the process creation boundary, and the latter orders events from that process. Its native Bun clock has a different origin from Node's host clock. Session launch nonces continue to guard shell completion; only active session-specific Claude/Codex hooks lock out other status sources. Project adapters also work for agents selected through the launcher. Hermes uses a stable reporting session identity across proven compression/reset events.
 
-Current backends advertise `environment.capabilities: {terminalTabs:true,liveCwd:true,agentLaunch:true,agentStatus:true,sessionAgentHooks:true,projectAgentHooks:true,nativeCodex:true,protocolVersion:3}`. Protocol 3 keeps the protocol 2 capabilities and adds `nativeCodex`. That boolean, not the version number alone, gates `codex.status`, `codex.bind`, and native hook installation. `projectAgentHooks` gates automatic OMP/Pi/Hermes installation; a newer UI attached to an older daemon without it keeps Codex/Claude session hooks but sends `agentHooks:false` for project-adapter agents instead of triggering `AGENT_HOOKS_UNSUPPORTED`. A 0.2.1 UI attached to a live 0.2.0 daemon still receives protocol 2 without `nativeCodex`. It keeps the running panes, does not call those methods, does not show a raw unknown-method error, and does not restart that daemon. Settings tells the user that the local Codex connection is available only after they finish the current sessions and start Winmux again. Closing the window does not upgrade the daemon. Missing `terminalTabs` identifies an older legacy daemon: the UI retains its existing terminals, shows an upgrade notice, and disables unsupported new launches. The user explicitly stops all sessions when ready before reopening the updated app. Tests instead use a separate data directory and pipe. Never reuse a live daemon's data directory for a second daemon or imply that copying state transfers running processes.
+Current backends advertise `environment.capabilities` with `paneMove`, `terminalTabs`, `liveCwd`, `agentLaunch`, `agentStatus`, `sessionAgentHooks`, `projectAgentHooks`, `nativeCodex`, `ompHooks`, `agentActivity`, `projectTasks`, `previousOutput` and `automationRuns` set to true, plus `protocolVersion: 3`. Protocol 3 keeps the protocol 2 capabilities and adds `nativeCodex`. That boolean, not the version number alone, gates `codex.status`, `codex.bind`, and native hook installation. `projectAgentHooks` gates automatic OMP/Pi/Hermes installation; a newer UI attached to an older daemon without it keeps Codex/Claude session hooks but sends `agentHooks:false` for project-adapter agents instead of triggering `AGENT_HOOKS_UNSUPPORTED`. A 0.2.1 UI attached to a live 0.2.0 daemon still receives protocol 2 without `nativeCodex`. It keeps the running panes, does not call those methods, does not show a raw unknown-method error, and does not restart that daemon. Settings tells the user that the local Codex connection is available only after they finish the current sessions and start Winmux again. Closing the window does not upgrade the daemon. Missing `terminalTabs` identifies an older legacy daemon: the UI retains its existing terminals, shows an upgrade notice, and disables unsupported new launches. The user explicitly stops all sessions when ready before reopening the updated app. Tests instead use a separate data directory and pipe. Never reuse a live daemon's data directory for a second daemon or imply that copying state transfers running processes.
 
 Run `node scripts/run-electron-node.cjs tests/cwd-agent-smoke.cjs` for the real isolated cwd/agent test. Its fixture daemon substitutes only the discovered agent catalog with harmless executables, never subscription agents. It covers PowerShell and available WSL, Unicode/quoted paths, agent validation, one-shot create/split launch, shell return, live cwd events, pane-scoped file/Git access and containment, mixed profiles, client reconnection, and recovery without agent replay.
 

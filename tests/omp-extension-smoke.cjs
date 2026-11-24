@@ -13,6 +13,7 @@ async function fixture(options = {}) {
   const handlers = new Map();
   const sent = [];
   const factory = createWinmuxOmpExtension({}, {
+    processIdentity: options.processIdentity ?? Promise.resolve(undefined),
     send: async payload => {
       if (options.delayFirst && sent.length === 0) await delay(30);
       sent.push(payload);
@@ -38,6 +39,22 @@ function context(overrides = {}) {
     ...overrides,
   };
 }
+
+test('Pi and OMP report the actual Windows creation identity of their own process', { skip: process.platform !== 'win32' }, async () => {
+  const { windowsProcessTable } = require('../electron/codex-integration.cjs');
+  const expected = (await windowsProcessTable()).find(row => row.pid === process.pid)?.processIdentity;
+  assert.match(expected || '', /^\d{1,20}$/);
+  for (const [modulePath, factoryName] of [
+    ['../electron/hooks/winmux-pi-extension.mjs', 'createWinmuxPiExtension'],
+    ['../electron/hooks/winmux-omp-extension.mjs', 'createWinmuxOmpExtension'],
+  ]) {
+    const factory = (await import(modulePath))[factoryName];
+    const handlers = new Map(), sent = [];
+    factory({}, { send: async payload => sent.push(payload) })({ on: (name, handler) => handlers.set(name, handler) });
+    await handlers.get('session_start')({}, context());
+    assert.equal(sent[0]?.processIdentity, expected, modulePath);
+  }
+});
 
 test('publishes only from the interactive root session', async () => {
   const { emit, sent } = await fixture();
@@ -204,6 +221,60 @@ test('original-event stamps remain ordered through an async delivery queue', asy
   assert.deepEqual(sent.map(item => item.event), ['agent_start', 'agent_end']);
   assert.ok(BigInt(sent[1].stamp) > BigInt(sent[0].stamp));
   assert.ok(sent.every(item => /^\d{1,30}$/.test(item.stamp)));
+});
+
+for (const [name, modulePath, factoryName] of [
+  ['OMP', '../electron/hooks/winmux-omp-extension.mjs', 'createWinmuxOmpExtension'],
+  ['Pi', '../electron/hooks/winmux-pi-extension.mjs', 'createWinmuxPiExtension'],
+]) {
+  test(`${name} queues original events until process identity is captured`, async () => {
+    const factory = (await import(modulePath))[factoryName];
+    let resolveIdentity;
+    const identity = new Promise(resolve => { resolveIdentity = resolve; });
+    const handlers = new Map();
+    const sent = [];
+    factory({}, { processIdentity: identity, send: async payload => { sent.push(payload); } })(
+      { on(event, handler) { handlers.set(event, handler); } },
+    );
+    const started = handlers.get('agent_start')({}, context());
+    const ended = handlers.get('agent_end')({ messages: [{ role: 'assistant', stopReason: 'stop' }] }, context());
+    const queuedAt = Date.now();
+    await Promise.resolve();
+    assert.equal(sent.length, 0);
+    resolveIdentity('638999123456789012');
+    await Promise.all([started, ended]);
+    assert.deepEqual(sent.map(item => item.event), ['agent_start', 'agent_end']);
+    assert.deepEqual(sent.map(item => item.processIdentity), ['638999123456789012', '638999123456789012']);
+    assert.ok(BigInt(sent[1].stamp) > BigInt(sent[0].stamp));
+    if (name === 'OMP') assert.ok(sent.every(item => item.emittedAt <= queuedAt));
+  });
+
+  test(`${name} delivers events without process identity when capture fails`, async () => {
+    const factory = (await import(modulePath))[factoryName];
+    const handlers = new Map();
+    const sent = [];
+    factory({}, { processIdentity: Promise.reject(new Error('capture failed')), send: async payload => { sent.push(payload); } })(
+      { on(event, handler) { handlers.set(event, handler); } },
+    );
+    await handlers.get('agent_start')({}, context());
+    await handlers.get('agent_end')({}, context());
+    assert.deepEqual(sent.map(item => item.event), ['agent_start', 'agent_end']);
+    assert.ok(sent.every(item => !Object.hasOwn(item, 'processIdentity')));
+  });
+}
+
+test('OMP helper validates and forwards optional process identity', () => {
+  const { eventPayload } = require('../electron/hooks/winmux-omp-hook.cjs');
+  const base = {
+    agentId: 'omp', event: 'agent_start', sessionId: 'session', cwd: 'E:\\project',
+    pid: 123, stamp: '1', state: 'running', emittedAt: 123,
+  };
+  assert.deepEqual(eventPayload(JSON.stringify(base)), base);
+  const identified = { ...base, processIdentity: '638999123456789012' };
+  assert.deepEqual(eventPayload(JSON.stringify(identified)), identified);
+  for (const invalid of ['', '123x', '-1', '1'.repeat(21), 123, null]) {
+    assert.throws(() => eventPayload(JSON.stringify({ ...base, processIdentity: invalid })), { code: 'HOOK_INVALID' });
+  }
 });
 
 test('agent_end clears pending waits and shutdown reports idle', async () => {
