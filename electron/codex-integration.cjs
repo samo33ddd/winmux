@@ -198,7 +198,7 @@ function matchHook({ agentId, event, sessionId, cwd, paneId, panes, threads, loa
 }
 
 async function windowsProcessTable() {
-  const script = "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); Get-CimInstance -ClassName Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine,@{Name='CreatedAt';Expression={if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') }}} | ConvertTo-Json -Compress -Depth 3";
+  const script = "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $starts=@{}; Get-Process | ForEach-Object { try { $starts[[int]$_.Id]=$_.StartTime.ToUniversalTime().Ticks.ToString() } catch {} }; Get-CimInstance -ClassName Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine,@{Name='CreatedAt';Expression={if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') }}},@{Name='ProcessIdentity';Expression={try { $ticks=$starts[[int]$_.ProcessId]; if (!$ticks) { $p=[Diagnostics.Process]::GetProcessById([int]$_.ProcessId); try { $ticks=$p.StartTime.ToUniversalTime().Ticks.ToString() } finally { $p.Dispose() } }; $cim=$_.CreationDate.ToUniversalTime().Ticks.ToString(); if ($ticks -and $ticks.Length -eq $cim.Length -and $ticks.Substring(0,$ticks.Length-1) -eq $cim.Substring(0,$cim.Length-1)) { $ticks } } catch {}}} | ConvertTo-Json -Compress -Depth 3";
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   const { stdout } = await execFileAsync('powershell.exe', ['-NoLogo', '-NoProfile', '-EncodedCommand', encoded], {
     windowsHide: true, timeout: 8000, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8',
@@ -208,6 +208,7 @@ async function windowsProcessTable() {
     pid: Number(row.ProcessId), ppid: Number(row.ParentProcessId), name: row.Name || '',
     executable: row.ExecutablePath || '', commandLine: row.CommandLine || '',
     createdAt: typeof row.CreatedAt === 'string' && Number.isFinite(Date.parse(row.CreatedAt)) ? new Date(row.CreatedAt).toISOString() : '',
+    processIdentity: typeof row.ProcessIdentity === 'string' && /^\d{1,20}$/.test(row.ProcessIdentity) ? row.ProcessIdentity : '',
   })).filter(row => Number.isInteger(row.pid) && row.pid > 0 && Number.isInteger(row.ppid));
 }
 
@@ -475,6 +476,7 @@ function createController(options = {}) {
     if (processRefresh) return processRefresh;
     processRefresh = (async () => {
       const panes = options.panes?.() || [];
+      const snapshotStart = { epoch: (options.now || Date.now)(), monotonic: (options.monotonic || (() => process.hrtime.bigint()))() };
       try {
         processes = panes.some(pane => pane.status === 'running' && pane.pid) ? await listProcesses() : [];
         processSnapshotAvailable = true;
@@ -483,8 +485,8 @@ function createController(options = {}) {
         processSnapshotAvailable = false;
       }
       if (!stopped) {
-        try { options.onProcesses?.(processes); }
-        catch { try { options.onProcesses?.([]); } catch { /* Detection is optional. */ } }
+        try { options.onProcesses?.(processes, processSnapshotAvailable, snapshotStart); }
+        catch { try { options.onProcesses?.([], false, snapshotStart); } catch { /* Detection is optional. */ } }
       }
       return processes;
     })().finally(() => { processRefresh = null; });

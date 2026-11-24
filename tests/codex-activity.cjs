@@ -294,3 +294,41 @@ test('shared process observation stays available while the optional Codex connec
   await pending;
   await controller.stop();
 });
+
+test('process callbacks distinguish a failed snapshot from an empty snapshot', async () => {
+  let available = true;
+  const snapshots = [];
+  const controller = createController({
+    panes: () => [{ id: 'pane', pid: 100, status: 'running', cwd: 'E:/project' }],
+    listProcesses: async () => { if (!available) throw new Error('snapshot unavailable'); return []; },
+    onProcesses: (rows, snapshotAvailable) => snapshots.push({ rows, snapshotAvailable }),
+  });
+  await controller.refreshProcesses();
+  available = false;
+  await controller.refreshProcesses();
+  assert.deepEqual(snapshots, [{ rows: [], snapshotAvailable: true }, { rows: [], snapshotAvailable: false }]);
+  await controller.stop();
+});
+
+test('process callbacks receive clocks sampled before enumeration, including failed snapshots', async () => {
+  let epoch = 1000, monotonic = 100n, release, fail = false;
+  const snapshots = [];
+  const controller = createController({
+    panes: () => [{ id: 'pane', pid: 100, status: 'running', cwd: 'E:/project' }],
+    now: () => epoch, monotonic: () => monotonic,
+    listProcesses: () => new Promise((resolve, reject) => { release = () => fail ? reject(new Error('unavailable')) : resolve([]); }),
+    onProcesses: (rows, available, snapshotStart) => snapshots.push({ rows, available, snapshotStart }),
+  });
+  const first = controller.refreshProcesses();
+  epoch = 2000; monotonic = 200n; release();
+  await first;
+  fail = true;
+  const second = controller.refreshProcesses();
+  epoch = 3000; monotonic = 300n; release();
+  await second;
+  assert.deepEqual(snapshots, [
+    { rows: [], available: true, snapshotStart: { epoch: 1000, monotonic: 100n } },
+    { rows: [], available: false, snapshotStart: { epoch: 2000, monotonic: 200n } },
+  ]);
+  await controller.stop();
+});

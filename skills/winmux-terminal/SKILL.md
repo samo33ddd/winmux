@@ -161,7 +161,9 @@ acknowledges the launch only and cannot be combined with `--timeout`.
 Exit codes are `0` completed, `2` waiting, `3` failed or interrupted, `4` timeout
 and `1` for local, validation or transport failure. A lost start response is
 recovered with `run-status`/`run-wait` using the UUID already supplied; repeating
-`run` with that same spec is idempotent, not an automatic retry.
+`run` with that same spec is idempotent, not an automatic retry. The final screen
+read can observe a newer status; the returned reason and exit code reflect that
+status, and a run that resumed is observed until the original deadline.
 
 Request fields are `runId`, `projectDirectory`, `name`, `profileId`, `agentId`
 (`codex`, `claude`, `omp`, `pi`, `hermes`), `baseBranch`, optional `primaryBranch`
@@ -176,14 +178,21 @@ The run status is `creating`, `starting`, `running`, `waiting`, `completed`,
 the agent's own hooks or project extension. `waiting` means the agent needs an
 answer or an association: answer it in the pane with `send`, then resume with
 `run-wait RUN_ID --after <returned revision>`. Hermes reports `BINDING_REQUIRED`
-when its shared gateway must be associated explicitly; use `agent.sessions` and
-`agent.bind` with the session for that task directory.
+after a verified shared gateway starts its root turn and must be associated
+explicitly; use `agent.sessions` and `agent.bind` with the session for that task
+directory. A session boundary alone does not request binding.
+
+OMP, Pi and Hermes automation requires the updated project adapter and a
+matching Windows process identity. If that identity cannot be confirmed, the
+run stays unconfirmed instead of inferring an outcome; restart the agent with
+the updated adapter when setting up a new run.
 
 A shell-observed agent exit publishes nothing for up to 10 seconds so a queued
 `Stop` can still arrive. Without evidence the run then becomes `AGENT_EXITED`
 (nonzero exit) or `AGENT_EXITED_UNCONFIRMED` (zero or unknown); zero is not
 success. A disposed pane is `PANE_CLOSED`, a proven replacement is
-`AGENT_REPLACED`, and a daemon restart turns every unfinished run into
+immediately `AGENT_REPLACED`, a failed PTY launch is `SPAWN_FAILED`, and a daemon
+restart turns every unfinished run into
 `DAEMON_RESTARTED` while retaining the task and worktree. No prompt is replayed.
 
 `screen` is the current terminal view at read time. It can contain earlier

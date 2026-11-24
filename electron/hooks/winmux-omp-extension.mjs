@@ -1,7 +1,25 @@
 // winmux-omp-extension
 // Project-local OMP extension. This Node-importable template is installed as
 // <workspace>/.omp/extensions/winmux-status.ts, which OMP discovers as a direct module.
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+
+function captureProcessIdentity() {
+  if (process.platform !== 'win32') return Promise.resolve(undefined);
+  return new Promise(resolve => {
+    try {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        `(Get-Process -Id ${process.pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString()`],
+      { windowsHide: true, timeout: 5000, maxBuffer: 1024 }, (error, stdout) => {
+        const identity = typeof stdout === 'string' ? stdout.trim() : '';
+        resolve(!error && /^\d{1,20}$/.test(identity) ? identity : undefined);
+      });
+    } catch {
+      resolve(undefined);
+    }
+  });
+}
+
+const processIdentity = captureProcessIdentity();
 
 const MARKER = 'winmux-omp-extension';
 const CONFIG_ENCODED = '__WINMUX_CONFIG_B64__';
@@ -85,6 +103,8 @@ export function createWinmuxOmpExtension(config = CONFIG, options = {}) {
   const send = typeof options.send === 'function'
     ? options.send
     : payload => sendViaHelper(config, payload);
+  const identity = Promise.resolve(options.processIdentity ?? processIdentity)
+    .then(value => typeof value === 'string' && /^\d{1,20}$/.test(value) ? value : undefined, () => undefined);
 
   return function winmuxOmpExtension(pi) {
     if (!pi || typeof pi.on !== 'function') throw new TypeError('Winmux OMP extension requires ExtensionAPI.on');
@@ -108,7 +128,11 @@ export function createWinmuxOmpExtension(config = CONFIG, options = {}) {
       const payload = payloadFor(ctx, event, state, tool);
       if (!payload) return Promise.resolve(false);
       payload.stamp = stamp;
-      tail = tail.then(() => send(payload)).then(() => true, () => false);
+      tail = tail.then(async () => {
+        const value = await identity;
+        if (value !== undefined) payload.processIdentity = value;
+        return send(payload);
+      }).then(() => true, () => false);
       return tail;
     }
 

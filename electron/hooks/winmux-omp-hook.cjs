@@ -38,6 +38,7 @@ function eventPayload(raw) {
   const state = bounded(parsed.state, 16);
   const paneId = bounded(parsed.paneId, 128, true);
   const stamp = bounded(parsed.stamp, 30);
+  const processIdentity = parsed.processIdentity;
   const emittedAt = parsed.emittedAt;
   const toolName = bounded(parsed.toolName, 128, true);
   const toolId = bounded(parsed.toolId, 256, true);
@@ -46,6 +47,7 @@ function eventPayload(raw) {
   if (parsed.agentId !== 'omp' || !EVENTS.has(event) || !sessionId || !cwd || !STATES.has(state)
     || (parsed.paneId !== undefined && paneId === undefined)
     || !Number.isSafeInteger(parsed.pid) || parsed.pid <= 0 || !/^\d+$/.test(stamp || '')
+    || (processIdentity !== undefined && (typeof processIdentity !== 'string' || !/^\d{1,20}$/.test(processIdentity)))
     || (emittedAt !== undefined && (!Number.isSafeInteger(emittedAt) || emittedAt <= 0))
     || (isToolEvent && (!toolName || !toolId || !['start', 'end'].includes(phase)
       || phase !== (event === 'tool_execution_start' ? 'start' : 'end')))) {
@@ -59,6 +61,7 @@ function eventPayload(raw) {
     cwd,
     ...(paneId ? { paneId } : {}),
     pid: parsed.pid,
+    ...(processIdentity !== undefined ? { processIdentity } : {}),
     stamp,
     state,
     ...(isToolEvent ? { toolName, toolId, phase } : {}),

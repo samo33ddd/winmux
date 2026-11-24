@@ -187,16 +187,17 @@ output, timestamps, OSC notifications and tool events never accept or complete
 one. A shell-observed agent exit is recorded privately for up to 10 seconds so a
 `Stop` that is serialized behind other daemon work still arrives; without evidence
 the run publishes `AGENT_EXITED` for a nonzero exit or
-`AGENT_EXITED_UNCONFIRMED` for a zero or unknown one, or `AGENT_REPLACED` when a
-replacement process was proven during the window. A daemon restart turns every
-unfinished run into `DAEMON_RESTARTED` and never replays the prompt.
+`AGENT_EXITED_UNCONFIRMED` for a zero or unknown one. A proven replacement
+immediately publishes `AGENT_REPLACED`, including during that window. A daemon
+restart turns every unfinished run into `DAEMON_RESTARTED` and never replays the
+prompt.
 
 Hermes inherits its explicit-binding policy: a verified gateway must be associated
-with the task pane by an explicit session selection, and a run whose gateway is not
-a pane descendant, or whose association is missing, stays `BINDING_REQUIRED`
-rather than being reported as completed. Enabling the `winmux-status` plugin stays
-an explicit user action. The same applies to Codex hook trust and project
-extension trust.
+with the task pane by an explicit session selection. A verified unbound gateway
+can put the run in `BINDING_REQUIRED`; an unverified external gateway leaves it
+unconfirmed because its process identity cannot be established. Enabling the
+`winmux-status` plugin stays an explicit user action. The same applies to Codex
+hook trust and project extension trust.
 
 `environment.capabilities.automationRuns` gates the API; an older daemon must be
 upgraded instead of being driven with blind input. See

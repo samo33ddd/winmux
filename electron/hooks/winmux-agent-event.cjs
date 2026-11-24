@@ -18,6 +18,10 @@ function eventPayload(raw) {
     || !bounded(input.sessionId, 128) || !bounded(input.cwd, 4096)
     || !Number.isSafeInteger(input.pid) || input.pid < 1 || typeof input.stamp !== 'string' || !/^\d{1,32}$/.test(input.stamp)) throw new Error('Invalid Winmux agent event');
   const output = { agentId: input.agentId, event: input.event, sessionId: input.sessionId, cwd: input.cwd, pid: input.pid, stamp: input.stamp, state: input.state };
+  if (input.processIdentity !== undefined) {
+    if (typeof input.processIdentity !== 'string' || !/^\d{1,20}$/.test(input.processIdentity)) throw new Error('Invalid Winmux process identity');
+    output.processIdentity = input.processIdentity;
+  }
   if (input.paneId !== undefined) {
     if (!bounded(input.paneId, 128)) throw new Error('Invalid Winmux pane identity');
     output.paneId = input.paneId;

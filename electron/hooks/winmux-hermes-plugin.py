@@ -81,6 +81,34 @@ def _delegated_context() -> bool | None:
         return None
 
 
+def _current_process_identity() -> str | None:
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.argtypes = []
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.GetProcessTimes.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+        ]
+        kernel32.GetProcessTimes.restype = wintypes.BOOL
+        created, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+        if not kernel32.GetProcessTimes(
+            kernel32.GetCurrentProcess(), ctypes.byref(created), ctypes.byref(exited),
+            ctypes.byref(kernel), ctypes.byref(user),
+        ):
+            return None
+        ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+        return str(ticks + 504911232000000000)
+    except Exception:
+        return None
+
+
 def send_via_helper(config: Mapping[str, str], payload: Mapping[str, Any]) -> None:
     node_path = _bounded(config.get("nodePath"), 4096)
     helper_path = _bounded(config.get("helperPath"), 4096)
@@ -114,6 +142,7 @@ class WinmuxHermesPlugin:
         send: Callable[[Mapping[str, Any]], Any] | None = None,
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
         get_pid: Callable[[], int] = os.getpid,
+        get_process_identity: Callable[[], str | None] = _current_process_identity,
         get_cwd: Callable[[], str] | None = None,
         delegated_context: Callable[[], bool] | None = None,
         environ: Mapping[str, str] | None = None,
@@ -124,6 +153,11 @@ class WinmuxHermesPlugin:
         self._send = send or (lambda payload: send_via_helper(self._config, payload))
         self._monotonic_ns = monotonic_ns
         self._get_pid = get_pid
+        try:
+            identity = get_process_identity()
+            self._process_identity = identity if isinstance(identity, str) and identity.isascii() and identity.isdecimal() else None
+        except Exception:
+            self._process_identity = None
         self._get_cwd = get_cwd
         self._delegated_context = delegated_context or _delegated_context
         self._environ = environ if environ is not None else os.environ
@@ -346,6 +380,7 @@ class WinmuxHermesPlugin:
             "cwd": root.cwd,
             **({"paneId": pane_id} if pane_id else {}),
             "pid": self._get_pid(),
+            **({"processIdentity": self._process_identity} if self._process_identity is not None else {}),
             "stamp": str(stamp),
             "state": state,
         }

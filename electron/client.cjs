@@ -26,11 +26,14 @@ async function connect(options = {}) {
   const waiting = [];
   let waitingBytes = 0;
   const maxWaiting = LIMITS.inflight * 4;
-  function clearEntry(entry) { clearTimeout(entry.timer); }
+  function clearEntry(entry) {
+    clearTimeout(entry.timer);
+    entry.signal?.removeEventListener('abort', entry.onAbort);
+  }
   function failAll(error) {
     if (failed) return;
     failed = true; closed = true;
-    for (const entry of active.values()) { clearEntry(entry); entry.reject(error); }
+    for (const entry of active.values()) { clearEntry(entry); if (!entry.cancelled) entry.reject(error); }
     active.clear();
     while (waiting.length) { const entry = waiting.shift(); waitingBytes -= entry.bytes; clearEntry(entry); entry.reject(error); }
     waitingBytes = 0;
@@ -63,13 +66,16 @@ async function connect(options = {}) {
       const entry = active.get(message.id);
       if (!entry) continue;
       active.delete(message.id); clearEntry(entry);
-      if (message.error) entry.reject(Object.assign(new Error(message.error.message), { code: message.error.code }));
-      else entry.resolve(message.result);
+      if (!entry.cancelled) {
+        if (message.error) entry.reject(Object.assign(new Error(message.error.message), { code: message.error.code }));
+        else entry.resolve(message.result);
+      }
       pump();
     }
     if (Buffer.byteLength(buffer) > LIMITS.response) socket.destroy(new Error('Winmux response exceeds the frame limit'));
   });
-  client.request = (method, params = {}) => {
+  client.request = (method, params = {}, signal = null) => {
+    if (signal?.aborted) return Promise.reject(Object.assign(new Error('Winmux request was aborted'), { code: 'ABORT_ERR' }));
     if (failed || closed || socket.destroyed) return Promise.reject(Object.assign(new Error('Winmux daemon connection closed'), { code: 'CONNECTION_CLOSED' }));
     if (waiting.length >= maxWaiting) return Promise.reject(Object.assign(new Error('Too many pending Winmux requests'), { code: 'LIMIT_REACHED' }));
     let frame; const id = randomUUID();
@@ -78,7 +84,21 @@ async function connect(options = {}) {
     const bytes = Buffer.byteLength(frame);
     if (bytes > LIMITS.request || bytes > LIMITS.socket || waitingBytes + bytes > LIMITS.pending) return Promise.reject(Object.assign(new Error('Winmux request exceeds the buffer limit'), { code: 'LIMIT_REACHED' }));
     return new Promise((resolve, reject) => {
-      const entry = { id, method, frame, bytes, resolve, reject, timer: null };
+      const entry = { id, method, frame, bytes, resolve, reject, timer: null, signal, onAbort: null };
+      entry.onAbort = () => {
+        if (active.has(entry.id)) {
+          // The daemon still counts a sent request until its reply arrives.
+          // Retain its slot without a timer, ignoring that eventual reply.
+          entry.cancelled = true;
+        } else {
+          const index = waiting.indexOf(entry);
+          if (index === -1) return;
+          waiting.splice(index, 1); waitingBytes -= entry.bytes;
+        }
+        clearEntry(entry);
+        reject(Object.assign(new Error('Winmux request was aborted'), { code: 'ABORT_ERR' }));
+        if (!entry.cancelled) pump();
+      };
       entry.timer = setTimeout(() => {
         const timeout = Object.assign(new Error(`Winmux request timed out: ${entry.method}`), { code: 'ETIMEDOUT' });
         if (active.has(entry.id)) {
@@ -91,10 +111,20 @@ async function connect(options = {}) {
           waiting.splice(index, 1); waitingBytes -= entry.bytes; clearEntry(entry); entry.reject(timeout);
         }
       }, options.requestTimeout ?? requestTimeoutFor(method));
-      waiting.push(entry); waitingBytes += bytes; pump();
+      waiting.push(entry); waitingBytes += bytes;
+      signal?.addEventListener('abort', entry.onAbort, { once: true });
+      if (signal?.aborted) entry.onAbort();
+      else pump();
     });
   };
   client.close = () => { closed = true; socket.destroy(); };
+  if (options.signal) {
+    const signal = options.signal;
+    const abort = () => socket.destroy(Object.assign(new Error('Winmux connection was aborted'), { code: 'ABORT_ERR' }));
+    signal.addEventListener('abort', abort, { once: true });
+    socket.once('close', () => signal.removeEventListener('abort', abort));
+    if (signal.aborted) abort();
+  }
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => socket.destroy(Object.assign(new Error('Winmux connect timed out'), { code: 'ETIMEDOUT' })), options.connectTimeout ?? 3000);
     const cleanup = () => { clearTimeout(timer); socket.removeListener('connect', onConnect); socket.removeListener('error', onError); };

@@ -7,8 +7,14 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { once } = require('node:events');
-const { connect } = require('../electron/client.cjs');
+const { connect, requestTimeoutFor } = require('../electron/client.cjs');
 const { LIMITS } = require('../electron/backend/shared.cjs');
+
+test('run metadata keeps its bounded timeout before the general task prefix', () => {
+  assert.equal(requestTimeoutFor('task.run.get'), 20000);
+  assert.equal(requestTimeoutFor('task.run.start'), 120000);
+  assert.equal(requestTimeoutFor('task.delivery.merge'), 300000);
+});
 
 async function fixture(t, options = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'winmux-pressure-'));
@@ -69,6 +75,47 @@ test('queued requests are rejected on close and never sent after it', async t =>
   const settled = await results;
   assert.ok(settled.every(item => item.status === 'rejected' && item.reason.code === 'CONNECTION_CLOSED'));
   assert.equal(f.calls.length, LIMITS.inflight, 'queued input must not replay after close');
+});
+
+test('cancelling requests preserves server capacity and keeps the socket open', { timeout: 4000 }, async t => {
+  const f = await fixture(t, { requestTimeout: 3000 });
+  const replies = new Map();
+  let allActive, replacementReceived;
+  const activeReceived = new Promise(resolve => { allActive = resolve; });
+  const replacementSeen = new Promise(resolve => { replacementReceived = resolve; });
+  f.handle((request, reply) => {
+    replies.set(request.params.data, reply);
+    if (replies.size === LIMITS.inflight) allActive();
+    if (request.params.data === 'replacement') replacementReceived();
+  });
+
+  const activeController = new AbortController();
+  const requests = Array.from({ length: LIMITS.inflight }, (_, i) =>
+    f.client.request('probe', { data: `active-${i}` }, i === 0 ? activeController.signal : null));
+  const settled = Promise.allSettled(requests);
+  await activeReceived;
+  const queuedController = new AbortController();
+  const queued = f.client.request('probe', { data: 'cancelled-queue' }, queuedController.signal);
+  const queuedRejected = assert.rejects(queued, { code: 'ABORT_ERR' });
+  queuedController.abort();
+  await queuedRejected;
+  const replacement = f.client.request('probe', { data: 'replacement' });
+  activeController.abort();
+  const sentEarly = await Promise.race([replacementSeen.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 50))]);
+  assert.equal(sentEarly, false, 'a sent cancellation retains its server-side inflight slot until the late reply');
+  replies.get('active-0')({ late: true });
+  await replacementSeen;
+  replies.get('replacement')({ ok: true });
+  assert.deepEqual(await replacement, { ok: true });
+  for (let i = 1; i < LIMITS.inflight; i++) replies.get(`active-${i}`)({ ok: true });
+  const results = await settled;
+  assert.equal(results[0].reason.code, 'ABORT_ERR');
+  assert.ok(results.slice(1).every(result => result.status === 'fulfilled'));
+  assert.ok(!f.calls.some(request => request.params.data === 'cancelled-queue'));
+  assert.deepEqual(await f.client.request('state'), {});
+  const alreadyAborted = new AbortController();
+  alreadyAborted.abort();
+  await assert.rejects(f.client.request('probe', {}, alreadyAborted.signal), { code: 'ABORT_ERR' });
 });
 
 test('an unanswered active request fails the connection without sending queued input', async t => {

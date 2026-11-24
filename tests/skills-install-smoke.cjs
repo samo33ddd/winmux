@@ -4,12 +4,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 const { once } = require('node:events');
 const { installSkills } = require('../electron/skills-install.cjs');
 const { SKILL_DESTINATIONS, readBundledSkills } = require('../electron/skills-local-installer.cjs');
 const { connect } = require('../electron/client.cjs');
+const { locations } = require('../electron/backend/shared.cjs');
 // Running this suite inside a Winmux pane must not leak the live daemon's
 // coordinates into isolated fixture daemons or connect() calls.
 for (const key of ['WINMUX_PIPE_NAME', 'WINMUX_PANE_ID', 'WINMUX_AGENT_NODE', 'WINMUX_AGENT_HELPER', 'WINMUX_AGENT_LAUNCH_ID', 'WINMUX_TASK_ID', 'WINMUX_DATA_DIR']) delete process.env[key];
@@ -65,8 +67,9 @@ async function waitForDaemon(dataDir, child, logs) {
   throw new Error(`Isolated daemon did not become ready: ${lastError?.message}\n${logs.join('')}`);
 }
 
-async function isolatedDaemon(t) {
+async function isolatedDaemon(t, { state } = {}) {
   const dataDir = tempProject(t, 'winmux-ipc-');
+  if (state) fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify(state));
   const electron = require('electron');
   assert.equal(typeof electron, 'string');
   const logs = [];
@@ -187,6 +190,7 @@ test('installed Windows wrapper uses a plain runtime and authenticated IPC from 
   assert.ok(path.isAbsolute(installed.runtimeRoot));
   assert.equal(installed.runtimeRoot.includes('.asar'), false);
   assert.equal(fs.statSync(path.join(installed.runtimeRoot, 'cli.cjs')).isFile(), true);
+  assert.equal(fs.statSync(path.join(installed.runtimeRoot, 'electron', 'automation-client.cjs')).isFile(), true);
   const connectionFile = path.join(project, '.agents', 'skills', 'winmux-terminal', 'scripts', 'connection.json');
   const connection = JSON.parse(fs.readFileSync(connectionFile, 'utf8'));
   assert.deepEqual(Object.keys(connection).sort(), ['cliPath', 'dataDir']);
@@ -258,6 +262,65 @@ test('installed Windows wrapper uses a plain runtime and authenticated IPC from 
   });
   assert.equal(browserHelp.status, 0, browserHelp.stderr);
   assert.match(browserHelp.stdout, /Winmux browser/);
+});
+
+test('installed Windows wrapper reads a persisted automation tombstone through the isolated daemon', async t => {
+  const project = tempProject(t);
+  const unrelated = tempProject(t);
+  const runId = '74e2c604-5426-4f0e-b93b-33351303d1b5';
+  const spec = { runId, projectDirectory: project, name: 'Persisted run', profileId: 'powershell',
+    agentId: 'codex', baseBranch: 'main', prompt: 'A previously completed request.' };
+  const requestHash = createHash('sha256').update(JSON.stringify([
+    1, spec.projectDirectory, spec.name, spec.profileId, spec.agentId, spec.baseBranch, null, spec.prompt,
+  ])).digest('hex');
+  // This archived record represents an earlier completed run; no agent is
+  // launched and this fixture does not exercise lifecycle completion.
+  const state = { version: 3, state: {
+    workspaces: [],
+    projects: [{ id: 'project', name: 'Project', root: project, profileId: 'powershell', primaryBranch: 'main' }],
+    tasks: [{ id: runId, name: spec.name, projectId: 'project', cwd: path.join(project, 'former-worktree'),
+      branch: 'winmux/persisted-run', base: 'main', agentId: 'codex', managed: true, archived: true, phase: 'ready',
+      automation: { version: 1, requestHash, status: 'completed', code: null, revision: 3,
+        createdAt: 1000, updatedAt: 3000, acceptedAt: 2000, finishedAt: 3000 } }],
+    notifications: [], settings: { fontSize: 14, theme: 'dark' },
+  } };
+  const daemon = await isolatedDaemon(t, { state });
+  const { client } = fixture({ cwd: project, profile: { id: 'powershell', environment: 'windows' } });
+  const installed = await installSkills(client, valid, { dataDir: daemon.dataDir, appRoot: path.resolve(__dirname, '..') });
+  assert.equal(fs.statSync(path.join(installed.runtimeRoot, 'electron', 'automation-client.cjs')).isFile(), true);
+  const wrapper = path.join(project, '.agents', 'skills', 'winmux-terminal', 'scripts', 'winmux-client.cjs');
+  const specFile = path.join(unrelated, 'run.json');
+  fs.writeFileSync(specFile, JSON.stringify(spec));
+  const pipe = locations({ dataDir: daemon.dataDir }).pipeName;
+  const env = { ...process.env, WINMUX_DATA_DIR: path.join(unrelated, 'wrong-instance'),
+    WINMUX_PIPE_NAME: path.join(unrelated, 'wrong-pipe'), WINMUX_PANE_ID: 'wrong-pane',
+    WINMUX_AGENT_LAUNCH_ID: 'wrong-launch', WINMUX_TASK_ID: 'wrong-task',
+    WINMUX_AGENT_NODE: 'wrong-node', WINMUX_AGENT_HELPER: 'wrong-helper' };
+  for (const [args, reason] of [
+    [['run', '--spec', specFile], 'completed'],
+    [['run-status', runId], 'status'],
+    [['run-wait', runId, '--after', '3', '--timeout', '0'], 'completed'],
+  ]) {
+    const result = spawnSync(process.execPath, [wrapper, '--pipe', pipe, ...args], {
+      cwd: unrelated, env, encoding: 'utf8', timeout: 30000, windowsHide: true,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.reason, reason);
+    assert.equal(output.run.runId, runId);
+    assert.equal(output.run.status, 'completed');
+    assert.equal(output.run.revision, 3);
+    assert.equal(output.screen, null);
+    assert.equal(output.screenError, 'RUN_OUTPUT_UNAVAILABLE');
+  }
+  const check = await connect({ dataDir: daemon.dataDir, pipeName: pipe, connectTimeout: 1500, requestTimeout: 2000 });
+  try {
+    const current = await check.request('state');
+    assert.equal(current.tasks.length, 1);
+    assert.equal(current.tasks[0].id, runId);
+    assert.equal(current.tasks[0].archived, true);
+    assert.equal(current.workspaces.length, 0);
+  } finally { check.close(); }
 });
 
 test('Windows creates both files for every verified agent destination and preserves unrelated skills', async t => {
