@@ -158,6 +158,51 @@ Hermes uses an explicitly selected user/profile plugin. Installation leaves `con
 
 Older running Winmux daemons keep their existing sessions. New capabilities take effect after those sessions finish and the updated daemon starts; closing the window alone does not update the daemon. A newer UI attached to an older daemon keeps Codex/Claude session hooks but does not request project-adapter installation, so OMP, Pi and Hermes launches still start normally without automatic hooks until the daemon is upgraded. With the updated daemon, agent adapters are installed automatically for OMP, Pi and Hermes launches when the preference is enabled; manual installation remains available. They require a stable system Node.js executable and do not change model, provider, or permission settings. Hermes still requires the explicit `hermes plugins enable winmux-status` step and a restart. WSL agent activity has not been verified by this Windows implementation.
 
+## Automation runs
+
+`task.run.start` starts one local agent on an initial prompt inside a new managed
+task worktree and follows that first root turn. It reuses task creation, worktree
+ownership and the ordinary launch path; the initial prompt is delivered as a launch
+argument, never as typed input:
+
+| Agent | Final argv around the configured and Winmux arguments |
+| --- | --- |
+| Codex, Claude, Pi | `...existing -- prompt` |
+| OMP | `launch ...existing -- prompt` |
+| Hermes | `chat ...existing --query=prompt` |
+
+The prompt is exactly one argument. A Pi prompt starting with `@` is refused
+before any worktree exists because that CLI reads such an argument as a file. WSL
+profiles are rejected with `UNSUPPORTED_ENVIRONMENT`; ordinary WSL terminals are
+unchanged. Automation always requests hooks, because a run without an evidence
+channel could never report a confirmed outcome, so Windows PowerShell 5.1 profiles
+fail before the task exists and a project-adapter installation failure fails the
+launch instead of only warning.
+
+Outcomes come only from validated evidence: session-hook `UserPromptSubmit`,
+`Stop`, `StopFailure` and waiting events for Codex/Claude, and extension
+`agent_start`, `agent_end` and approval requests for OMP/Pi/Hermes. A terminal
+report without a prior acceptance does not finish a run. Screen text, quiet
+output, timestamps, OSC notifications and tool events never accept or complete
+one. A shell-observed agent exit is recorded privately for up to 10 seconds so a
+`Stop` that is serialized behind other daemon work still arrives; without evidence
+the run publishes `AGENT_EXITED` for a nonzero exit or
+`AGENT_EXITED_UNCONFIRMED` for a zero or unknown one, or `AGENT_REPLACED` when a
+replacement process was proven during the window. A daemon restart turns every
+unfinished run into `DAEMON_RESTARTED` and never replays the prompt.
+
+Hermes inherits its explicit-binding policy: a verified gateway must be associated
+with the task pane by an explicit session selection, and a run whose gateway is not
+a pane descendant, or whose association is missing, stays `BINDING_REQUIRED`
+rather than being reported as completed. Enabling the `winmux-status` plugin stays
+an explicit user action. The same applies to Codex hook trust and project
+extension trust.
+
+`environment.capabilities.automationRuns` gates the API; an older daemon must be
+upgraded instead of being driven with blind input. See
+[the daemon contract](../electron/backend/README.md#automation-runs) for the
+request shape, error codes and client behavior.
+
 ## Browser workflow
 
 Keep the desktop open and create a workspace first. `open` accepts an HTTP(S) URL without embedded credentials and an optional workspace ID. Pass `workspaceId` explicitly for deterministic targeting; omission selects the active workspace or falls back to the first workspace.

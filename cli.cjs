@@ -4,6 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const { connect } = require('./electron/client.cjs');
+const { startRun, getRun, waitForRun } = require('./electron/automation-client.cjs');
 const { locations } = require('./electron/backend/shared.cjs');
 const { request:desktopRequest } = require('./scripts/browser.cjs');
 
@@ -25,6 +26,14 @@ Usage: node cli.cjs [--data-dir DIR] [--pipe NAME] COMMAND [arguments]
   close PANE                         Close a pane and stop its process
   notify [PANE] --title TITLE [--body BODY]
                                      PANE defaults to WINMUX_PANE_ID
+  run --spec FILE [--timeout MS] [--no-wait]
+                                     Create a task and launch one agent on an
+                                     initial prompt, then wait for its outcome.
+                                     FILE is a UTF-8 JSON request; - reads stdin
+  run-status RUN_ID                  Inspect a run and its current terminal view
+  run-wait RUN_ID [--after REVISION] [--timeout MS]
+                                     Wait for a run outcome; --after ignores a
+                                     waiting state already seen at that revision
   open PATH [--pane ID] [--workspace ID]
                                      Preview a local file inside Winmux
   shutdown                           Stop daemon and ALL its terminal processes
@@ -38,6 +47,11 @@ agent.status, settings.update, daemon.shutdown.
 Task delivery RPC: task.delivery.context, task.delivery.review,
 task.delivery.refresh, task.delivery.submit, task.delivery.merge. A task terminal supplies
 WINMUX_TASK_ID; otherwise pass taskId in the RPC JSON.
+
+Automation exit codes: 0 completed, 2 waiting, 3 failed or interrupted, 4 timeout,
+1 local, validation or transport failure. The run ID in the spec is the recovery
+key: repeat run-status/run-wait with it after a lost response. Terminal output is a
+point-in-time view, not the complete agent response.
 
 Windows cwd must be an existing absolute Windows path. WSL cwd must be an
 existing absolute Linux path and --profile must be wsl:<distribution>.
@@ -54,8 +68,8 @@ Examples:
 `;
 function parse(argv) {
   const options = {}, positionals = [];
-  const values = new Set(['data-dir', 'pipe', 'name', 'cwd', 'profile', 'agent', 'title', 'body', 'pane', 'workspace', 'direction']);
-  const booleans = new Set(['enter', 'snapshot', 'json', 'help']);
+  const values = new Set(['data-dir', 'pipe', 'name', 'cwd', 'profile', 'agent', 'title', 'body', 'pane', 'workspace', 'direction', 'spec', 'timeout', 'after']);
+  const booleans = new Set(['enter', 'snapshot', 'json', 'help', 'no-wait']);
   for (let i = 0; i < argv.length; i++) {
     const value = argv[i];
     if (value === '--') { positionals.push(...argv.slice(i + 1)); break; }
@@ -76,6 +90,63 @@ function keySequence(value) {
   const control = /^(?:ctrl[+-]|c-)([a-z])$/.exec(key);
   if (control) return String.fromCharCode(control[1].charCodeAt(0) - 96);
   throw new Error(`Unsupported key: ${value}`);
+}
+const SPEC_LIMIT = 64 * 1024;
+const SPEC_DECODER = new TextDecoder('utf-8', { fatal: true });
+
+// The request is data, never shell source. Native Windows paths are resolved by
+// this process; a WSL client can pipe the same JSON through stdin.
+async function readSpec(value) {
+  let buffer;
+  if (value === '-') {
+    const chunks = [];
+    let total = 0;
+    for await (const chunk of process.stdin) {
+      total += chunk.length;
+      if (total > SPEC_LIMIT) throw new Error('Automation spec exceeds 64 KiB');
+      chunks.push(chunk);
+    }
+    buffer = Buffer.concat(chunks);
+  } else {
+    const stat = fs.statSync(value);
+    if (!stat.isFile() || stat.size > SPEC_LIMIT) throw new Error('--spec must name a regular file of at most 64 KiB');
+    buffer = fs.readFileSync(value);
+  }
+  if (!buffer.length) throw new Error('Automation spec is empty');
+  let text;
+  try { text = SPEC_DECODER.decode(buffer); } catch { throw new Error('Automation spec is not valid UTF-8'); }
+  try { return JSON.parse(text); } catch { throw new Error('Automation spec is not valid JSON'); }
+}
+function emitRunResult(result) {
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.exitCode = result.reason === 'waiting' ? 2 : result.reason === 'timeout' ? 4
+    : ['completed', 'started', 'status'].includes(result.reason) ? 0 : 3;
+}
+async function automationCommand(command, connection, options, args) {
+  // The caller-supplied UUID is the recovery key, so it is echoed on failure.
+  let runId = command === 'run' ? undefined : args[0];
+  try {
+    if (command === 'run') {
+      if (!options.spec) throw new Error('run requires --spec FILE (use - to read stdin)');
+      if (options['no-wait'] && options.timeout !== undefined) throw new Error('--no-wait cannot be combined with --timeout');
+      const spec = await readSpec(options.spec);
+      if (spec && typeof spec.runId === 'string') runId = spec.runId;
+      const started = await startRun(connection, spec);
+      // Acknowledges the launch only; it does not claim an accepted turn.
+      if (options['no-wait']) return emitRunResult({ reason: 'started', run: started, screen: null, screenError: null });
+      const timeoutMs = options.timeout === undefined ? undefined : Number(options.timeout);
+      return emitRunResult(await waitForRun(connection, spec.runId, { timeoutMs }));
+    }
+    if (!runId) throw new Error(`${command} requires RUN_ID`);
+    if (command === 'run-status') return emitRunResult({ reason: 'status', ...(await getRun(connection, runId, { includeScreen: true })) });
+    const afterRevision = options.after === undefined ? 0 : Number(options.after);
+    const timeoutMs = options.timeout === undefined ? undefined : Number(options.timeout);
+    return emitRunResult(await waitForRun(connection, runId, { afterRevision, timeoutMs }));
+  } catch (error) {
+    const code = typeof error.code === 'string' ? error.code : 'ERROR';
+    console.error(`winmux: ${runId ? `run ${runId}: ` : ''}${error.message || 'automation request failed'} (${code})`);
+    process.exitCode = 1;
+  }
 }
 async function start(options) {
   try { const existing = await connect(options); existing.close(); return { ok: true, alreadyRunning: true }; }
@@ -125,6 +196,9 @@ async function main(argv = process.argv.slice(2)) {
         workspaceId:options.workspace,
       }, { dataDir:connection.dataDir }), null, 2));
     case 'shutdown': method = 'daemon.shutdown'; break;
+    case 'run':
+    case 'run-status':
+    case 'run-wait': return automationCommand(command, connection, options, args);
     case 'rpc': method = args[0]; if (!method) throw new Error('rpc requires METHOD'); params = JSON.parse(args.slice(1).join(' ') || '{}'); if (method.startsWith('task.delivery.') && params && typeof params === 'object' && !Array.isArray(params) && params.taskId === undefined && process.env.WINMUX_TASK_ID) params.taskId = process.env.WINMUX_TASK_ID; break;
     default: throw new Error(`Unknown command: ${command}. Run node cli.cjs help`);
   }

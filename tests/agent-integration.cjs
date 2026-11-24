@@ -124,6 +124,60 @@ test('an unrelated process cannot register itself as a Hermes observer', () => {
   assert.equal(f.controller.sessions().sessions.length, 0);
 });
 
+test('a verified Hermes observer retains one bounded first turn for explicit replay', () => {
+  const f = fixture();
+  const client = { ...f.omp, name: 'hermes.exe', executable: path.join(process.env.LOCALAPPDATA || 'C:/Users/Fixture/AppData/Local', 'hermes', 'bin', 'hermes.exe') };
+  const gateway = { ...client, pid: 300, ppid: 1 };
+  f.controller.scan([f.shell, client, gateway]);
+  const event = extra => ({ agentId: 'hermes', pid: 300, cwd: 'E:/gateway', sessionId: 'root', ...extra });
+  assert.equal(f.controller.hook(event({ event: 'session_start', stamp: '999000000001', state: 'idle' })).reason, 'binding-required');
+  assert.equal(f.controller.hook(event({ event: 'agent_start', stamp: '999000000002', state: 'running' })).reason, 'binding-required');
+  // A compression keeps the plugin's stable reporting id and its retained pieces.
+  assert.equal(f.controller.hook(event({ event: 'session_switch', stamp: '999000000003', state: 'idle' })).reason, 'binding-required');
+  for (let index = 0; index < 6; index++) {
+    assert.equal(f.controller.hook(event({ event: 'tool_approval_requested', stamp: `99900000001${index}`, state: 'waiting' })).reason, 'binding-required');
+  }
+  assert.equal(f.controller.hook(event({ event: 'agent_end', stamp: '999000000099', state: 'completed' })).reason, 'binding-required');
+  // The first start and the first terminal survive later evidence, bounded to three pieces.
+  const bound = f.controller.bind('pane', 'root');
+  assert.equal(bound.applied, true);
+  assert.deepEqual(bound.retained.map(piece => piece.event), ['agent_start', 'tool_approval_requested', 'agent_end']);
+  assert.ok(bound.retained.length <= 3, 'retention is bounded');
+  assert.equal(bound.retained.at(-1).state, 'completed');
+  assert.equal(f.panes[0].agentState, 'completed');
+  // A repeated ordinary bind is idempotent, and later evidence keeps applying.
+  assert.equal(f.controller.bind('pane', 'root').applied, true);
+  assert.equal(f.controller.hook(event({ event: 'agent_end', stamp: '999000000100', state: 'failed' })).applied, true);
+});
+
+test('automation bind constraints reject foreign directories and pre-run evidence', () => {
+  const f = fixture();
+  const client = { ...f.omp, name: 'hermes.exe', executable: path.join(process.env.LOCALAPPDATA || 'C:/Users/Fixture/AppData/Local', 'hermes', 'bin', 'hermes.exe') };
+  const gateway = { ...client, pid: 300, ppid: 1 };
+  f.controller.scan([f.shell, client, gateway]);
+  const event = extra => ({ agentId: 'hermes', pid: 300, cwd: 'E:/gateway', sessionId: 'root', ...extra });
+  f.controller.hook(event({ event: 'session_start', stamp: '999000000001', state: 'idle' }));
+  f.controller.hook(event({ event: 'agent_start', stamp: '999000000002', state: 'running' }));
+  // A session without a retained root start cannot satisfy an automation run.
+  f.controller.hook(event({ event: 'session_start', sessionId: 'anchorless', cwd: 'E:/gateway', stamp: '999000000003', state: 'idle' }));
+  f.controller.hook(event({ event: 'agent_end', sessionId: 'anchorless', cwd: 'E:/gateway', stamp: '999000000004', state: 'completed' }));
+  assert.equal(f.controller.bind('pane', 'anchorless', { cwd: 'E:/gateway', notBefore: 1 }).applied, false);
+  assert.equal(f.controller.bind('pane', 'root', { cwd: 'E:/other', notBefore: 1 }).applied, false);
+  assert.equal(f.controller.bind('pane', 'root', { cwd: 'E:/gateway', notBefore: 2001 }).applied, false);
+  assert.equal(f.controller.bind('pane', 'missing', { cwd: 'E:/gateway', notBefore: 1 }).applied, false);
+  assert.equal(f.controller.bind('pane', 'root', { cwd: 'e:/gateway/', notBefore: 2000 }).applied, true);
+});
+
+test('session hook provenance is limited to recognized events and bounded identifiers', () => {
+  const { lifecycleMeta } = require('../electron/backend/agent-status.cjs');
+  assert.deepEqual(lifecycleMeta('claude', { hook_event_name: 'Stop', session_id: 'abc-123' }), { event: 'Stop', sessionId: 'abc-123' });
+  assert.deepEqual(lifecycleMeta('claude', { hook_event_name: 'Notification', notification_type: 'permission_prompt' }), { event: 'Notification' });
+  assert.deepEqual(lifecycleMeta('codex', { hook_event_name: 'UserPromptSubmit' }), { event: 'UserPromptSubmit' });
+  assert.deepEqual(lifecycleMeta('codex', { hook_event_name: 'NotAHook', session_id: 'x' }), { sessionId: 'x' }, 'an unknown event name is never forwarded');
+  assert.deepEqual(lifecycleMeta('claude', { hook_event_name: 'Stop', session_id: 'bad id with spaces' }), { event: 'Stop' }, 'an invalid session id is dropped, not fabricated');
+  assert.deepEqual(lifecycleMeta('claude', { hook_event_name: 'Stop', prompt: 'secret' }), { event: 'Stop' }, 'prompt content is never forwarded');
+});
+
 test('native OMP keeps its own monotonic clock and validates wall-clock process provenance', () => {
   const f = fixture(); f.controller.scan([f.shell, f.omp]);
   assert.equal(f.controller.hook(f.event({ stamp: '521211200', emittedAt: 2000 })).applied, true);

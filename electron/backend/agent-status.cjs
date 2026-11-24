@@ -57,15 +57,27 @@ function launchContext(env, context) {
     pipeName: env.WINMUX_PIPE_NAME,
   };
 }
-async function report(state, env = process.env, activity = {}, context = null) {
+// `lifecycle` carries the recognized hook event name and a bounded session id.
+// Prompt, transcript and tool arguments are never transmitted.
+async function report(state, env = process.env, activity = {}, context = null, lifecycle = null) {
   const launch = launchContext(env, context);
   if (!launch.paneId || !launch.launchId || !launch.dataDir || !launch.pipeName) throw new Error('Winmux launch context is required');
   const client = await connect({ dataDir: launch.dataDir, pipeName: launch.pipeName, connectTimeout: 1500, requestTimeout: 1500 });
-  try { return await client.request('agent.status', { paneId: launch.paneId, launchId: launch.launchId, state, ...activity }); }
+  const provenance = {};
+  if (typeof lifecycle?.event === 'string' && lifecycle.event) provenance.event = lifecycle.event;
+  if (typeof lifecycle?.sessionId === 'string' && lifecycle.sessionId) provenance.sessionId = lifecycle.sessionId;
+  try { return await client.request('agent.status', { paneId: launch.paneId, launchId: launch.launchId, state, ...activity, ...provenance }); }
   finally { client.close(); }
 }
+const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+function lifecycleMeta(agentId, event) {
+  const name = event?.hook_event_name;
+  const known = typeof name === 'string' && name.length <= 64 && (name === 'Notification' || Boolean(AGENTS[agentId].eventStates?.[name]));
+  const sessionId = typeof event?.session_id === 'string' && SESSION_ID.test(event.session_id) ? event.session_id : undefined;
+  return { ...(known ? { event: name } : {}), ...(sessionId ? { sessionId } : {}) };
+}
 async function main() {
-  let state, activity = {}, context = null, event = null, mode;
+  let state, activity = {}, context = null, event = null, mode, lifecycle = null;
   if (['--claude', '--codex'].includes(process.argv[2])) {
     mode = process.argv[2];
     const contextIndex = process.argv.indexOf('--context-file');
@@ -77,14 +89,15 @@ async function main() {
     state = (mode === '--claude' ? claudeState : codexState)(event);
     activity = hookActivity(event);
     if (!state) return;
+    lifecycle = lifecycleMeta(mode === '--claude' ? 'claude' : 'codex', event);
   } else if (process.argv[2] === '--state') state = process.argv[3];
   else throw new Error('Expected --claude/--codex (JSON on stdin) or --state <state>');
-  await report(state, process.env, activity, context);
+  await report(state, process.env, activity, context, lifecycle);
   if (mode === '--codex' && event?.hook_event_name === 'UserPromptSubmit' && context?.taskId !== undefined) {
     process.stdout.write(`${JSON.stringify(codexUserPromptSubmitOutput(context.taskId))}\n`);
   }
 }
-module.exports = { report, claudeState, codexState, hookActivity, readContextFile };
+module.exports = { report, claudeState, codexState, hookActivity, lifecycleMeta, readContextFile };
 if (require.main === module) {
   const deadline = setTimeout(() => process.exit(1), 4000);
   main().then(() => clearTimeout(deadline), () => { clearTimeout(deadline); console.error('Winmux agent status could not be delivered'); process.exitCode = 1; });

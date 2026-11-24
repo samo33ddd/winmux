@@ -4,6 +4,12 @@ const { EventEmitter } = require('node:events');
 const { randomUUID } = require('node:crypto');
 const { LIMITS, locations, readToken } = require('./backend/shared.cjs');
 
+// A run read is a bounded screen capture over an already-authenticated socket;
+// it must never wait behind a long task mutation.
+function requestTimeoutFor(method) {
+  return method === 'task.run.get' ? 20000 : method.startsWith('task.delivery.') ? 300000 : method.startsWith('task.') || method === 'project.inspect' ? 120000 : 20000;
+}
+
 async function connect(options = {}) {
   const loc = locations(options);
   let token;
@@ -84,7 +90,7 @@ async function connect(options = {}) {
         if (index !== -1) {
           waiting.splice(index, 1); waitingBytes -= entry.bytes; clearEntry(entry); entry.reject(timeout);
         }
-      }, options.requestTimeout ?? (method.startsWith('task.delivery.') ? 300000 : method.startsWith('task.') || method === 'project.inspect' ? 120000 : 20000));
+      }, options.requestTimeout ?? requestTimeoutFor(method));
       waiting.push(entry); waitingBytes += bytes; pump();
     });
   };
@@ -100,4 +106,4 @@ async function connect(options = {}) {
   try { await client.request('state'); } catch (error) { client.close(); throw error; }
   return client;
 }
-module.exports = { connect };
+module.exports = { connect, requestTimeoutFor };

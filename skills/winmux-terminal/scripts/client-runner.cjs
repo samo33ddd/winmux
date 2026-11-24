@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const VALUE_OPTIONS = new Set(['data-dir', 'pipe', 'name', 'cwd', 'profile', 'agent', 'title', 'body', 'pane', 'workspace', 'direction']);
+const VALUE_OPTIONS = new Set(['data-dir', 'pipe', 'name', 'cwd', 'profile', 'agent', 'title', 'body', 'pane', 'workspace', 'direction', 'spec', 'timeout', 'after']);
 
 function fail(message) {
   console.error(`winmux: ${message}`);
