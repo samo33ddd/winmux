@@ -336,7 +336,13 @@ spawnSync(stop.command.file, stop.command.args, { input: stop.command.input, env
     const waiting = await waitForRun(options, waitSpec.runId, { timeoutMs: 120000 });
     assert.equal(waiting.reason, 'waiting');
     assert.equal(waiting.run.code, 'AGENT_WAITING');
-    assert.match(waiting.screen.text, /MARKER_WAITING/);
+    // The wait returns as soon as the event arrives, so the fixture marker that
+    // follows it may still be in flight; the screen is a point-in-time view.
+    const waitingScreen = await eventually(async () => {
+      const view = await getRun(options, waitSpec.runId, { includeScreen: true });
+      return String(view.screen?.text || '').includes('MARKER_WAITING') ? view : false;
+    }, 'waiting marker on screen');
+    assert.equal(waitingScreen.run.status, 'waiting');
     const unchanged = await waitForRun(options, waitSpec.runId, { afterRevision: waiting.run.revision, timeoutMs: 1500 });
     assert.equal(unchanged.reason, 'timeout');
     assert.equal(unchanged.run.status, 'waiting');
@@ -495,7 +501,7 @@ spawnSync(stop.command.file, stop.command.args, { input: stop.command.input, env
     const cli = (...args) => spawnSync(nodeExe, [path.join(root, 'cli.cjs'), '--data-dir', dataDir, '--pipe', pipeName, ...args], { encoding: 'utf8', windowsHide: true });
     assert.equal(cli('run', '--spec', '-', '--no-wait').status, 1, 'an empty spec is rejected');
     const piped = spawnSync(nodeExe, [path.join(root, 'cli.cjs'), '--data-dir', dataDir, '--pipe', pipeName, 'run', '--spec', '-', '--timeout', '180000'], { input: JSON.stringify(cliSpec), encoding: 'utf8', windowsHide: true });
-    assert.equal(piped.status, 0, piped.stderr);
+    assert.equal(piped.status, 0, piped.stderr || piped.stdout);
     const pipedResult = JSON.parse(piped.stdout);
     assert.equal(pipedResult.reason, 'completed');
     assert.match(pipedResult.screen.text, /MARKER_CLI/);
